@@ -3,13 +3,32 @@ import SwiftUI
 import UIKit
 
 struct RootView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selectedRange: HealthRange = .month
     @State private var selectedDate: Date?
     @State private var activeMetric: MetricKind?
+    @State private var currentDate = Date()
     @StateObject private var whoopCollector = WhoopHandshakeProbe()
     @StateObject private var history = HealthHistoryModel()
 
-    private var referenceDate: Date { history.latestRecord?.date ?? .now }
+    private var referenceDate: Date { currentDate }
+
+    private var todayRecord: DailyHealthRecord? {
+        history.records.last { Calendar.current.isDate($0.date, inSameDayAs: currentDate) }
+    }
+
+    private var currentSleepRecord: DailyHealthRecord? {
+        sleepMetricsArePending ? nil : todayRecord
+    }
+
+    private var sleepMetricsArePending: Bool {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["WHOOP_MOCK_SLEEPING"] == "1" {
+            return true
+        }
+        #endif
+        return whoopCollector.isSleeping
+    }
 
     private var liveHeartRateValue: String {
         #if DEBUG
@@ -104,6 +123,23 @@ struct RootView: View {
             selectedDate = nil
             activeMetric = nil
         }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            currentDate = .now
+            history.reload()
+            whoopCollector.refreshHistoricalData()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .whoopDailyHealthUpdated)) { _ in
+            currentDate = .now
+            history.reload()
+        }
+        .task {
+            while !Task.isCancelled {
+                currentDate = .now
+                history.reload()
+                try? await Task.sleep(for: .seconds(60))
+            }
+        }
     }
 
     private var dateHeader: some View {
@@ -127,8 +163,8 @@ struct RootView: View {
                     Image("WhoopBand")
                         .resizable()
                         .scaledToFit()
-                        .brightness(0.16)
-                        .contrast(1.06)
+                        .brightness(0.07)
+                        .contrast(1.03)
                         .frame(width: 33, height: 33)
 
                     Circle()
@@ -240,14 +276,14 @@ struct RootView: View {
                     title: "HRV",
                     symbol: "waveform.path.ecg",
                     value: summaryHRV,
-                    unit: "MS",
+                    unit: summaryHRV == "—" ? "" : "MS",
                     iconTint: .pink
                 )
                 activityMetric(
                     title: "RHR",
                     symbol: "heart.fill",
                     value: summaryRHR,
-                    unit: "BPM",
+                    unit: summaryRHR == "—" ? "" : "BPM",
                     iconTint: .red
                 )
                 activityMetric(
@@ -302,19 +338,19 @@ struct RootView: View {
     }
 
     private var summarySleepScore: String {
-        history.latestRecord?.sleepScore.map { "\(Int($0.rounded()))%" } ?? "—"
+        currentSleepRecord?.sleepScore.map { "\(Int($0.rounded()))%" } ?? "—"
     }
 
     private var summarySleepDuration: String {
-        history.latestRecord?.sleepDurationMinutes.map { formatDuration($0 / 60) } ?? "—"
+        currentSleepRecord?.sleepDurationMinutes.map { formatDuration($0 / 60) } ?? "—"
     }
 
     private var summaryHRV: String {
-        history.latestRecord?.hrvRMSSDMilliseconds.map { String(Int($0.rounded())) } ?? "—"
+        currentSleepRecord?.hrvRMSSDMilliseconds.map { String(Int($0.rounded())) } ?? "—"
     }
 
     private var summaryRHR: String {
-        history.latestRecord?.restingHeartRateBPM.map { String(Int($0.rounded())) } ?? "—"
+        currentSleepRecord?.restingHeartRateBPM.map { String(Int($0.rounded())) } ?? "—"
     }
 
     private func metricCard(
@@ -327,9 +363,15 @@ struct RootView: View {
         formatValue: @escaping (Double) -> String
     ) -> some View {
         let cardSelection = activeMetric == metric ? selectedDate : nil
-        let point = cardSelection.map { selectedPoint(in: series.plotted, near: $0) }
-            ?? series.daily.last
-        let value = point.map { formatValue($0.value) } ?? "—"
+        let selectedMetricPoint: MetricPoint? = cardSelection.flatMap {
+            self.selectedPoint(in: series.plotted, near: $0)
+        }
+        let currentValue = metricValue(for: metric, in: currentSleepRecord)
+        let displayedValue = cardSelection == nil ? currentValue : selectedMetricPoint?.value
+        let value = displayedValue.map(formatValue) ?? "—"
+        let valueDateLabel = cardSelection == nil
+            ? "Today"
+            : selectedMetricPoint.map { selectionLabel(for: $0.date) } ?? "No real data"
 
         return VStack(alignment: .leading, spacing: 7) {
             Label {
@@ -344,7 +386,7 @@ struct RootView: View {
 
             HStack(alignment: .bottom, spacing: 10) {
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(point.map { selectionLabel(for: $0.date) } ?? "No real data")
+                    Text(valueDateLabel)
                         .font(.caption2.weight(.medium))
                         .foregroundStyle(.secondary)
 
@@ -355,7 +397,7 @@ struct RootView: View {
                             .foregroundStyle(.primary)
                             .lineLimit(1)
 
-                        if !unit.isEmpty {
+                        if value != "—", !unit.isEmpty {
                             Text(unit)
                                 .font(.system(size: 14, weight: .semibold, design: .rounded))
                                 .foregroundStyle(.primary)
@@ -726,20 +768,27 @@ struct RootView: View {
         }
 
         let daily = records.compactMap { record in
-            let value: Double?
-            switch metric {
-            case .sleep: value = record.sleepScore
-            case .duration: value = record.sleepDurationMinutes.map { $0 / 60 }
-            case .hrv: value = record.hrvRMSSDMilliseconds
-            case .rhr: value = record.restingHeartRateBPM
-            }
-            return value.map { MetricPoint(date: record.date, value: $0) }
+            metricValue(for: metric, in: record).map { MetricPoint(date: record.date, value: $0) }
         }
 
         return MetricSeries(
             daily: daily,
             plotted: aggregatedPoints(from: daily, for: selectedRange)
         )
+    }
+
+    private func metricValue(for metric: MetricKind, in record: DailyHealthRecord?) -> Double? {
+        guard let record else { return nil }
+        switch metric {
+        case .sleep:
+            return record.sleepScore
+        case .duration:
+            return record.sleepDurationMinutes.map { $0 / 60 }
+        case .hrv:
+            return record.hrvRMSSDMilliseconds
+        case .rhr:
+            return record.restingHeartRateBPM
+        }
     }
 
     private func aggregatedPoints(from daily: [MetricPoint], for range: HealthRange) -> [MetricPoint] {

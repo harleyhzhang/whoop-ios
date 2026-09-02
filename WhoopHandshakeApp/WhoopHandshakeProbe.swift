@@ -10,6 +10,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     @Published private(set) var notificationState = "Not requested"
     @Published private(set) var heartRate = "—"
     @Published private(set) var batteryLevel: Int?
+    @Published private(set) var isSleeping = false
     @Published private(set) var lastConnectedAt: Date?
     @Published private(set) var lastDataReceivedAt: Date?
     @Published private(set) var rrSummary = "—"
@@ -39,10 +40,19 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     private var helloOutstanding = false
     private var helloAttemptID: UUID?
     private var commandSequence: UInt8 = 1
+    private var lastTelemetryCacheWriteAt: Date?
     private var realtimeKeepaliveTask: Task<Void, Never>?
+    private var historicalRefreshTask: Task<Void, Never>?
+    private var historicalSyncActive = false
+    private var lastAcknowledgedHistoricalEndData: [UInt8]?
+    private var lastSleepAnalysisAt: Date?
+    private var lastFinalizedSleepID: String?
     private let store = WhoopStore.shared
     private let knownPeripheralKey = "WhoopHandshakeProbe.knownPeripheralIdentifier"
     private let confirmedBondKey = "WhoopHandshakeProbe.confirmedEncryptedBond"
+    private let cachedHeartRateKey = "WhoopHandshakeProbe.cachedHeartRateBPM"
+    private let cachedHeartRateDateKey = "WhoopHandshakeProbe.cachedHeartRateDate"
+    private let cachedBatteryLevelKey = "WhoopHandshakeProbe.cachedBatteryLevel"
 
     private let whoop5Service = CBUUID(string: "FD4B0001-CCE1-4033-93CE-002D5875F58A")
     private let heartRateService = CBUUID(string: "180D")
@@ -68,6 +78,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     override init() {
         super.init()
         assert(Self.puffinCommandFrame(cmd: 0x91, seq: 0x01, payload: [0x01]) == [UInt8](clientHello))
+        restoreCachedTelemetry()
         record("Probe initialized")
         central = CBCentralManager(
             delegate: self,
@@ -78,6 +89,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
 
     deinit {
         realtimeKeepaliveTask?.cancel()
+        historicalRefreshTask?.cancel()
     }
 
     private func record(_ message: String) {
@@ -86,6 +98,69 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         if diagnosticEvents.count > 200 {
             diagnosticEvents.removeFirst(diagnosticEvents.count - 200)
         }
+    }
+
+    private func restoreCachedTelemetry() {
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: cachedBatteryLevelKey) != nil {
+            batteryLevel = min(max(defaults.integer(forKey: cachedBatteryLevelKey), 0), 100)
+        }
+        if defaults.object(forKey: cachedHeartRateKey) != nil {
+            let bpm = defaults.integer(forKey: cachedHeartRateKey)
+            if bpm > 0 {
+                heartRate = "\(bpm) bpm"
+                lastDataReceivedAt = defaults.object(forKey: cachedHeartRateDateKey) as? Date
+            }
+        }
+
+        store.loadLatestHeartRateSample { [weak self] sample in
+            guard let sample else { return }
+            Task { @MainActor in
+                guard let self else { return }
+                let cachedDate = self.lastDataReceivedAt ?? .distantPast
+                guard sample.receivedAt > cachedDate else { return }
+                self.cacheHeartRate(sample.heartRate, receivedAt: sample.receivedAt)
+            }
+        }
+        refreshSleepSnapshot(force: true)
+    }
+
+    private func refreshSleepSnapshot(force: Bool = false) {
+        let now = Date()
+        guard force || lastSleepAnalysisAt.map({ now.timeIntervalSince($0) >= 30 }) ?? true else {
+            return
+        }
+        lastSleepAnalysisAt = now
+        store.refreshSleepSnapshot { [weak self] snapshot in
+            Task { @MainActor in
+                guard let self else { return }
+                self.isSleeping = snapshot.isSleeping
+                if let record = snapshot.finalizedRecord,
+                   record.sleepID != self.lastFinalizedSleepID {
+                    self.lastFinalizedSleepID = record.sleepID
+                    NotificationCenter.default.post(name: .whoopDailyHealthUpdated, object: nil)
+                }
+            }
+        }
+    }
+
+    private func cacheHeartRate(_ bpm: Int, receivedAt: Date = .now) {
+        guard bpm > 0 else { return }
+        heartRate = "\(bpm) bpm"
+        lastDataReceivedAt = receivedAt
+        guard lastTelemetryCacheWriteAt.map({ receivedAt.timeIntervalSince($0) >= 30 }) ?? true else {
+            return
+        }
+        let defaults = UserDefaults.standard
+        defaults.set(bpm, forKey: cachedHeartRateKey)
+        defaults.set(receivedAt, forKey: cachedHeartRateDateKey)
+        lastTelemetryCacheWriteAt = receivedAt
+    }
+
+    private func cacheBatteryLevel(_ level: Int) {
+        let clampedLevel = min(max(level, 0), 100)
+        batteryLevel = clampedLevel
+        UserDefaults.standard.set(clampedLevel, forKey: cachedBatteryLevelKey)
     }
 
     func startScan() {
@@ -107,6 +182,10 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         helloAttemptID = nil
         realtimeKeepaliveTask?.cancel()
         realtimeKeepaliveTask = nil
+        historicalRefreshTask?.cancel()
+        historicalRefreshTask = nil
+        historicalSyncActive = false
+        lastAcknowledgedHistoricalEndData = nil
         commandSequence = 1
         realtimeState = "Not armed"
         latestPacket = "—"
@@ -178,6 +257,54 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
             peripheral.setNotifyValue(true, for: heartRateCharacteristic)
         }
         armRealtimeHeartRate()
+        scheduleHistoricalSync(after: .seconds(1.5))
+    }
+
+    func refreshHistoricalData() {
+        guard isConnected else { return }
+        beginHistoricalSync()
+    }
+
+    private func scheduleHistoricalSync(after delay: Duration = .seconds(15 * 60)) {
+        historicalRefreshTask?.cancel()
+        historicalRefreshTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, let self else { return }
+            self.historicalRefreshTask = nil
+            self.beginHistoricalSync()
+        }
+    }
+
+    private func beginHistoricalSync() {
+        guard !historicalSyncActive,
+              let peripheral,
+              peripheral.state == .connected,
+              handshakeState.hasPrefix("Acknowledged"),
+              let commandCharacteristic else { return }
+        historicalSyncActive = true
+        commandSequence &+= 1
+        let frame = Self.puffinCommandFrame(cmd: 22, seq: commandSequence, payload: [0x00])
+        record("Starting persisted WHOOP historical offload, seq \(commandSequence)")
+        peripheral.writeValue(Data(frame), for: commandCharacteristic, type: .withResponse)
+    }
+
+    @discardableResult
+    private func acknowledgeHistoricalChunk(endData: [UInt8]) -> Bool {
+        guard endData.count == 8,
+              endData != lastAcknowledgedHistoricalEndData,
+              let peripheral,
+              peripheral.state == .connected,
+              let commandCharacteristic else { return false }
+        lastAcknowledgedHistoricalEndData = endData
+        commandSequence &+= 1
+        let frame = Self.puffinCommandFrame(
+            cmd: 23,
+            seq: commandSequence,
+            payload: [0x01] + endData
+        )
+        record("Acknowledging durably stored historical chunk, seq \(commandSequence)")
+        peripheral.writeValue(Data(frame), for: commandCharacteristic, type: .withResponse)
+        return true
     }
 
     private func armRealtimeHeartRate() {
@@ -314,7 +441,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
             bpm = Int(bytes[1])
             index = 2
         }
-        heartRate = "\(bpm) bpm"
+        cacheHeartRate(bpm)
         if flags & 0x08 != 0 { index += 2 }
         guard flags & 0x10 != 0 else {
             rrSummary = "No R–R values"
@@ -343,7 +470,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         // WHOOP 5 type-40 REALTIME_DATA: timestamp@10, heart rate@16,
         // R–R count@17, then little-endian millisecond intervals@18+.
         guard type == 0x28, bytes.count >= 18 else { return nil }
-        heartRate = "\(bytes[16]) bpm"
+        cacheHeartRate(Int(bytes[16]))
         let count = min(Int(bytes[17]), (bytes.count - 18) / 2)
         var values: [UInt16] = []
         for index in 0..<count {
@@ -363,6 +490,20 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
             heartRate: Int(bytes[16]),
             rrIntervals: values
         )
+    }
+
+    private func parseWhoop5Historical(_ data: Data) -> WhoopDecodedHistorical? {
+        WhoopDecodedHistorical.decode(data)
+    }
+
+    private static func frameCRCIsValid(_ bytes: [UInt8]) -> Bool {
+        guard bytes.count >= 12 else { return false }
+        let payloadEnd = bytes.count - 4
+        let expected = UInt32(bytes[payloadEnd])
+            | (UInt32(bytes[payloadEnd + 1]) << 8)
+            | (UInt32(bytes[payloadEnd + 2]) << 16)
+            | (UInt32(bytes[payloadEnd + 3]) << 24)
+        return crc32(Array(bytes[8..<payloadEnd])) == expected
     }
 }
 
@@ -441,6 +582,10 @@ extension WhoopHandshakeProbe: CBCentralManagerDelegate {
             helloAttemptID = nil
             realtimeKeepaliveTask?.cancel()
             realtimeKeepaliveTask = nil
+            historicalRefreshTask?.cancel()
+            historicalRefreshTask = nil
+            historicalSyncActive = false
+            lastAcknowledgedHistoricalEndData = nil
             canAttemptHandshake = false
             status = "Disconnected: \(detail)"
             Task { @MainActor [weak self] in
@@ -549,7 +694,7 @@ extension WhoopHandshakeProbe: CBPeripheralDelegate {
                 parseHeartRate(data)
                 lastDataReceivedAt = .now
             } else if characteristic.uuid == batteryLevelUUID, let level = data.first {
-                batteryLevel = min(Int(level), 100)
+                cacheBatteryLevel(Int(level))
                 record("Battery level: \(batteryLevel ?? 0)%")
             } else if notifyUUIDs.contains(characteristic.uuid) {
                 proprietaryPacketCount += 1
@@ -558,15 +703,42 @@ extension WhoopHandshakeProbe: CBPeripheralDelegate {
                 record("WHOOP packet #\(proprietaryPacketCount) on \(characteristic.uuid.uuidString), \(data.count) bytes: \(preview)\(data.count > 24 ? " …" : "")")
                 let frameType = data.count > 8 ? data[8] : nil
                 let realtime = parseWhoop5Packet(data)
+                let historical = parseWhoop5Historical(data)
+                let bytes = [UInt8](data)
+                let metadataType = bytes.count > 10 && frameType == 49 && Self.frameCRCIsValid(bytes)
+                    ? bytes[10]
+                    : nil
+                let historicalEndData = metadataType == 2 && bytes.count >= 29
+                    ? Array(bytes[21..<29])
+                    : nil
+                if metadataType == 1 {
+                    historicalSyncActive = true
+                    lastAcknowledgedHistoricalEndData = nil
+                }
                 store.append(
                     packet: data,
                     peripheralID: peripheral.identifier,
                     characteristicUUID: characteristic.uuid.uuidString,
                     frameType: frameType,
-                    realtime: realtime
+                    realtime: realtime,
+                    historical: historical
                 ) { [weak self] success in
                     guard success else { return }
-                    Task { @MainActor in self?.persistedPacketCount += 1 }
+                    Task { @MainActor in
+                        guard let self else { return }
+                        self.persistedPacketCount += 1
+                        if let historicalEndData {
+                            // The store queue is serial: reaching this completion proves every
+                            // preceding raw and decoded sample in this chunk is durable.
+                            if self.acknowledgeHistoricalChunk(endData: historicalEndData) {
+                                self.refreshSleepSnapshot()
+                            }
+                        } else if metadataType == 3 {
+                            self.historicalSyncActive = false
+                            self.refreshSleepSnapshot(force: true)
+                            self.scheduleHistoricalSync()
+                        }
+                    }
                 }
             }
         }

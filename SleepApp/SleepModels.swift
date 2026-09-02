@@ -1,6 +1,10 @@
 import Combine
 import Foundation
 
+extension Notification.Name {
+    static let whoopDailyHealthUpdated = Notification.Name("whoopDailyHealthUpdated")
+}
+
 struct DailyHealthRecord: Codable, Hashable, Identifiable, Sendable {
     let dateKey: String
     let sleepScore: Double?
