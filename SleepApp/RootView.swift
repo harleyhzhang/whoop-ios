@@ -284,7 +284,7 @@ struct RootView: View {
                         if !unit.isEmpty {
                             Text(unit)
                                 .font(.system(size: 14, weight: .semibold, design: .rounded))
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(.primary)
                         }
                     }
                 }
@@ -361,6 +361,13 @@ struct RootView: View {
                 }
 
                 if showsAverageLevels {
+                    PointMark(
+                        x: .value("Date", highlightedPoint.date),
+                        y: .value(title, highlightedPoint.value)
+                    )
+                    .symbolSize(48)
+                    .foregroundStyle(color.opacity(0.3))
+
                     ForEach(averageLevels) { level in
                         RuleMark(
                             xStart: .value("Average window start", level.startDate),
@@ -368,13 +375,13 @@ struct RootView: View {
                             y: .value("Window average", level.value)
                         )
                         .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .butt))
-                        .foregroundStyle(Color.white.opacity(0.78))
+                        .foregroundStyle(Color.white)
                         .annotation(position: .top, spacing: 5) {
                             Text(averageLevelLabel(level.value, for: metric))
                                 .font(.system(size: 10, weight: .semibold, design: .rounded))
                                 .monospacedDigit()
                                 .tracking(-0.35)
-                                .foregroundStyle(Color.white.opacity(0.82))
+                                .foregroundStyle(Color.white)
                         }
                     }
                 }
@@ -398,12 +405,14 @@ struct RootView: View {
                         .foregroundStyle(Color.secondary.opacity(0.5))
                 }
 
-                PointMark(
-                    x: .value("Date", highlightedPoint.date),
-                    y: .value(title, highlightedPoint.value)
-                )
-                .symbolSize(48)
-                .foregroundStyle(color)
+                if !showsAverageLevels {
+                    PointMark(
+                        x: .value("Date", highlightedPoint.date),
+                        y: .value(title, highlightedPoint.value)
+                    )
+                    .symbolSize(48)
+                    .foregroundStyle(color)
+                }
             }
             .chartYScale(domain: domain)
             .chartXScale(domain: firstDate...chartEndDate)
