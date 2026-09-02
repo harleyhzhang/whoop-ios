@@ -1,0 +1,841 @@
+import Charts
+import SwiftUI
+import UIKit
+
+struct RootView: View {
+    @State private var selectedRange: HealthRange = .threeMonths
+    @State private var selectedDate: Date?
+    @State private var activeMetric: MetricKind?
+    @State private var showingWhoopHandshake = false
+    @StateObject private var whoopCollector = WhoopHandshakeProbe()
+    @StateObject private var history = HealthHistoryModel()
+
+    private var referenceDate: Date { history.latestRecord?.date ?? .now }
+
+    private var liveHeartRateValue: String {
+        #if DEBUG
+        if let mockValue = ProcessInfo.processInfo.environment["WHOOP_MOCK_LIVE_HR"],
+           !mockValue.isEmpty {
+            return mockValue
+        }
+        #endif
+
+        return whoopCollector.heartRate.split(separator: " ").first.map(String.init) ?? "—"
+    }
+
+    var body: some View {
+        ZStack {
+            Color(uiColor: .systemGroupedBackground).ignoresSafeArea()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    dateHeader
+                    summaryGrid
+                    rangePicker
+
+                    metricCard(
+                        metric: .sleep,
+                        title: "Sleep",
+                        symbol: "moon.stars.fill",
+                        unit: "",
+                        series: metricSeries(for: .sleep),
+                        color: Color(red: 0.39, green: 0.69, blue: 1.0),
+                        formatValue: { "\(Int($0.rounded()))%" }
+                    )
+
+                    metricCard(
+                        metric: .duration,
+                        title: "Sleep duration",
+                        symbol: "bed.double.fill",
+                        unit: "",
+                        series: metricSeries(for: .duration),
+                        color: .cyan,
+                        formatValue: formatDuration
+                    )
+
+                    metricCard(
+                        metric: .hrv,
+                        title: "HRV",
+                        symbol: "waveform.path.ecg",
+                        unit: "MS",
+                        series: metricSeries(for: .hrv),
+                        color: .pink,
+                        formatValue: { String(Int($0.rounded())) }
+                    )
+
+                    metricCard(
+                        metric: .rhr,
+                        title: "RHR",
+                        symbol: "heart.fill",
+                        unit: "BPM",
+                        series: metricSeries(for: .rhr),
+                        color: .red,
+                        formatValue: { String(Int($0.rounded())) }
+                    )
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 32)
+            }
+            .scrollIndicators(.hidden)
+        }
+        .preferredColorScheme(.dark)
+        .onChange(of: selectedRange) { _, _ in
+            AppHaptics.selection()
+            selectedDate = nil
+            activeMetric = nil
+        }
+        .sheet(isPresented: $showingWhoopHandshake) {
+            HandshakeView(probe: whoopCollector)
+        }
+    }
+
+    private var dateHeader: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(referenceDate, format: .dateTime.weekday(.wide).month(.abbreviated).day())
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.primary)
+
+                if let errorMessage = history.errorMessage {
+                    Text(errorMessage)
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                }
+            }
+
+            Spacer()
+
+            Button {
+                AppHaptics.softImpact()
+                showingWhoopHandshake = true
+            } label: {
+                ZStack(alignment: .bottomTrailing) {
+                    Image("WhoopMark")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 24, height: 24)
+
+                    Circle()
+                        .fill(whoopCollector.isConnected ? Color.green : Color.secondary)
+                        .frame(width: 7, height: 7)
+                        .overlay {
+                            Circle()
+                                .stroke(Color(uiColor: .systemGroupedBackground), lineWidth: 1.5)
+                        }
+                        .offset(x: 1, y: 1)
+                }
+                .frame(width: 36, height: 36)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(whoopCollector.isConnected ? "WHOOP connected" : "WHOOP connection details")
+        }
+        .padding(.top, 8)
+    }
+
+    private var rangePicker: some View {
+        Picker("Chart range", selection: $selectedRange) {
+            ForEach(HealthRange.allCases) { range in
+                Text(range.rawValue)
+                    .tag(range)
+                    .accessibilityLabel(range.accessibilityName)
+            }
+        }
+        .pickerStyle(.segmented)
+        .accessibilityValue(selectedRange.accessibilityName)
+    }
+
+    private var summaryGrid: some View {
+        VStack(spacing: 10) {
+            HStack(alignment: .top, spacing: 20) {
+                activityMetric(
+                    title: "Sleep",
+                    symbol: "moon.stars.fill",
+                    value: summarySleepScore,
+                    iconTint: Color(red: 0.39, green: 0.69, blue: 1.0)
+                )
+                activityMetric(
+                    title: "Duration",
+                    symbol: "bed.double.fill",
+                    value: summarySleepDuration,
+                    iconTint: .cyan
+                )
+            }
+
+            HStack(alignment: .top, spacing: 12) {
+                activityMetric(
+                    title: "HRV",
+                    symbol: "waveform.path.ecg",
+                    value: summaryHRV,
+                    unit: "MS",
+                    iconTint: .pink
+                )
+                activityMetric(
+                    title: "RHR",
+                    symbol: "heart.fill",
+                    value: summaryRHR,
+                    unit: "BPM",
+                    iconTint: .red
+                )
+                activityMetric(
+                    title: "Heart Rate",
+                    symbol: "heart.fill",
+                    value: liveHeartRateValue,
+                    unit: liveHeartRateValue == "—" ? "" : "BPM",
+                    iconTint: .red
+                )
+            }
+        }
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "Sleep \(summarySleepScore), duration \(summarySleepDuration), heart rate variability \(summaryHRV) milliseconds, resting heart rate \(summaryRHR) beats per minute, live heart rate \(liveHeartRateValue) beats per minute"
+        )
+    }
+
+    private func activityMetric(
+        title: String,
+        symbol: String,
+        value: String,
+        unit: String = "",
+        iconTint: Color
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 4) {
+                Image(systemName: symbol)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(iconTint)
+
+                Text(title)
+                    .font(.system(size: 15, weight: .regular))
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(alignment: .firstTextBaseline, spacing: 2) {
+                Text(value)
+                    .font(.system(size: 30, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.primary)
+                if !unit.isEmpty {
+                    Text(unit)
+                        .font(.system(size: 18, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.primary)
+                }
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var summarySleepScore: String {
+        history.latestRecord?.sleepScore.map { "\(Int($0.rounded()))%" } ?? "—"
+    }
+
+    private var summarySleepDuration: String {
+        history.latestRecord?.sleepDurationMinutes.map { formatDuration($0 / 60) } ?? "—"
+    }
+
+    private var summaryHRV: String {
+        history.latestRecord?.hrvRMSSDMilliseconds.map { String(Int($0.rounded())) } ?? "—"
+    }
+
+    private var summaryRHR: String {
+        history.latestRecord?.restingHeartRateBPM.map { String(Int($0.rounded())) } ?? "—"
+    }
+
+    private func metricCard(
+        metric: MetricKind,
+        title: String,
+        symbol: String,
+        unit: String,
+        series: MetricSeries,
+        color: Color,
+        formatValue: @escaping (Double) -> String
+    ) -> some View {
+        let cardSelection = activeMetric == metric ? selectedDate : nil
+        let point = cardSelection.map { selectedPoint(in: series.plotted, near: $0) }
+            ?? series.daily.last
+        let value = point.map { formatValue($0.value) } ?? "—"
+
+        return VStack(alignment: .leading, spacing: 7) {
+            Label {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+            } icon: {
+                Image(systemName: symbol)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(color)
+            }
+
+            HStack(alignment: .bottom, spacing: 10) {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(point.map { selectionLabel(for: $0.date) } ?? "No real data")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+
+                    HStack(alignment: .firstTextBaseline, spacing: 2) {
+                        Text(value)
+                            .font(.system(size: 24, weight: .semibold, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+
+                        if !unit.isEmpty {
+                            Text(unit)
+                                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .frame(width: 88, alignment: .leading)
+                .padding(.bottom, 22)
+
+                metricChart(metric: metric, series: series, color: color, title: title)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 13)
+        .padding(.bottom, 10)
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    @ViewBuilder
+    private func metricChart(metric: MetricKind, series: MetricSeries, color: Color, title: String) -> some View {
+        if series.daily.isEmpty {
+            VStack(spacing: 6) {
+                Image(systemName: "chart.xyaxis.line")
+                Text("No real data in this range")
+                    .font(.caption2)
+            }
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
+            .frame(height: 148)
+            .accessibilityLabel("\(title), no real data in \(selectedRange.accessibilityName)")
+        } else {
+            populatedMetricChart(metric: metric, series: series, color: color, title: title)
+        }
+    }
+
+    private func populatedMetricChart(metric: MetricKind, series: MetricSeries, color: Color, title: String) -> some View {
+        let plottedPoints = series.plotted
+        let domain = chartDomain(for: series.daily, metric: metric)
+        let chartSelection = activeMetric == metric ? selectedDate : nil
+        let showsAverageLevels = selectedRange.usesMonthlyAxis && chartSelection == nil
+        let highlightedPoint = selectedPoint(in: plottedPoints, near: chartSelection) ?? plottedPoints.last!
+        let firstDate = series.daily.first!.date
+        let middleDate = series.daily[series.daily.count / 2].date
+        let monthTicks = monthlyAxisDates(in: series.daily)
+        let lastDate = series.daily.last!.date
+        let chartEndDate = selectedRange.usesMonthlyAxis
+            ? Calendar.current.date(byAdding: .day, value: 3, to: lastDate) ?? lastDate
+            : lastDate
+        let averageLevels = adaptiveAverageLevels(from: series.daily, for: selectedRange)
+        return VStack(spacing: 3) {
+            Chart {
+                ForEach(plottedPoints) { point in
+                    AreaMark(
+                        x: .value("Date", point.date),
+                        yStart: .value("Minimum", domain.lowerBound),
+                        yEnd: .value(title, point.value)
+                    )
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [
+                                color.opacity(showsAverageLevels ? 0.07 : 0.26),
+                                color.opacity(showsAverageLevels ? 0.004 : 0.015)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+
+                    LineMark(
+                        x: .value("Date", point.date),
+                        y: .value(title, point.value)
+                    )
+                    .interpolationMethod(.monotone)
+                    .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+                    .foregroundStyle(color.opacity(showsAverageLevels ? 0.3 : 1))
+                }
+
+                if showsAverageLevels {
+                    ForEach(averageLevels) { level in
+                        RuleMark(
+                            xStart: .value("Average window start", level.startDate),
+                            xEnd: .value("Average window end", level.endDate),
+                            y: .value("Window average", level.value)
+                        )
+                        .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .butt))
+                        .foregroundStyle(Color.white.opacity(0.78))
+                        .annotation(position: .top, spacing: 5) {
+                            Text(averageLevelLabel(level.value, for: metric))
+                                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                                .monospacedDigit()
+                                .tracking(-0.35)
+                                .foregroundStyle(Color.white.opacity(0.82))
+                        }
+                    }
+                }
+
+                if chartSelection != nil {
+                    RectangleMark(
+                        xStart: .value(
+                            "Dimmed future start",
+                            highlightedPoint.date.addingTimeInterval(1)
+                        ),
+                        xEnd: .value("Dimmed future end", chartEndDate),
+                        yStart: .value("Dimmed future minimum", domain.lowerBound),
+                        yEnd: .value("Dimmed future maximum", domain.upperBound)
+                    )
+                    .foregroundStyle(
+                        Color(uiColor: .secondarySystemGroupedBackground).opacity(0.58)
+                    )
+
+                    RuleMark(x: .value("Selected date", highlightedPoint.date))
+                        .lineStyle(StrokeStyle(lineWidth: 1))
+                        .foregroundStyle(Color.secondary.opacity(0.5))
+                }
+
+                PointMark(
+                    x: .value("Date", highlightedPoint.date),
+                    y: .value(title, highlightedPoint.value)
+                )
+                .symbolSize(48)
+                .foregroundStyle(color)
+            }
+            .chartYScale(domain: domain)
+            .chartXScale(domain: firstDate...chartEndDate)
+            .chartXSelection(value: selectionBinding(for: metric, selectableSeries: plottedPoints))
+            .chartYAxis {
+                AxisMarks(position: .trailing, values: yAxisValues(for: domain)) { value in
+                    AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
+                        .foregroundStyle(Color.secondary.opacity(0.16))
+
+                    AxisValueLabel {
+                        if let number = value.as(Double.self) {
+                            Text(yAxisLabel(number, for: metric))
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .padding(.leading, 4)
+                        }
+                    }
+                }
+            }
+            .chartXAxis {
+                if selectedRange.usesMonthlyAxis {
+                    AxisMarks(values: monthTicks) { value in
+                        AxisValueLabel(collisionResolution: .disabled) {
+                            if let date = value.as(Date.self) {
+                                monthlyAxisLabel(for: date, firstTick: monthTicks.first)
+                            }
+                        }
+                    }
+                }
+            }
+            .chartLegend(.hidden)
+            .frame(maxWidth: .infinity)
+            .frame(height: 126)
+            .accessibilityLabel("\(title), \(selectedRange.accessibilityName)")
+
+            if !selectedRange.usesMonthlyAxis {
+                HStack {
+                    Text(axisLabel(for: firstDate))
+                    Spacer()
+                    Text(axisLabel(for: middleDate))
+                    Spacer()
+                    Text(Calendar.current.isDateInToday(series.daily.last!.date) ? "Today" : "Latest")
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .padding(.trailing, 28)
+            }
+        }
+    }
+
+    private func monthlyAxisDates(in points: [MetricPoint]) -> [Date] {
+        guard let firstDate = points.first?.date, let lastDate = points.last?.date else {
+            return []
+        }
+
+        let calendar = Calendar.current
+        let grouped = Dictionary(grouping: points) { point in
+            let components = calendar.dateComponents([.year, .month], from: point.date)
+            return (components.year ?? 0) * 100 + (components.month ?? 0)
+        }
+
+        return grouped.values.compactMap { month in
+            guard let representativeDate = month.first?.date,
+                  let interval = calendar.dateInterval(of: .month, for: representativeDate) else {
+                return nil
+            }
+
+            let visibleStart = max(interval.start, firstDate)
+            let visibleEnd = min(interval.end, lastDate)
+            let midpoint = visibleStart.timeIntervalSinceReferenceDate
+                + (visibleEnd.timeIntervalSince(visibleStart) / 2)
+            return Date(timeIntervalSinceReferenceDate: midpoint)
+        }
+        .sorted()
+    }
+
+    private func adaptiveAverageLevels(
+        from points: [MetricPoint],
+        for range: HealthRange
+    ) -> [AverageLevel] {
+        guard let firstDate = points.first?.date, let lastDate = points.last?.date else {
+            return []
+        }
+
+        let calendar = Calendar.current
+        let firstDay = calendar.startOfDay(for: firstDate)
+        let finalDay = calendar.startOfDay(for: lastDate)
+        let spanDays = max(
+            1,
+            (calendar.dateComponents([.day], from: firstDay, to: finalDay).day ?? 0) + 1
+        )
+        let targetCount: Int
+        switch range {
+        case .threeMonths:
+            targetCount = 3
+        case .year, .all:
+            targetCount = 5
+        case .week, .month:
+            return []
+        }
+        let windowDays = max(1, Int(ceil(Double(spanDays) / Double(targetCount))))
+
+        var levels: [AverageLevel] = []
+        var windowEnd = calendar.date(byAdding: .day, value: 1, to: finalDay) ?? lastDate
+
+        while windowEnd > firstDay {
+            let proposedStart = calendar.date(byAdding: .day, value: -windowDays, to: windowEnd) ?? firstDay
+            let windowStart = max(proposedStart, firstDay)
+            let windowPoints = points.filter { point in
+                point.date >= windowStart && point.date < windowEnd
+            }
+
+            if !windowPoints.isEmpty {
+                let mean = windowPoints.map(\.value).reduce(0, +) / Double(windowPoints.count)
+                levels.append(
+                    AverageLevel(
+                        startDate: windowStart,
+                        endDate: min(windowEnd, lastDate),
+                        value: mean
+                    )
+                )
+            }
+
+            windowEnd = proposedStart
+        }
+
+        return levels.reversed()
+    }
+
+    private func averageLevelLabel(_ value: Double, for metric: MetricKind) -> String {
+        switch metric {
+        case .sleep:
+            return "\(Int(value.rounded()))%"
+        case .duration:
+            return formatDuration(value)
+        case .hrv, .rhr:
+            return String(Int(value.rounded()))
+        }
+    }
+
+    @ViewBuilder
+    private func monthlyAxisLabel(for date: Date, firstTick: Date?) -> some View {
+        let calendar = Calendar.current
+        if selectedRange == .threeMonths {
+            Text(date, format: .dateTime.month(.abbreviated))
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.secondary)
+        } else {
+            VStack(spacing: 0) {
+                Text(date, format: .dateTime.month(.narrow))
+                if date == firstTick || calendar.component(.month, from: date) == 1 {
+                    Text(date, format: .dateTime.year(.twoDigits))
+                }
+            }
+            .font(.system(size: 8, weight: .medium))
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private func selectionBinding(for metric: MetricKind, selectableSeries: [MetricPoint]) -> Binding<Date?> {
+        Binding(
+            get: { activeMetric == metric ? selectedDate : nil },
+            set: { date in
+                if let date, let point = selectedPoint(in: selectableSeries, near: date) {
+                    if activeMetric != metric || selectedDate != point.date {
+                        AppHaptics.selection()
+                    }
+                    activeMetric = metric
+                    selectedDate = point.date
+                } else if activeMetric == metric {
+                    activeMetric = nil
+                    selectedDate = nil
+                }
+            }
+        )
+    }
+
+    private func selectedPoint(in series: [MetricPoint], near date: Date?) -> MetricPoint? {
+        guard let date else { return series.last }
+
+        return series.min {
+            abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date))
+        } ?? series.last
+    }
+
+    private func selectionLabel(for date: Date) -> String {
+        if Calendar.current.isDateInToday(date) { return "Today" }
+        return date.formatted(.dateTime.month(.abbreviated).day())
+    }
+
+    private func axisLabel(for date: Date) -> String {
+        switch selectedRange {
+        case .week, .month:
+            date.formatted(.dateTime.month(.abbreviated).day())
+        case .threeMonths:
+            date.formatted(.dateTime.month(.abbreviated))
+        case .year, .all:
+            date.formatted(.dateTime.month(.abbreviated).year(.twoDigits))
+        }
+    }
+
+    private func formatDuration(_ hours: Double) -> String {
+        let minutes = Int((hours * 60).rounded())
+        return String(format: "%dh %02dm", minutes / 60, minutes % 60)
+    }
+
+    private func yAxisValues(for domain: ClosedRange<Double>) -> [Double] {
+        let step = (domain.upperBound - domain.lowerBound) / 4
+        return (0...4).map { domain.lowerBound + (Double($0) * step) }
+    }
+
+    private func yAxisLabel(_ value: Double, for metric: MetricKind) -> String {
+        switch metric {
+        case .sleep:
+            "\(Int(value.rounded()))%"
+        case .duration:
+            String(format: "%.1fh", value)
+        case .hrv, .rhr:
+            String(Int(value.rounded()))
+        }
+    }
+
+    private func metricSeries(for metric: MetricKind) -> MetricSeries {
+        let calendar = Calendar.current
+        let records: [DailyHealthRecord]
+        if let dayCount = selectedRange.dayCount,
+           let cutoff = calendar.date(byAdding: .day, value: -(dayCount - 1), to: referenceDate) {
+            records = history.records.filter { $0.date >= calendar.startOfDay(for: cutoff) }
+        } else {
+            records = history.records
+        }
+
+        let daily = records.compactMap { record in
+            let value: Double?
+            switch metric {
+            case .sleep: value = record.sleepScore
+            case .duration: value = record.sleepDurationMinutes.map { $0 / 60 }
+            case .hrv: value = record.hrvRMSSDMilliseconds
+            case .rhr: value = record.restingHeartRateBPM
+            }
+            return value.map { MetricPoint(date: record.date, value: $0) }
+        }
+
+        return MetricSeries(
+            daily: daily,
+            plotted: aggregatedPoints(from: daily, for: selectedRange)
+        )
+    }
+
+    private func aggregatedPoints(from daily: [MetricPoint], for range: HealthRange) -> [MetricPoint] {
+        switch range {
+        case .week, .month:
+            daily
+        case .threeMonths:
+            medianBuckets(from: daily, spanning: 3)
+        case .year:
+            medianBuckets(from: daily, spanning: 7)
+        case .all:
+            medianBuckets(from: daily, spanning: adaptiveAllHistoryBucketDays(for: daily))
+        }
+    }
+
+    private func adaptiveAllHistoryBucketDays(for points: [MetricPoint]) -> Int {
+        guard let first = points.first, let last = points.last else { return 7 }
+        let calendar = Calendar.current
+        let span = max(
+            1,
+            (calendar.dateComponents(
+                [.day],
+                from: calendar.startOfDay(for: first.date),
+                to: calendar.startOfDay(for: last.date)
+            ).day ?? 0) + 1
+        )
+
+        // Never make all-history noisier than weekly data. For longer histories,
+        // widen toward monthly or multi-month buckets while staying near 50 points.
+        return max(7, Int(ceil(Double(span) / 50.0)))
+    }
+
+    private func medianBuckets(from points: [MetricPoint], spanning bucketDays: Int) -> [MetricPoint] {
+        guard let first = points.first, bucketDays > 1 else { return points }
+        let calendar = Calendar.current
+        let anchor = calendar.startOfDay(for: first.date)
+        let grouped = Dictionary(grouping: points) { point in
+            let dayOffset = calendar.dateComponents(
+                [.day],
+                from: anchor,
+                to: calendar.startOfDay(for: point.date)
+            ).day ?? 0
+            return max(0, dayOffset / bucketDays)
+        }
+
+        let finalBucketKey = grouped.keys.max()
+        return grouped.keys.sorted().compactMap { key in
+            guard let bucket = grouped[key]?.sorted(by: { $0.date < $1.date }), !bucket.isEmpty else {
+                return nil
+            }
+            // The dashboard's current value is an exact observation. Anchor the
+            // trend to that same point so its endpoint and marker cannot diverge.
+            if key == finalBucketKey {
+                return bucket.last
+            }
+            let values = bucket.map(\.value).sorted()
+            let middle = values.count / 2
+            let median = values.count.isMultiple(of: 2)
+                ? (values[middle - 1] + values[middle]) / 2
+                : values[middle]
+            let representativeDate = bucket.last!.date
+            return MetricPoint(date: representativeDate, value: median)
+        }
+    }
+
+    private func chartDomain(for points: [MetricPoint], metric: MetricKind) -> ClosedRange<Double> {
+        if metric == .sleep { return 0...100 }
+        let values = points.map(\.value)
+        let low = values.min() ?? 0
+        let high = values.max() ?? 1
+        let padding = max((high - low) * 0.18, 0.5)
+        return (low - padding)...(high + padding)
+    }
+}
+
+private struct MetricPoint: Identifiable {
+    let date: Date
+    let value: Double
+
+    var id: Date { date }
+}
+
+private struct AverageLevel: Identifiable {
+    let startDate: Date
+    let endDate: Date
+    let value: Double
+
+    var id: Date { startDate }
+}
+
+private struct MetricSeries {
+    let daily: [MetricPoint]
+    let plotted: [MetricPoint]
+}
+
+private enum MetricKind: Hashable {
+    case sleep
+    case duration
+    case hrv
+    case rhr
+}
+
+private enum HealthRange: String, CaseIterable, Identifiable {
+    case week = "1W"
+    case month = "1M"
+    case threeMonths = "3M"
+    case year = "1Y"
+    case all = "All"
+
+    var id: String { rawValue }
+
+    var menuTitle: String {
+        switch self {
+        case .week: "1 week"
+        case .month: "1 month"
+        case .threeMonths: "3 months"
+        case .year: "1 year"
+        case .all: "All history"
+        }
+    }
+
+    var dayCount: Int? {
+        switch self {
+        case .week: 7
+        case .month: 30
+        case .threeMonths: 90
+        case .year: 365
+        case .all: nil
+        }
+    }
+
+    var accessibilityName: String {
+        switch self {
+        case .week: "one week"
+        case .month: "one month"
+        case .threeMonths: "three months"
+        case .year: "one year"
+        case .all: "all history"
+        }
+    }
+
+    var usesMonthlyAxis: Bool {
+        switch self {
+        case .week, .month: false
+        case .threeMonths, .year, .all: true
+        }
+    }
+
+}
+
+@MainActor
+enum AppHaptics {
+    private static let selectionGenerator = UISelectionFeedbackGenerator()
+    private static let softImpactGenerator = UIImpactFeedbackGenerator(style: .soft)
+    private static let firmImpactGenerator = UIImpactFeedbackGenerator(style: .medium)
+    private static let notificationGenerator = UINotificationFeedbackGenerator()
+
+    static func selection() {
+        selectionGenerator.selectionChanged()
+        selectionGenerator.prepare()
+    }
+
+    static func softImpact() {
+        softImpactGenerator.impactOccurred(intensity: 0.75)
+        softImpactGenerator.prepare()
+    }
+
+    static func firmImpact() {
+        firmImpactGenerator.impactOccurred(intensity: 0.85)
+        firmImpactGenerator.prepare()
+    }
+
+    static func success() {
+        notificationGenerator.notificationOccurred(.success)
+        notificationGenerator.prepare()
+    }
+
+    static func warning() {
+        notificationGenerator.notificationOccurred(.warning)
+        notificationGenerator.prepare()
+    }
+}
+
+#Preview {
+    RootView()
+}
