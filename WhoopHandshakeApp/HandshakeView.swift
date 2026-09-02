@@ -1,76 +1,194 @@
 import SwiftUI
 
 struct HandshakeView: View {
+    @Environment(\.dismiss) private var dismiss
     @ObservedObject var probe: WhoopHandshakeProbe
 
+    private var mockConnected: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.environment["WHOOP_MOCK_CONNECTED"] == "1"
+        #else
+        false
+        #endif
+    }
+
+    private var isConnected: Bool {
+        probe.isConnected || mockConnected
+    }
+
+    private var deviceDisplayName: String {
+        probe.deviceName == "—" ? "WHOOP 5.0" : probe.deviceName
+    }
+
+    private var batteryLevel: Int? {
+        #if DEBUG
+        if let value = ProcessInfo.processInfo.environment["WHOOP_MOCK_BATTERY"],
+           let level = Int(value) {
+            return min(max(level, 0), 100)
+        }
+        #endif
+        return probe.batteryLevel
+    }
+
+    private var batterySymbol: String {
+        switch batteryLevel ?? 0 {
+        case 76...: "battery.100percent"
+        case 51...: "battery.75percent"
+        case 26...: "battery.50percent"
+        case 1...: "battery.25percent"
+        default: "battery.0percent"
+        }
+    }
+
+    private var lastConnectedStatus: String {
+        #if DEBUG
+        if mockConnected { return "Just now" }
+        #endif
+
+        guard let date = probe.lastConnectedAt else { return "Not yet" }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter.localizedString(for: date, relativeTo: .now)
+    }
+
     var body: some View {
-        NavigationStack {
-            List {
-                Section("Connection") {
-                    row("Bluetooth", probe.bluetoothState)
-                    row("Status", probe.status)
-                    row("Device", probe.deviceName)
-                    row("Handshake", probe.handshakeState)
-                }
+        VStack(spacing: 0) {
+            header
 
-                Section("Live measurements") {
-                    row("Heart Rate", probe.heartRate)
-                    row("R–R intervals", probe.rrSummary)
-                    row("Realtime HR", probe.realtimeState)
-                    row("WHOOP packets", String(probe.proprietaryPacketCount))
-                    row("Saved locally", String(probe.persistedPacketCount))
-                    row("Latest packet", probe.latestPacket)
-                    row("Notifications", probe.notificationState)
-                }
+            Image("WhoopBand")
+                .resizable()
+                .scaledToFit()
+                .frame(height: 108)
+                .accessibilityHidden(true)
+                .padding(.top, 2)
 
-                Section {
-                    Button("Attempt encrypted handshake") {
-                        AppHaptics.firmImpact()
-                        probe.attemptHandshake()
-                    }
-                    .disabled(!probe.canAttemptHandshake)
+            VStack(spacing: 2) {
+                Text(deviceDisplayName)
+                    .font(.title3.weight(.semibold))
 
-                    Button("Scan again") {
-                        AppHaptics.softImpact()
-                        probe.startScan()
-                    }
-                    .disabled(!probe.bluetoothReady)
-                } footer: {
-                    Text("This sends only WHOOP 5's static CLIENT_HELLO. It performs no configuration or deep-data writes. A successful handshake can transfer the strap's Bluetooth bond away from the official WHOOP app.")
-                }
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(isConnected ? Color.green : Color.secondary)
+                        .frame(width: 7, height: 7)
 
-                Section("Diagnostic log") {
-                    if probe.diagnosticEvents.isEmpty {
-                        Text("No events yet")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text(probe.diagnosticEvents.suffix(40).joined(separator: "\n"))
-                            .font(.caption.monospaced())
-                            .textSelection(.enabled)
-                            .frame(maxHeight: 220, alignment: .topLeading)
-                    }
-
-                    ShareLink(item: probe.diagnosticReport) {
-                        Label("Share diagnostic report", systemImage: "square.and.arrow.up")
-                    }
-                }
-
-            }
-            .navigationTitle("WHOOP Handshake")
-            .onChange(of: probe.isConnected) { wasConnected, isConnected in
-                if isConnected && !wasConnected {
-                    AppHaptics.success()
+                    Text(isConnected ? "Connected" : "Disconnected")
+                        .foregroundStyle(isConnected ? Color.green : Color.secondary)
+                        .font(.subheadline.weight(.medium))
                 }
             }
-            .onChange(of: probe.handshakeState) { _, state in
-                if state.hasPrefix("Refused") || state.hasPrefix("Link dropped") {
-                    AppHaptics.warning()
+            .padding(.top, 2)
+
+            primaryMetric(
+                title: "Battery",
+                value: batteryLevel.map { "\($0)%" } ?? "—",
+                symbol: batterySymbol
+            )
+            .padding(.vertical, 18)
+
+            Divider()
+
+            statusRow(
+                title: "Collection",
+                value: isConnected ? "Active" : "Paused",
+                symbol: "waveform.path.ecg",
+                positive: isConnected
+            )
+
+            Divider().padding(.leading, 31)
+
+            statusRow(
+                title: "Last connected",
+                value: lastConnectedStatus,
+                symbol: "clock",
+                positive: false
+            )
+
+            if !isConnected {
+                Button("Reconnect") {
+                    AppHaptics.firmImpact()
+                    probe.startScan()
                 }
+                .buttonStyle(.borderedProminent)
+                .tint(.white)
+                .foregroundStyle(.black)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 16)
+            }
+
+            Spacer(minLength: 8)
+        }
+        .padding(.horizontal, 20)
+        .background(Color.black)
+        .preferredColorScheme(.dark)
+        .presentationDetents([.height(360)])
+        .presentationDragIndicator(.visible)
+        .onChange(of: probe.isConnected) { wasConnected, connected in
+            if connected && !wasConnected {
+                AppHaptics.success()
             }
         }
     }
 
-    private func row(_ title: String, _ value: String) -> some View {
-        LabeledContent(title, value: value)
+    private var header: some View {
+        HStack {
+            Spacer()
+
+            Button {
+                AppHaptics.softImpact()
+                dismiss()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 36, height: 36)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close")
+        }
+    }
+
+    private func primaryMetric(title: String, value: String, symbol: String) -> some View {
+        VStack(spacing: 5) {
+            HStack(spacing: 6) {
+                Image(systemName: symbol)
+                    .font(.system(size: 15, weight: .semibold))
+                    .symbolRenderingMode(.hierarchical)
+
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(value)
+                .font(.system(size: 24, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func statusRow(
+        title: String,
+        value: String,
+        symbol: String,
+        positive: Bool
+    ) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbol)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 19)
+
+            Text(title)
+                .font(.subheadline)
+
+            Spacer()
+
+            Text(value)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(positive ? Color.green : Color.secondary)
+        }
+        .frame(minHeight: 46)
     }
 }

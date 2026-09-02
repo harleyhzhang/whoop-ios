@@ -3,10 +3,9 @@ import SwiftUI
 import UIKit
 
 struct RootView: View {
-    @State private var selectedRange: HealthRange = .threeMonths
+    @State private var selectedRange: HealthRange = .month
     @State private var selectedDate: Date?
     @State private var activeMetric: MetricKind?
-    @State private var showingWhoopHandshake = false
     @StateObject private var whoopCollector = WhoopHandshakeProbe()
     @StateObject private var history = HealthHistoryModel()
 
@@ -21,6 +20,27 @@ struct RootView: View {
         #endif
 
         return whoopCollector.heartRate.split(separator: " ").first.map(String.init) ?? "—"
+    }
+
+    private var whoopBatteryLevel: Int? {
+        #if DEBUG
+        if let mockValue = ProcessInfo.processInfo.environment["WHOOP_MOCK_BATTERY"],
+           let level = Int(mockValue) {
+            return min(max(level, 0), 100)
+        }
+        #endif
+
+        return whoopCollector.batteryLevel
+    }
+
+    private var whoopConnected: Bool {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["WHOOP_MOCK_CONNECTED"] == "1" {
+            return true
+        }
+        #endif
+
+        return whoopCollector.isConnected
     }
 
     var body: some View {
@@ -84,9 +104,6 @@ struct RootView: View {
             selectedDate = nil
             activeMetric = nil
         }
-        .sheet(isPresented: $showingWhoopHandshake) {
-            HandshakeView(probe: whoopCollector)
-        }
     }
 
     private var dateHeader: some View {
@@ -105,43 +122,100 @@ struct RootView: View {
 
             Spacer()
 
-            Button {
-                AppHaptics.softImpact()
-                showingWhoopHandshake = true
-            } label: {
+            HStack(spacing: 9) {
                 ZStack(alignment: .bottomTrailing) {
-                    Image("WhoopMark")
+                    Image("WhoopBand")
                         .resizable()
                         .scaledToFit()
-                        .frame(width: 24, height: 24)
+                        .brightness(0.16)
+                        .contrast(1.06)
+                        .frame(width: 33, height: 33)
 
                     Circle()
-                        .fill(whoopCollector.isConnected ? Color.green : Color.secondary)
-                        .frame(width: 7, height: 7)
+                        .fill(whoopConnected ? Color.green : Color.secondary)
+                        .frame(width: 6, height: 6)
                         .overlay {
                             Circle()
                                 .stroke(Color(uiColor: .systemGroupedBackground), lineWidth: 1.5)
                         }
-                        .offset(x: 1, y: 1)
+                        .offset(x: -1, y: -1)
                 }
-                .frame(width: 36, height: 36)
+
+                WhoopBatteryPercentIcon(level: whoopBatteryLevel)
+                    .opacity(whoopConnected ? 1 : 0.45)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(whoopCollector.isConnected ? "WHOOP connected" : "WHOOP connection details")
+            .frame(minHeight: 36)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(
+                "WHOOP \(whoopConnected ? "connected" : "disconnected"), battery \(whoopBatteryLevel.map { "\($0) percent" } ?? "unavailable")"
+            )
         }
         .padding(.top, 8)
     }
 
     private var rangePicker: some View {
-        Picker("Chart range", selection: $selectedRange) {
+        HStack(spacing: 12) {
+            Text("Trends")
+                .font(.title3.weight(.semibold))
+
+            Spacer(minLength: 8)
+
+            rangeSelector
+                .accessibilityValue(selectedRange.accessibilityName)
+        }
+        .padding(.top, 12)
+    }
+
+    private var rangeSelectorButtons: some View {
+        HStack(spacing: 2) {
             ForEach(HealthRange.allCases) { range in
-                Text(range.rawValue)
-                    .tag(range)
-                    .accessibilityLabel(range.accessibilityName)
+                Button {
+                    selectedRange = range
+                } label: {
+                    Text(range.rawValue)
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 13)
+                        .frame(height: 32)
+                        .background {
+                            if selectedRange == range {
+                                rangeSelectionHighlight
+                            }
+                        }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(range.accessibilityName)
+                .accessibilityAddTraits(selectedRange == range ? .isSelected : [])
             }
         }
-        .pickerStyle(.segmented)
-        .accessibilityValue(selectedRange.accessibilityName)
+        .padding(3)
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    @ViewBuilder
+    private var rangeSelector: some View {
+        if #available(iOS 26.0, *) {
+            rangeSelectorButtons
+                .glassEffect(.regular, in: Capsule(style: .continuous))
+        } else {
+            rangeSelectorButtons
+                .background(.ultraThinMaterial, in: Capsule(style: .continuous))
+        }
+    }
+
+    @ViewBuilder
+    private var rangeSelectionHighlight: some View {
+        if #available(iOS 26.0, *) {
+            Capsule(style: .continuous)
+                .fill(Color.clear)
+                .glassEffect(
+                    .regular.tint(Color.white.opacity(0.16)).interactive(),
+                    in: Capsule(style: .continuous)
+                )
+        } else {
+            Capsule(style: .continuous)
+                .fill(Color.white.opacity(0.28))
+        }
     }
 
     private var summaryGrid: some View {
@@ -327,9 +401,17 @@ struct RootView: View {
         let middleDate = series.daily[series.daily.count / 2].date
         let monthTicks = monthlyAxisDates(in: series.daily)
         let lastDate = series.daily.last!.date
-        let chartEndDate = selectedRange.usesMonthlyAxis
-            ? Calendar.current.date(byAdding: .day, value: 3, to: lastDate) ?? lastDate
-            : lastDate
+        let chartStartDate: Date
+        let chartEndDate: Date
+        if series.daily.count == 1 {
+            chartStartDate = Calendar.current.date(byAdding: .hour, value: -12, to: firstDate) ?? firstDate
+            chartEndDate = Calendar.current.date(byAdding: .hour, value: 12, to: lastDate) ?? lastDate
+        } else {
+            chartStartDate = firstDate
+            chartEndDate = selectedRange.usesMonthlyAxis
+                ? Calendar.current.date(byAdding: .day, value: 3, to: lastDate) ?? lastDate
+                : lastDate
+        }
         let averageLevels = adaptiveAverageLevels(from: series.daily, for: selectedRange)
         return VStack(spacing: 3) {
             Chart {
@@ -415,7 +497,7 @@ struct RootView: View {
                 }
             }
             .chartYScale(domain: domain)
-            .chartXScale(domain: firstDate...chartEndDate)
+            .chartXScale(domain: chartStartDate...chartEndDate)
             .chartXSelection(value: selectionBinding(for: metric, selectableSeries: plottedPoints))
             .chartYAxis {
                 AxisMarks(position: .trailing, values: yAxisValues(for: domain)) { value in
@@ -449,20 +531,26 @@ struct RootView: View {
             .accessibilityLabel("\(title), \(selectedRange.accessibilityName)")
 
             if !selectedRange.usesMonthlyAxis {
-                HStack {
-                    Text(axisLabel(for: firstDate))
-                    Spacer()
-                    Text(axisLabel(for: middleDate))
-                    Spacer()
-                    Text(Calendar.current.isDateInToday(series.daily.last!.date) ? "Today" : "Latest")
-                }
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .padding(.trailing, 28)
+                chartAxisFooter(firstDate: firstDate, middleDate: middleDate, lastDate: lastDate)
             }
         }
+        .frame(height: 145, alignment: .top)
+    }
+
+    @ViewBuilder
+    private func chartAxisFooter(firstDate: Date, middleDate: Date, lastDate: Date) -> some View {
+        HStack {
+            Text(axisLabel(for: firstDate))
+            Spacer()
+            Text(axisLabel(for: middleDate))
+            Spacer()
+            Text(Calendar.current.isDateInToday(lastDate) ? "Today" : "Latest")
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+        .padding(.trailing, 28)
     }
 
     private func monthlyAxisDates(in points: [MetricPoint]) -> [Date] {
@@ -508,8 +596,6 @@ struct RootView: View {
         )
         let targetCount: Int
         switch range {
-        case .threeMonths:
-            targetCount = 3
         case .year, .all:
             targetCount = 5
         case .week, .month:
@@ -558,20 +644,14 @@ struct RootView: View {
     @ViewBuilder
     private func monthlyAxisLabel(for date: Date, firstTick: Date?) -> some View {
         let calendar = Calendar.current
-        if selectedRange == .threeMonths {
-            Text(date, format: .dateTime.month(.abbreviated))
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(.secondary)
-        } else {
-            VStack(spacing: 0) {
-                Text(date, format: .dateTime.month(.narrow))
-                if date == firstTick || calendar.component(.month, from: date) == 1 {
-                    Text(date, format: .dateTime.year(.twoDigits))
-                }
+        VStack(spacing: 0) {
+            Text(date, format: .dateTime.month(.narrow))
+            if date == firstTick || calendar.component(.month, from: date) == 1 {
+                Text(date, format: .dateTime.year(.twoDigits))
             }
-            .font(.system(size: 8, weight: .medium))
-            .foregroundStyle(.secondary)
         }
+        .font(.system(size: 8, weight: .medium))
+        .foregroundStyle(.secondary)
     }
 
     private func selectionBinding(for metric: MetricKind, selectableSeries: [MetricPoint]) -> Binding<Date?> {
@@ -609,8 +689,6 @@ struct RootView: View {
         switch selectedRange {
         case .week, .month:
             date.formatted(.dateTime.month(.abbreviated).day())
-        case .threeMonths:
-            date.formatted(.dateTime.month(.abbreviated))
         case .year, .all:
             date.formatted(.dateTime.month(.abbreviated).year(.twoDigits))
         }
@@ -668,8 +746,6 @@ struct RootView: View {
         switch range {
         case .week, .month:
             daily
-        case .threeMonths:
-            medianBuckets(from: daily, spanning: 3)
         case .year:
             medianBuckets(from: daily, spanning: 7)
         case .all:
@@ -689,8 +765,6 @@ struct RootView: View {
             ).day ?? 0) + 1
         )
 
-        // Never make all-history noisier than weekly data. For longer histories,
-        // widen toward monthly or multi-month buckets while staying near 50 points.
         return max(7, Int(ceil(Double(span) / 50.0)))
     }
 
@@ -737,6 +811,77 @@ struct RootView: View {
     }
 }
 
+private struct WhoopBatteryPercentIcon: View {
+    let level: Int?
+
+    private var clampedLevel: Int {
+        min(max(level ?? 0, 0), 100)
+    }
+
+    private var fillColor: Color {
+        if clampedLevel <= 20 { return .red }
+        if clampedLevel <= 35 { return .yellow }
+        return .primary
+    }
+
+    private var percentageText: String {
+        level.map(String.init) ?? "–"
+    }
+
+    private var fillFraction: CGFloat {
+        level == nil ? 0 : CGFloat(clampedLevel) / 100
+    }
+
+    private var trackColor: Color {
+        Color.secondary.opacity(0.38)
+    }
+
+    private func percentageLabel(color: Color) -> some View {
+        HStack(spacing: 0) {
+            ForEach(Array(percentageText.enumerated()), id: \.offset) { _, digit in
+                Text(String(digit))
+            }
+        }
+        .font(.system(size: 13, weight: .bold, design: .rounded))
+        .foregroundStyle(color)
+        .frame(width: 33, height: 18)
+    }
+
+    var body: some View {
+        HStack(spacing: 1.6) {
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 5.2, style: .continuous)
+                    .fill(trackColor)
+
+                Rectangle()
+                    .fill(fillColor)
+                    .frame(width: 33 * fillFraction)
+
+                percentageLabel(color: .white)
+
+                percentageLabel(color: .black)
+                    .mask(alignment: .leading) {
+                        Rectangle()
+                            .frame(width: 33 * fillFraction)
+                    }
+            }
+            .frame(width: 33, height: 18)
+            .clipShape(RoundedRectangle(cornerRadius: 5.2, style: .continuous))
+
+            UnevenRoundedRectangle(
+                topLeadingRadius: 0,
+                bottomLeadingRadius: 0,
+                bottomTrailingRadius: 3.75,
+                topTrailingRadius: 3.75,
+                style: .continuous
+            )
+                .fill(trackColor)
+            .frame(width: 2.7, height: 7.5)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
 private struct MetricPoint: Identifiable {
     let date: Date
     let value: Double
@@ -765,10 +910,9 @@ private enum MetricKind: Hashable {
 }
 
 private enum HealthRange: String, CaseIterable, Identifiable {
-    case week = "1W"
-    case month = "1M"
-    case threeMonths = "3M"
-    case year = "1Y"
+    case week = "Week"
+    case month = "Month"
+    case year = "Year"
     case all = "All"
 
     var id: String { rawValue }
@@ -777,7 +921,6 @@ private enum HealthRange: String, CaseIterable, Identifiable {
         switch self {
         case .week: "1 week"
         case .month: "1 month"
-        case .threeMonths: "3 months"
         case .year: "1 year"
         case .all: "All history"
         }
@@ -787,7 +930,6 @@ private enum HealthRange: String, CaseIterable, Identifiable {
         switch self {
         case .week: 7
         case .month: 30
-        case .threeMonths: 90
         case .year: 365
         case .all: nil
         }
@@ -797,7 +939,6 @@ private enum HealthRange: String, CaseIterable, Identifiable {
         switch self {
         case .week: "one week"
         case .month: "one month"
-        case .threeMonths: "three months"
         case .year: "one year"
         case .all: "all history"
         }
@@ -806,7 +947,7 @@ private enum HealthRange: String, CaseIterable, Identifiable {
     var usesMonthlyAxis: Bool {
         switch self {
         case .week, .month: false
-        case .threeMonths, .year, .all: true
+        case .year, .all: true
         }
     }
 

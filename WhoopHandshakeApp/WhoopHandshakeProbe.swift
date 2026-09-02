@@ -9,6 +9,9 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     @Published private(set) var handshakeState = "Waiting for WHOOP 5"
     @Published private(set) var notificationState = "Not requested"
     @Published private(set) var heartRate = "—"
+    @Published private(set) var batteryLevel: Int?
+    @Published private(set) var lastConnectedAt: Date?
+    @Published private(set) var lastDataReceivedAt: Date?
     @Published private(set) var rrSummary = "—"
     @Published private(set) var realtimeState = "Not armed"
     @Published private(set) var proprietaryPacketCount = 0
@@ -31,6 +34,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     private var peripheral: CBPeripheral?
     private var commandCharacteristic: CBCharacteristic?
     private var heartRateCharacteristic: CBCharacteristic?
+    private var batteryLevelCharacteristic: CBCharacteristic?
     private var notifyCharacteristics: [CBCharacteristic] = []
     private var helloOutstanding = false
     private var helloAttemptID: UUID?
@@ -42,6 +46,8 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
 
     private let whoop5Service = CBUUID(string: "FD4B0001-CCE1-4033-93CE-002D5875F58A")
     private let heartRateService = CBUUID(string: "180D")
+    private let batteryService = CBUUID(string: "180F")
+    private let batteryLevelUUID = CBUUID(string: "2A19")
     private let commandUUID = CBUUID(string: "FD4B0002-CCE1-4033-93CE-002D5875F58A")
     private let notifyUUIDs = Set([
         CBUUID(string: "FD4B0003-CCE1-4033-93CE-002D5875F58A"),
@@ -95,6 +101,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         peripheral = nil
         commandCharacteristic = nil
         heartRateCharacteristic = nil
+        batteryLevelCharacteristic = nil
         notifyCharacteristics = []
         helloOutstanding = false
         helloAttemptID = nil
@@ -378,7 +385,7 @@ extension WhoopHandshakeProbe: CBCentralManagerDelegate {
             record("CoreBluetooth restored WHOOP [\(restored.identifier.uuidString)] in state \(restored.state.rawValue)")
             if restored.state == .connected {
                 status = "Restored connection; discovering services"
-                restored.discoverServices([whoop5Service, heartRateService])
+                restored.discoverServices([whoop5Service, heartRateService, batteryService])
             } else {
                 status = "Restoring WHOOP connection"
                 central.connect(restored)
@@ -408,9 +415,10 @@ extension WhoopHandshakeProbe: CBCentralManagerDelegate {
 
     nonisolated func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         Task { @MainActor in
+            lastConnectedAt = .now
             status = "Connected; discovering services"
             record("Connected; discovering WHOOP 5 and Heart Rate services")
-            peripheral.discoverServices([whoop5Service, heartRateService])
+            peripheral.discoverServices([whoop5Service, heartRateService, batteryService])
         }
     }
 
@@ -483,6 +491,14 @@ extension WhoopHandshakeProbe: CBPeripheralDelegate {
                         record("Subscribing to bond-free standard Heart Rate Measurement 2A37 before handshake")
                         peripheral.setNotifyValue(true, for: characteristic)
                     }
+                } else if characteristic.uuid == batteryLevelUUID {
+                    batteryLevelCharacteristic = characteristic
+                    if characteristic.properties.contains(.read) {
+                        peripheral.readValue(for: characteristic)
+                    }
+                    if characteristic.properties.contains(.notify) || characteristic.properties.contains(.indicate) {
+                        peripheral.setNotifyValue(true, for: characteristic)
+                    }
                 } else if notifyUUIDs.contains(characteristic.uuid) {
                     notifyCharacteristics.append(characteristic)
                 }
@@ -531,8 +547,13 @@ extension WhoopHandshakeProbe: CBPeripheralDelegate {
             guard error == nil, let data = characteristic.value else { return }
             if characteristic.uuid == CBUUID(string: "2A37") {
                 parseHeartRate(data)
+                lastDataReceivedAt = .now
+            } else if characteristic.uuid == batteryLevelUUID, let level = data.first {
+                batteryLevel = min(Int(level), 100)
+                record("Battery level: \(batteryLevel ?? 0)%")
             } else if notifyUUIDs.contains(characteristic.uuid) {
                 proprietaryPacketCount += 1
+                lastDataReceivedAt = .now
                 let preview = data.prefix(24).map { String(format: "%02X", $0) }.joined(separator: " ")
                 record("WHOOP packet #\(proprietaryPacketCount) on \(characteristic.uuid.uuidString), \(data.count) bytes: \(preview)\(data.count > 24 ? " …" : "")")
                 let frameType = data.count > 8 ? data[8] : nil
