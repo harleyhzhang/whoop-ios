@@ -25,6 +25,11 @@ The app should eventually cover the complete personal loop:
   reversible WHOOP 5 live-stream commands.
 - The diagnostic path decodes standard Bluetooth heart-rate measurements and
   WHOOP 5 type-40 heart-rate/R–R frames.
+- WHOOP 5 type-47/version-18 historical packets are decoded locally and each
+  type-49 history chunk is acknowledged only after its raw and decoded records
+  are durably stored. The local sleep finalizer uses the band's sleep-state
+  signal plus coverage gates to derive duration, lowest five-minute mean RHR,
+  cleaned five-minute RMSSD HRV, and a transparent sleep-performance score.
 - The collector now lives for the lifetime of the app rather than the diagnostic
   sheet, automatically reopens a previously confirmed bond, re-arms the live
   streams every 30 seconds, reconnects after link loss, requests CoreBluetooth
@@ -89,6 +94,12 @@ The app should eventually cover the complete personal loop:
 - The dashboard diagnostic control uses the compact circular WHOOP mark plus a
   small plain connection-status dot, green only while the encrypted strap link
   is active and gray otherwise.
+- Local notifications require no hosted service. A completed local sleep emits
+  one deduplicated morning summary containing Sleep %, duration, HRV, and RHR.
+  Battery readings emit one warning per discharge cycle at 20% and 10%, with
+  hysteresis to prevent threshold jitter, plus one completion alert when a
+  subsequent reading reaches 100%. All three paths were exercised with
+  debug-only simulator triggers that do not persist synthetic health data.
 - The 2026-09-01 real-history build was installed in place and visibly launched
   on the paired iPhone; the dashboard rendered the imported history correctly.
 - The generated seed remains in Harley's private data tree rather than the
@@ -96,16 +107,17 @@ The app should eventually cover the complete personal loop:
   `WHOOP_HISTORY_SEED_PATH` (or the private local default) into the app bundle
   for first-launch import; the app contains no API client secret or refresh
   token. Clean clones build without the private seed and display missing data.
-- Sustained worn live capture and foreground/background persistence work;
-  longer disconnect, overnight, battery, historical-offload, sleep-inference,
-  and backend tests remain.
+- Sustained worn live capture, foreground/background persistence, historical
+  offload, conservative local sleep finalization, and local notifications work.
+  Longer unattended overnight calibration, disconnect recovery, stage models,
+  and backend replication remain.
 
 ## Immediate milestone
 
-Run an overnight direct capture and validate gaps, battery impact, reconnect
-behavior, and historical offload. Then create and validate a versioned local
-sleep-window model so post-membership nights can replace the API-backed history
-without inventing duration, stages, HRV, RHR, or Sleep Score values.
+Run an unattended overnight direct capture and validate gaps, battery impact,
+reconnect behavior, automatic sleep finalization, and the morning notification
+on physical hardware. Then expand the versioned local model toward independent
+sleep detection and stages without inventing unavailable measurements.
 
 The protocol implementation uses independently implementable protocol facts.
 NOOP is a valuable factual reference, but its PolyForm Noncommercial license

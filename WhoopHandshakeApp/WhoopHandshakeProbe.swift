@@ -138,6 +138,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
                 if let record = snapshot.finalizedRecord,
                    record.sleepID != self.lastFinalizedSleepID {
                     self.lastFinalizedSleepID = record.sleepID
+                    WhoopNotificationManager.shared.sendMorningSummary(for: record)
                     NotificationCenter.default.post(name: .whoopDailyHealthUpdated, object: nil)
                 }
             }
@@ -161,6 +162,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         let clampedLevel = min(max(level, 0), 100)
         batteryLevel = clampedLevel
         UserDefaults.standard.set(clampedLevel, forKey: cachedBatteryLevelKey)
+        WhoopNotificationManager.shared.observeBatteryLevel(clampedLevel)
     }
 
     func startScan() {
