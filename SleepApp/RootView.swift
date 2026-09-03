@@ -133,6 +133,7 @@ struct RootView: View {
             currentDate = .now
             history.reload()
             whoopCollector.refreshHistoricalData()
+            WhoopStore.shared.writeSleepDiagnostics()
         }
         .onReceive(NotificationCenter.default.publisher(for: .whoopDailyHealthUpdated)) { notification in
             currentDate = .now

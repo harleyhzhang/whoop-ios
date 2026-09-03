@@ -41,6 +41,19 @@ struct WhoopDecodedHistorical: Sendable {
         )
     }
 
+    /// Why a stored type-47 packet did not become a historical sample. Used by
+    /// the diagnostics to tell sparse strap data apart from frames this app
+    /// silently drops after the destructive chunk acknowledgement.
+    static func decodeFailureReason(_ data: Data) -> String {
+        let bytes = [UInt8](data)
+        guard bytes.count >= 10 else { return "shorter than 10 bytes" }
+        if bytes.count != 124 { return "length \(bytes.count), expected 124" }
+        if bytes[8] != 47 { return "type \(bytes[8]), expected 47" }
+        if bytes[9] != 18 { return "version \(bytes[9]), expected 18" }
+        if !frameCRCIsValid(bytes) { return "CRC mismatch" }
+        return "decodes"
+    }
+
     private static func frameCRCIsValid(_ bytes: [UInt8]) -> Bool {
         let payloadEnd = bytes.count - 4
         let expected = UInt32(bytes[payloadEnd])
@@ -77,6 +90,39 @@ struct WhoopPendingSleep: Sendable, Equatable {
     let startedAt: Date
     let endedAt: Date
     let durationMinutes: Double
+}
+
+/// A factual account of why the latest night did or did not become a record.
+/// Written beside the database so a night that produced nothing can still be
+/// explained after the fact instead of only showing dashes.
+struct WhoopSleepDiagnostics: Codable, Sendable {
+    let generatedAt: String
+    let windowHours: Int
+    let sampleCount: Int
+    let distinctSeconds: Int
+    let firstSampleAt: String?
+    let lastSampleAt: String?
+    let secondsSinceLastSample: Int?
+    let medianSampleIntervalSeconds: Double?
+    let largestGapSeconds: Int?
+    let asleepSampleCount: Int
+    let sleepStateHistogram: [String: Int]
+    let sessionStartedAt: String?
+    let sessionEndedAt: String?
+    let sessionSpanSeconds: Int?
+    let asleepDistinctSeconds: Int?
+    let sessionCoverage: Double?
+    let wakeCoverageSeconds: Int?
+    let secondsSinceLastAsleep: Int?
+    let passesDurationGate: Bool?
+    let passesCoverageGate: Bool?
+    let passesWakeCoverageGate: Bool?
+    let passesWakeElapsedGate: Bool?
+    let storedRecordForSessionDate: String?
+    let rawType47PacketTotal: Int
+    let historicalSampleTotal: Int
+    let recentType47Outcomes: [String: Int]
+    let outcome: String
 }
 
 enum WhoopSleepProcessError: Error, Sendable {
@@ -231,16 +277,22 @@ final class WhoopStore: @unchecked Sendable {
         }
     }
 
-    private func openDatabase() {
+    static func databaseDirectory() -> URL? {
         let fileManager = FileManager.default
+        guard let base = try? fileManager.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        ) else { return nil }
+        let directory = base.appendingPathComponent("Sleep", isDirectory: true)
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    private func openDatabase() {
         do {
-            let directory = try fileManager.url(
-                for: .applicationSupportDirectory,
-                in: .userDomainMask,
-                appropriateFor: nil,
-                create: true
-            ).appendingPathComponent("Sleep", isDirectory: true)
-            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            guard let directory = Self.databaseDirectory() else { return }
             let url = directory.appendingPathComponent("sleep.sqlite3")
             guard sqlite3_open_v2(
                 url.path,
@@ -756,6 +808,202 @@ final class WhoopStore: @unchecked Sendable {
                 completion(.success(record))
             }
         }
+    }
+
+    /// Recomputes the same window the analyzer uses and reports every input and
+    /// gate result, including the cases where the analyzer bails early.
+    func sleepDiagnostics(
+        now: Date = .now,
+        completion: @escaping @Sendable (WhoopSleepDiagnostics) -> Void
+    ) {
+        queue.async { [self] in
+            completion(buildSleepDiagnostics(now: now))
+        }
+    }
+
+    /// Writes the diagnostics beside the database as JSON. The file is small and
+    /// overwritten each time, so it can be pulled off the device when the
+    /// dashboard shows nothing and the reason is not obvious.
+    func writeSleepDiagnostics(now: Date = .now) {
+        queue.async { [self] in
+            let diagnostics = buildSleepDiagnostics(now: now)
+            guard let directory = Self.databaseDirectory() else { return }
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            guard let data = try? encoder.encode(diagnostics) else { return }
+            try? data.write(
+                to: directory.appendingPathComponent("sleep-diagnostics.json"),
+                options: .atomic
+            )
+        }
+    }
+
+    private func buildSleepDiagnostics(now: Date) -> WhoopSleepDiagnostics {
+        let iso = ISO8601DateFormatter()
+        func stamp(_ interval: TimeInterval) -> String {
+            iso.string(from: Date(timeIntervalSince1970: interval))
+        }
+        let audit = historicalDecodeAudit()
+        func empty(_ outcome: String) -> WhoopSleepDiagnostics {
+            WhoopSleepDiagnostics(
+                generatedAt: iso.string(from: now), windowHours: 48, sampleCount: 0,
+                distinctSeconds: 0, firstSampleAt: nil, lastSampleAt: nil,
+                secondsSinceLastSample: nil, medianSampleIntervalSeconds: nil,
+                largestGapSeconds: nil, asleepSampleCount: 0, sleepStateHistogram: [:],
+                sessionStartedAt: nil, sessionEndedAt: nil, sessionSpanSeconds: nil,
+                asleepDistinctSeconds: nil, sessionCoverage: nil, wakeCoverageSeconds: nil,
+                secondsSinceLastAsleep: nil, passesDurationGate: nil, passesCoverageGate: nil,
+                passesWakeCoverageGate: nil, passesWakeElapsedGate: nil,
+                storedRecordForSessionDate: nil,
+                rawType47PacketTotal: audit.rawTotal,
+                historicalSampleTotal: audit.sampleTotal,
+                recentType47Outcomes: audit.outcomes,
+                outcome: outcome
+            )
+        }
+
+        guard let database else { return empty("no database") }
+        let cutoff = now.addingTimeInterval(-48 * 60 * 60).timeIntervalSince1970
+        let sql = """
+            SELECT sample_at, sleep_state
+            FROM whoop_historical_sample
+            WHERE sample_at >= ?
+            ORDER BY sample_at ASC
+            """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else {
+            return empty("could not read whoop_historical_sample")
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_double(statement, 1, cutoff)
+
+        var stamps: [TimeInterval] = []
+        var states: [Int] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            stamps.append(sqlite3_column_double(statement, 0))
+            states.append(Int(sqlite3_column_int(statement, 1)))
+        }
+        guard let first = stamps.first, let last = stamps.last else {
+            return empty("no historical samples in the last 48 hours")
+        }
+
+        var histogram: [String: Int] = [:]
+        for state in states { histogram["\(state)", default: 0] += 1 }
+
+        var gaps: [Double] = []
+        for index in 1..<max(stamps.count, 1) where stamps.count > 1 {
+            gaps.append(stamps[index] - stamps[index - 1])
+        }
+        let sortedGaps = gaps.sorted()
+        let medianGap = sortedGaps.isEmpty ? nil : sortedGaps[sortedGaps.count / 2]
+
+        let asleep = zip(stamps, states).filter { $0.1 == 2 }.map(\.0)
+        guard let lastAsleep = asleep.last else {
+            return WhoopSleepDiagnostics(
+                generatedAt: iso.string(from: now), windowHours: 48,
+                sampleCount: stamps.count, distinctSeconds: Set(stamps.map(Int.init)).count,
+                firstSampleAt: stamp(first), lastSampleAt: stamp(last),
+                secondsSinceLastSample: Int(now.timeIntervalSince1970 - last),
+                medianSampleIntervalSeconds: medianGap, largestGapSeconds: sortedGaps.last.map(Int.init),
+                asleepSampleCount: 0, sleepStateHistogram: histogram,
+                sessionStartedAt: nil, sessionEndedAt: nil, sessionSpanSeconds: nil,
+                asleepDistinctSeconds: nil, sessionCoverage: nil, wakeCoverageSeconds: nil,
+                secondsSinceLastAsleep: nil, passesDurationGate: nil, passesCoverageGate: nil,
+                passesWakeCoverageGate: nil, passesWakeElapsedGate: nil,
+                storedRecordForSessionDate: nil,
+                rawType47PacketTotal: audit.rawTotal,
+                historicalSampleTotal: audit.sampleTotal,
+                recentType47Outcomes: audit.outcomes,
+                outcome: "no sample carried sleep_state 2 in the last 48 hours"
+            )
+        }
+
+        var groups: [[TimeInterval]] = []
+        for value in asleep {
+            if let previous = groups.last?.last, value - previous <= 45 * 60 {
+                groups[groups.count - 1].append(value)
+            } else {
+                groups.append([value])
+            }
+        }
+        let session = groups.last ?? []
+        let sessionStart = session.first ?? lastAsleep
+        let sessionEnd = session.last ?? lastAsleep
+        let span = max(1, Int(sessionEnd - sessionStart) + 1)
+        let inSession = stamps.filter { $0 >= sessionStart && $0 <= sessionEnd }
+        let coverage = Double(Set(inSession.map(Int.init)).count) / Double(span)
+        let asleepSeconds = Set(session.map(Int.init)).count
+        let wakeCoverage = Set(
+            zip(stamps, states).filter { $0.0 > sessionEnd && $0.1 != 2 }.map { Int($0.0) }
+        ).count
+        let sinceLastAsleep = Int(last - sessionEnd)
+        let dateKey = Self.dateKeyFormatter.string(from: Date(timeIntervalSince1970: sessionEnd))
+
+        let durationGate = asleepSeconds >= 3 * 60 * 60
+        let coverageGate = coverage >= 0.50
+        let wakeCoverageGate = wakeCoverage >= 30 * 60
+        let wakeElapsedGate = sinceLastAsleep >= 30 * 60
+        let stored = storedSleepID(forDateKey: dateKey, database: database)
+
+        let outcome: String
+        if stored != nil {
+            outcome = "already stored for \(dateKey)"
+        } else if !durationGate || !coverageGate {
+            outcome = "blocked by evidence gates; no Process control is offered"
+        } else if !wakeCoverageGate || !wakeElapsedGate {
+            outcome = "pending; Process control should be visible"
+        } else {
+            outcome = "all gates pass; should have finalized automatically"
+        }
+
+        return WhoopSleepDiagnostics(
+            generatedAt: iso.string(from: now), windowHours: 48,
+            sampleCount: stamps.count, distinctSeconds: Set(stamps.map(Int.init)).count,
+            firstSampleAt: stamp(first), lastSampleAt: stamp(last),
+            secondsSinceLastSample: Int(now.timeIntervalSince1970 - last),
+            medianSampleIntervalSeconds: medianGap, largestGapSeconds: sortedGaps.last.map(Int.init),
+            asleepSampleCount: asleep.count, sleepStateHistogram: histogram,
+            sessionStartedAt: stamp(sessionStart), sessionEndedAt: stamp(sessionEnd),
+            sessionSpanSeconds: span, asleepDistinctSeconds: asleepSeconds,
+            sessionCoverage: coverage, wakeCoverageSeconds: wakeCoverage,
+            secondsSinceLastAsleep: sinceLastAsleep,
+            passesDurationGate: durationGate, passesCoverageGate: coverageGate,
+            passesWakeCoverageGate: wakeCoverageGate, passesWakeElapsedGate: wakeElapsedGate,
+            storedRecordForSessionDate: stored,
+            rawType47PacketTotal: audit.rawTotal,
+            historicalSampleTotal: audit.sampleTotal,
+            recentType47Outcomes: audit.outcomes,
+            outcome: outcome
+        )
+    }
+
+    /// Compares stored type-47 packets against the samples they produced. A ratio
+    /// near one means the strap itself reports sparsely; a large ratio means this
+    /// app is discarding frames it already acknowledged and cannot re-request.
+    private func historicalDecodeAudit() -> (rawTotal: Int, sampleTotal: Int, outcomes: [String: Int]) {
+        guard let database else { return (0, 0, [:]) }
+        let rawTotal = Int((try? scalarInt(database, sql: "SELECT COUNT(*) FROM whoop_raw_packet WHERE frame_type = 47")) ?? 0)
+        let sampleTotal = Int((try? scalarInt(database, sql: "SELECT COUNT(*) FROM whoop_historical_sample")) ?? 0)
+
+        var outcomes: [String: Int] = [:]
+        let sql = """
+            SELECT payload FROM whoop_raw_packet
+            WHERE frame_type = 47
+            ORDER BY received_at DESC
+            LIMIT 3000
+            """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return (rawTotal, sampleTotal, outcomes) }
+        defer { sqlite3_finalize(statement) }
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let blob = sqlite3_column_blob(statement, 0) else { continue }
+            let length = Int(sqlite3_column_bytes(statement, 0))
+            let data = Data(bytes: blob, count: length)
+            outcomes[WhoopDecodedHistorical.decodeFailureReason(data), default: 0] += 1
+        }
+        return (rawTotal, sampleTotal, outcomes)
     }
 
     private func derivedRecord(
