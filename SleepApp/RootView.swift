@@ -14,6 +14,21 @@ struct RootView: View {
 
     private var referenceDate: Date { currentDate }
 
+    /// A range is offered only when the history is long enough to mean anything
+    /// by it. All history is always offered; it is the one range that describes
+    /// whatever exists rather than a fixed window.
+    private var availableRanges: [HealthRange] {
+        guard let first = history.records.first?.date,
+              let last = history.records.last?.date else {
+            return HealthRange.allCases
+        }
+        let days = (Calendar.current.dateComponents([.day], from: first, to: last).day ?? 0) + 1
+        return HealthRange.allCases.filter { range in
+            guard let required = range.dayCount else { return true }
+            return days >= required
+        }
+    }
+
     private var todayRecord: DailyHealthRecord? {
         history.records.last { Calendar.current.isDate($0.date, inSameDayAs: currentDate) }
     }
@@ -128,6 +143,13 @@ struct RootView: View {
             AppHaptics.selection()
             selectedDate = nil
             activeMetric = nil
+        }
+        .onChange(of: availableRanges) { _, ranges in
+            // History can shorten as well as grow. Fall back to the longest
+            // range that still exists rather than leaving a selection that no
+            // longer has a button.
+            guard !ranges.isEmpty, !ranges.contains(selectedRange) else { return }
+            selectedRange = ranges.last ?? .all
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
@@ -278,7 +300,7 @@ struct RootView: View {
 
     private var rangeSelectorButtons: some View {
         HStack(spacing: 2) {
-            ForEach(HealthRange.allCases) { range in
+            ForEach(availableRanges) { range in
                 Button {
                     withAnimation(.smooth(duration: 0.34, extraBounce: 0.14)) {
                         selectedRange = range
@@ -498,6 +520,16 @@ struct RootView: View {
                 .padding(.bottom, 22)
 
                 metricChart(metric: metric, series: series, color: color, title: title)
+                    // Replacing the plot wholesale lets it dissolve in place.
+                    // Reusing it made Swift Charts interpolate every mark across
+                    // a completely different x domain, which read as the chart
+                    // sliding off screen. The explicit animation also keeps the
+                    // selector's spring from driving that interpolation.
+                    .id(selectedRange)
+                    .transition(
+                        .opacity.combined(with: .scale(scale: 0.985, anchor: .center))
+                    )
+                    .animation(.easeInOut(duration: 0.28), value: selectedRange)
             }
         }
         .padding(.horizontal, 14)
