@@ -971,7 +971,7 @@ private struct WhoopBatteryPercentIcon: View {
     }
 
     private var trackColor: Color {
-        Color.primary.opacity(0.45)
+        Color.primary.opacity(0.58)
     }
 
     private static let shellWidth: CGFloat = 29
