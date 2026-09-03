@@ -130,6 +130,24 @@ The app should eventually cover the complete personal loop:
   WHOOP's distribution. The consistent direction suggests the local windows
   favour the calmest part of the night more than WHOOP's do; this is a known
   methodological difference, not a demonstrated defect.
+- Sleep need is a calibrated constant rather than a function of recent sleep.
+  The previous model took the 75th percentile of the last 28 nights' durations,
+  which derived how much sleep is needed from how much sleep happened, so a run
+  of short nights lowered the bar. With a 480 minute floor it also scored any
+  night past eight hours at 100%. Dividing each archived night's duration by the
+  sleep performance WHOOP published for it recovers the need WHOOP used: a
+  median of 517 minutes over 306 nights. A constant 519 minute need reproduces
+  WHOOP's median score of 82 exactly and its mean within a point, and the score
+  is capped at 99 because WHOOP never awarded 100 in 306 nights. Sleep debt,
+  strain, and naps are deliberately not modelled, so a night after heavy strain
+  scores higher here than WHOOP would score it.
+- Derived rows carry a versioned source. A change to any derivation re-derives
+  the nights the previous version wrote instead of leaving stale values in the
+  history; archived WHOOP rows are authoritative and are never overwritten.
+- The chart selection dot sits on an opaque plate so neither the trend line nor
+  the translucent future region shows through it, and that region extends past
+  the domain so the round line cap overhanging the final point is dimmed with
+  the rest of the line instead of staying at full strength on the right edge.
 - Sleep finalization separates detection from storage. The automatic path still
   requires at least three hours asleep, 50% one-hertz session coverage, thirty
   minutes of banked wake data, and thirty minutes since the last asleep sample.

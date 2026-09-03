@@ -823,7 +823,7 @@ final class WhoopStore: @unchecked Sendable {
             var newest: DailyHealthRecord?
             for candidate in candidates where candidate.meetsEvidenceGates && candidate.meetsWakeGates {
                 guard shouldDerive(dateKey: candidate.dateKey, database: database) else { continue }
-                let record = derivedRecord(for: candidate, now: now, database: database)
+                let record = derivedRecord(for: candidate, now: now)
                 if upsertLocalDailyHealthRecord(record, database: database) {
                     newest = record
                 }
@@ -876,7 +876,7 @@ final class WhoopStore: @unchecked Sendable {
                     completion(.failure(.insufficientEvidence))
                     return
                 }
-                let record = derivedRecord(for: candidate, now: now, database: database)
+                let record = derivedRecord(for: candidate, now: now)
                 guard upsertLocalDailyHealthRecord(record, database: database) else {
                     completion(.failure(.writeFailed))
                     return
@@ -1045,14 +1045,15 @@ final class WhoopStore: @unchecked Sendable {
 
     private func derivedRecord(
         for candidate: SleepCandidate,
-        now: Date,
-        database: OpaquePointer
+        now: Date
     ) -> DailyHealthRecord {
         let durationMinutes = candidate.durationMinutes
         let restingHR = restingHeartRate(rows: candidate.sessionRows, cadence: candidate.cadenceSeconds)
         let hrv = nightlyRMSSD(rows: candidate.sessionRows.filter { $0.sleepState == 2 })
-        let needMinutes = personalizedSleepNeedMinutes(database: database)
-        let sleepScore = min(100, durationMinutes / max(needMinutes, 1) * 100)
+        let sleepScore = min(
+            Self.maximumSleepScore,
+            durationMinutes / Self.baselineSleepNeedMinutes * 100
+        )
         return DailyHealthRecord(
             dateKey: candidate.dateKey,
             sleepScore: sleepScore,
@@ -1061,7 +1062,7 @@ final class WhoopStore: @unchecked Sendable {
             restingHeartRateBPM: restingHR,
             sleepID: candidate.sleepID,
             cycleID: nil,
-            source: "whoop5_local",
+            source: Self.localSource,
             sourceArchive: nil,
             sourceUpdatedAt: ISO8601DateFormatter().string(from: now)
         )
@@ -1083,7 +1084,9 @@ final class WhoopStore: @unchecked Sendable {
         defer { sqlite3_finalize(statement) }
         bind(dateKey, to: 1, in: statement)
         guard sqlite3_step(statement) == SQLITE_ROW else { return true }
-        guard textColumn(statement, 0) == "whoop5_local" else { return false }
+        guard let source = textColumn(statement, 0),
+              source.hasPrefix(Self.localSourcePrefix) else { return false }
+        if source != Self.localSource { return true }
         return (1...4).contains { sqlite3_column_type(statement, Int32($0)) == SQLITE_NULL }
     }
 
@@ -1196,30 +1199,33 @@ final class WhoopStore: @unchecked Sendable {
         return count > 0 ? sqrt(sum / Double(count)) : nil
     }
 
-    private func personalizedSleepNeedMinutes(database: OpaquePointer) -> Double {
-        let sql = """
-            SELECT sleep_duration_minutes
-            FROM daily_health_metric
-            WHERE sleep_duration_minutes > 0
-            ORDER BY date_key DESC
-            LIMIT 28
-            """
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return 480 }
-        defer { sqlite3_finalize(statement) }
-        var values: [Double] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            values.append(sqlite3_column_double(statement, 0))
-        }
-        guard values.count >= 7 else { return 480 }
-        values.sort()
-        let position = 0.75 * Double(values.count - 1)
-        let low = Int(position)
-        let high = min(low + 1, values.count - 1)
-        let percentile = values[low] + (position - Double(low)) * (values[high] - values[low])
-        return min(max(percentile, 480), 570)
-    }
+    /// Baseline sleep need, calibrated against WHOOP's own archived scores.
+    ///
+    /// The previous model took the 75th percentile of the last 28 nights'
+    /// durations, which is circular: it derived how much sleep is needed from
+    /// how much sleep actually happened, so a run of short nights lowered the
+    /// bar and flattered the next score. Clamped to a 480 minute floor, it also
+    /// scored any night past eight hours at 100%.
+    ///
+    /// Dividing each archived night's duration by the sleep performance WHOOP
+    /// published for it recovers the need WHOOP itself used: a median of 517
+    /// minutes across 306 nights. A constant 519 minute need reproduces WHOOP's
+    /// median score of 82 exactly and its mean within about one point.
+    ///
+    /// This is a baseline only. WHOOP also raises need for sleep debt, strain,
+    /// and naps, none of which are modelled here, so a night after heavy strain
+    /// will score higher than WHOOP would score it.
+    static let baselineSleepNeedMinutes: Double = 519
+
+    /// WHOOP never awarded 100% in 306 archived nights; its highest was 99.
+    static let maximumSleepScore: Double = 99
+
+    /// Versioned so a change to any derivation re-derives the nights written by
+    /// the previous version instead of leaving stale values in the history.
+    /// Anything with the `whoop5_local` prefix is ours; anything else is an
+    /// archived WHOOP row and is authoritative.
+    static let localSource = "whoop5_local_v2"
+    static let localSourcePrefix = "whoop5_local"
 
     private func upsertLocalDailyHealthRecord(
         _ record: DailyHealthRecord,

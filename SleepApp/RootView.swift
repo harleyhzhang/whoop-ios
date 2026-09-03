@@ -591,7 +591,14 @@ struct RootView: View {
                             "Dimmed future start",
                             highlightedPoint.date.addingTimeInterval(1)
                         ),
-                        xEnd: .value("Dimmed future end", chartEndDate),
+                        xEnd: .value(
+                            "Dimmed future end",
+                            // Past the domain so the round line cap overhanging
+                            // the final point is covered too. Marks are clipped
+                            // to the plot area, so overshooting is safe and the
+                            // right edge no longer shows an undimmed nub.
+                            chartEndDate.addingTimeInterval(60 * 60 * 24 * 4)
+                        ),
                         yStart: .value("Dimmed future minimum", domain.lowerBound),
                         yEnd: .value("Dimmed future maximum", domain.upperBound)
                     )
@@ -605,6 +612,13 @@ struct RootView: View {
                 }
 
                 if !showsAverageLevels {
+                    PointMark(
+                        x: .value("Date", highlightedPoint.date),
+                        y: .value(title, highlightedPoint.value)
+                    )
+                    .symbolSize(104)
+                    .foregroundStyle(Color(uiColor: .secondarySystemGroupedBackground))
+
                     PointMark(
                         x: .value("Date", highlightedPoint.date),
                         y: .value(title, highlightedPoint.value)
@@ -957,50 +971,48 @@ private struct WhoopBatteryPercentIcon: View {
     }
 
     private var trackColor: Color {
-        Color.secondary.opacity(0.38)
+        Color.primary.opacity(0.45)
     }
 
+    private static let shellWidth: CGFloat = 29
+    private static let shellHeight: CGFloat = 16
+    private static let shellRadius: CGFloat = 4.6
+
     private func percentageLabel(color: Color) -> some View {
-        HStack(spacing: 0) {
+        HStack(spacing: -0.7) {
             ForEach(Array(percentageText.enumerated()), id: \.offset) { _, digit in
                 Text(String(digit))
             }
         }
         .font(.system(size: 13, weight: .bold, design: .rounded))
         .foregroundStyle(color)
-        .frame(width: 33, height: 18)
+        .frame(width: Self.shellWidth, height: Self.shellHeight)
     }
 
     var body: some View {
         HStack(spacing: 1.6) {
             ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 5.2, style: .continuous)
+                RoundedRectangle(cornerRadius: Self.shellRadius, style: .continuous)
                     .fill(trackColor)
 
                 Rectangle()
                     .fill(fillColor)
-                    .frame(width: 33 * fillFraction)
-
-                percentageLabel(color: .white)
+                    .frame(width: Self.shellWidth * fillFraction)
 
                 percentageLabel(color: .black)
-                    .mask(alignment: .leading) {
-                        Rectangle()
-                            .frame(width: 33 * fillFraction)
-                    }
             }
-            .frame(width: 33, height: 18)
-            .clipShape(RoundedRectangle(cornerRadius: 5.2, style: .continuous))
+            .frame(width: Self.shellWidth, height: Self.shellHeight)
+            .clipShape(RoundedRectangle(cornerRadius: Self.shellRadius, style: .continuous))
 
             UnevenRoundedRectangle(
                 topLeadingRadius: 0,
                 bottomLeadingRadius: 0,
-                bottomTrailingRadius: 3.75,
-                topTrailingRadius: 3.75,
+                bottomTrailingRadius: 3.3,
+                topTrailingRadius: 3.3,
                 style: .continuous
             )
                 .fill(trackColor)
-            .frame(width: 2.7, height: 7.5)
+            .frame(width: 2.4, height: 6.6)
         }
         .accessibilityHidden(true)
     }

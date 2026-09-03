@@ -48,7 +48,7 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
     }
 
     func sendMorningSummary(for record: DailyHealthRecord) {
-        guard record.source == "whoop5_local",
+        guard record.source.hasPrefix(WhoopStore.localSourcePrefix),
               Calendar.current.isDateInToday(record.date),
               let sleepID = record.sleepID,
               defaults.string(forKey: Key.lastMorningSleepID) != sleepID else { return }
