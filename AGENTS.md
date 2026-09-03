@@ -14,5 +14,7 @@
   layer may reuse compatible NOOP packages after license and integration review.
 - Verify UI changes by building for an iPhone simulator and, when requested,
   installing on Harley's paired development iPhone.
-- Do not add an app-side manual sync control. Memory reads are initiated from
-  the Mac side.
+- Do not add an app-side manual sync control for the hosted replica or for
+  memory. Memory reads are initiated from the Mac side. The dashboard's Process
+  control is not a sync button: it finalizes a night already collected on the
+  phone, waiving only the wake-timing gates and never the evidence gates.

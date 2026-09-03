@@ -11,6 +11,11 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     @Published private(set) var heartRate = "—"
     @Published private(set) var batteryLevel: Int?
     @Published private(set) var isSleeping = false
+    /// A detected main sleep that is not stored yet. The dashboard shows its
+    /// "Sleep detected" row exactly while this is non-nil.
+    @Published private(set) var pendingSleep: WhoopPendingSleep?
+    @Published private(set) var isProcessingSleep = false
+    @Published private(set) var sleepProcessFailure: String?
     @Published private(set) var lastConnectedAt: Date?
     @Published private(set) var lastDataReceivedAt: Date?
     @Published private(set) var rrSummary = "—"
@@ -47,6 +52,10 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     private var lastAcknowledgedHistoricalEndData: [UInt8]?
     private var lastSleepAnalysisAt: Date?
     private var lastFinalizedSleepID: String?
+    /// Suppresses the pending row between an optimistic tap and the refresh that
+    /// observes the stored night, so it cannot flicker back in mid-animation.
+    private var optimisticallyProcessedSleepID: String?
+    private var processFailureResetTask: Task<Void, Never>?
     private let store = WhoopStore.shared
     private let knownPeripheralKey = "WhoopHandshakeProbe.knownPeripheralIdentifier"
     private let confirmedBondKey = "WhoopHandshakeProbe.confirmedEncryptedBond"
@@ -135,13 +144,73 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 self.isSleeping = snapshot.isSleeping
+                self.applyPendingSleep(snapshot.pendingSleep)
                 if let record = snapshot.finalizedRecord,
                    record.sleepID != self.lastFinalizedSleepID {
                     self.lastFinalizedSleepID = record.sleepID
                     WhoopNotificationManager.shared.sendMorningSummary(for: record)
-                    NotificationCenter.default.post(name: .whoopDailyHealthUpdated, object: nil)
+                    NotificationCenter.default.post(name: .whoopDailyHealthUpdated, object: record)
                 }
             }
+        }
+    }
+
+    private func applyPendingSleep(_ pending: WhoopPendingSleep?) {
+        // A night that has just been processed optimistically stays hidden until
+        // the store stops reporting it, which is what actually settles the row.
+        if let optimisticallyProcessedSleepID {
+            guard pending?.sleepID != optimisticallyProcessedSleepID else {
+                pendingSleep = nil
+                return
+            }
+            self.optimisticallyProcessedSleepID = nil
+        }
+        pendingSleep = pending
+    }
+
+    /// Finishes the detected night immediately from data already on the phone.
+    /// The row is dismissed before any work starts, because local finalization is
+    /// a SQLite read plus one upsert; the strap is only consulted if that fails.
+    func processPendingSleep() {
+        guard !isProcessingSleep, let pending = pendingSleep else { return }
+        isProcessingSleep = true
+        sleepProcessFailure = nil
+        processFailureResetTask?.cancel()
+        optimisticallyProcessedSleepID = pending.sleepID
+        pendingSleep = nil
+        AppHaptics.softImpact()
+
+        store.finalizePendingSleep { [weak self] result in
+            Task { @MainActor in
+                guard let self else { return }
+                switch result {
+                case .success(let record):
+                    self.lastFinalizedSleepID = record.sleepID
+                    self.isProcessingSleep = false
+                    AppHaptics.success()
+                    NotificationCenter.default.post(name: .whoopDailyHealthUpdated, object: record)
+
+                case .failure(let error):
+                    // Nothing usable is banked yet, so pull history from the strap
+                    // and let the next analysis decide instead of guessing here.
+                    self.refreshHistoricalData()
+                    self.isProcessingSleep = false
+                    self.optimisticallyProcessedSleepID = nil
+                    self.pendingSleep = pending
+                    self.sleepProcessFailure = error.message
+                    AppHaptics.warning()
+                    self.scheduleProcessFailureReset()
+                }
+            }
+        }
+    }
+
+    private func scheduleProcessFailureReset() {
+        processFailureResetTask?.cancel()
+        processFailureResetTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(6))
+            guard !Task.isCancelled else { return }
+            self?.sleepProcessFailure = nil
         }
     }
 

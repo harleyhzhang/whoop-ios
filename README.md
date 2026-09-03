@@ -100,6 +100,19 @@ The app should eventually cover the complete personal loop:
   hysteresis to prevent threshold jitter, plus one completion alert when a
   subsequent reading reaches 100%. All three paths were exercised with
   debug-only simulator triggers that do not persist synthetic health data.
+- Sleep finalization separates detection from storage. The automatic path still
+  requires at least three hours asleep, 50% one-hertz session coverage, thirty
+  minutes of banked wake data, and thirty minutes since the last asleep sample.
+  A night that clears the first two evidence gates but not the two wake-timing
+  gates is now reported as pending instead of silently rendering dashes, and the
+  dashboard shows one borderless `Sleep detected` line with its duration and a
+  `Process` control. Pressing Process waives only the wake-timing gates, because
+  the press is itself the proof that the night is over; it never waives the
+  evidence gates. The line is dismissed before the work starts and the finished
+  night is applied to the dashboard directly from the completion, so the values
+  land without waiting for a full history reload. A failed process restores the
+  line with a short reason and pulls history from the strap before the next
+  attempt. A night the automatic path finalizes first never shows the line.
 - The 2026-09-01 real-history build was installed in place and visibly launched
   on the paired iPhone; the dashboard rendered the imported history correctly.
 - The generated seed remains in Harley's private data tree rather than the

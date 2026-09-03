@@ -69,6 +69,11 @@ struct RootView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     dateHeader
+                    sleepDetectedSection
+                        .animation(
+                            .smooth(duration: 0.45, extraBounce: 0.18),
+                            value: whoopCollector.pendingSleep
+                        )
                     summaryGrid
                     rangePicker
 
@@ -78,7 +83,7 @@ struct RootView: View {
                         symbol: "moon.stars.fill",
                         unit: "",
                         series: metricSeries(for: .sleep),
-                        color: Color(red: 0.39, green: 0.69, blue: 1.0),
+                        color: sleepAccent,
                         formatValue: { "\(Int($0.rounded()))%" }
                     )
 
@@ -129,8 +134,15 @@ struct RootView: View {
             history.reload()
             whoopCollector.refreshHistoricalData()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .whoopDailyHealthUpdated)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .whoopDailyHealthUpdated)) { notification in
             currentDate = .now
+            // Show the finished night on the next frame; the full reload behind it
+            // only has to agree, not to be waited for.
+            if let record = notification.object as? DailyHealthRecord {
+                withAnimation(.smooth(duration: 0.42)) {
+                    history.merge(record)
+                }
+            }
             history.reload()
         }
         .task {
@@ -188,6 +200,66 @@ struct RootView: View {
         }
         .padding(.top, 8)
     }
+
+    /// One borderless line between the date and the summary. It exists only
+    /// while the store reports a detected night that is not written yet, so a
+    /// night the automatic gates finish first never shows it at all.
+    @ViewBuilder
+    private var sleepDetectedSection: some View {
+        if let pending = whoopCollector.pendingSleep {
+            sleepDetectedRow(pending)
+                .transition(
+                    .asymmetric(
+                        insertion: .opacity.combined(with: .scale(scale: 0.96, anchor: .top))
+                            .combined(with: .move(edge: .top)),
+                        removal: .opacity.combined(with: .scale(scale: 0.94, anchor: .top))
+                    )
+                )
+        }
+    }
+
+    private func sleepDetectedRow(_ pending: WhoopPendingSleep) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: "moon.zzz.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(sleepAccent)
+
+            Text("Sleep detected")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.primary)
+
+            Text(whoopCollector.sleepProcessFailure ?? formatDuration(pending.durationMinutes / 60))
+                .font(.system(size: 15, weight: .regular))
+                .foregroundStyle(whoopCollector.sleepProcessFailure == nil ? .secondary : Color.orange)
+                .contentTransition(.opacity)
+
+            Spacer(minLength: 8)
+
+            Button {
+                // processPendingSleep clears the row synchronously on the main
+                // actor, so wrapping the call is what puts that removal inside
+                // the animated transaction.
+                withAnimation(.smooth(duration: 0.45, extraBounce: 0.18)) {
+                    whoopCollector.processPendingSleep()
+                }
+            } label: {
+                Text("Process")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(sleepAccent)
+                    .padding(.horizontal, 13)
+                    .frame(height: 30)
+                    .background(sleepAccent.opacity(0.16), in: Capsule(style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(whoopCollector.isProcessingSleep)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "Sleep detected, \(formatDuration(pending.durationMinutes / 60)). Double tap Process to finish it."
+        )
+    }
+
+    private var sleepAccent: Color { Color(red: 0.39, green: 0.69, blue: 1.0) }
 
     private var rangePicker: some View {
         HStack(spacing: 12) {
@@ -261,7 +333,7 @@ struct RootView: View {
                     title: "Sleep",
                     symbol: "moon.stars.fill",
                     value: summarySleepScore,
-                    iconTint: Color(red: 0.39, green: 0.69, blue: 1.0)
+                    iconTint: sleepAccent
                 )
                 activityMetric(
                     title: "Duration",
@@ -296,6 +368,7 @@ struct RootView: View {
             }
         }
         .padding(.vertical, 2)
+        .animation(.smooth(duration: 0.42), value: currentSleepRecord)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
             "Sleep \(summarySleepScore), duration \(summarySleepDuration), heart rate variability \(summaryHRV) milliseconds, resting heart rate \(summaryRHR) beats per minute, live heart rate \(liveHeartRateValue) beats per minute"
@@ -324,6 +397,7 @@ struct RootView: View {
                 Text(value)
                     .font(.system(size: 30, weight: .semibold, design: .rounded))
                     .monospacedDigit()
+                    .contentTransition(.numericText())
                     .foregroundStyle(.primary)
                 if !unit.isEmpty {
                     Text(unit)

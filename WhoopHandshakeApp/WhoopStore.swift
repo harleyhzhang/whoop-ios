@@ -66,6 +66,37 @@ struct WhoopSleepSnapshot: Sendable {
     let isSleeping: Bool
     let sampleAt: Date?
     let finalizedRecord: DailyHealthRecord?
+    /// A main sleep the strap already marked asleep that cleared the evidence
+    /// gates but is not stored yet. Non-nil is exactly the condition the
+    /// dashboard reports as "Sleep detected".
+    let pendingSleep: WhoopPendingSleep?
+}
+
+struct WhoopPendingSleep: Sendable, Equatable {
+    let sleepID: String
+    let startedAt: Date
+    let endedAt: Date
+    let durationMinutes: Double
+}
+
+enum WhoopSleepProcessError: Error, Sendable {
+    case storeUnavailable
+    case noRecentData
+    case stillAsleep
+    case noSleepDetected
+    case insufficientEvidence
+    case writeFailed
+
+    var message: String {
+        switch self {
+        case .storeUnavailable: return "Local store unavailable"
+        case .noRecentData: return "No recent strap data"
+        case .stillAsleep: return "Still asleep"
+        case .noSleepDetected: return "No sleep detected"
+        case .insufficientEvidence: return "Not enough data to score"
+        case .writeFailed: return "Could not save"
+        }
+    }
 }
 
 struct WhoopLatestHeartRateSample: Sendable {
@@ -499,13 +530,59 @@ final class WhoopStore: @unchecked Sendable {
         let sleepState: Int
     }
 
-    /// Finalizes only a main sleep that the strap itself marked asleep, followed by
-    /// at least 30 minutes of banked wake data. In-progress and incomplete nights
-    /// remain nil so the dashboard can keep showing dashes.
-    private func analyzeLatestSleep(now: Date = .now) -> WhoopSleepSnapshot {
-        guard let database else {
-            return WhoopSleepSnapshot(isSleeping: false, sampleAt: nil, finalizedRecord: nil)
+    private struct SleepCandidate {
+        let sessionRows: [HistoricalRow]
+        let firstSleep: HistoricalRow
+        let lastSleep: HistoricalRow
+        let latest: HistoricalRow
+        let asleepSeconds: Int
+        let sessionCoverage: Double
+        let wakeCoverage: Int
+
+        var sleepID: String {
+            "local-\(Int(firstSleep.timestamp))-\(Int(lastSleep.timestamp))"
         }
+
+        var startedAt: Date { Date(timeIntervalSince1970: firstSleep.timestamp) }
+        var endedAt: Date { Date(timeIntervalSince1970: lastSleep.timestamp) }
+        var durationMinutes: Double { Double(asleepSeconds) / 60.0 }
+        var dateKey: String { WhoopStore.dateKeyFormatter.string(from: endedAt) }
+
+        /// Evidence gates. A manual process never waives these: they decide
+        /// whether the night can be honestly scored at all.
+        var meetsEvidenceGates: Bool {
+            asleepSeconds >= 3 * 60 * 60 && sessionCoverage >= 0.50
+        }
+
+        /// Timing gates. These only ask whether Harley has actually woken up
+        /// yet. Pressing Process answers that question directly, so the manual
+        /// path waives them while keeping the evidence gates intact.
+        var meetsWakeGates: Bool {
+            wakeCoverage >= 30 * 60 && latest.timestamp - lastSleep.timestamp >= 30 * 60
+        }
+
+        var pendingSleep: WhoopPendingSleep {
+            WhoopPendingSleep(
+                sleepID: sleepID,
+                startedAt: startedAt,
+                endedAt: endedAt,
+                durationMinutes: durationMinutes
+            )
+        }
+    }
+
+    private enum SleepAnalysis {
+        case noData
+        case sleeping(Date)
+        case awake(Date, SleepCandidate?)
+    }
+
+    /// Detects the latest main sleep without storing anything. Keeping detection
+    /// separate from finalization lets the dashboard surface a night the
+    /// automatic timing gates have not banked yet, and lets a manual process
+    /// finish that exact night rather than re-deriving a different session.
+    private func analyze(now: Date) -> SleepAnalysis {
+        guard let database else { return .noData }
         let cutoff = now.addingTimeInterval(-48 * 60 * 60).timeIntervalSince1970
         let sql = """
             SELECT sample_at, heart_rate, rr_intervals_json, sleep_state
@@ -516,7 +593,7 @@ final class WhoopStore: @unchecked Sendable {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
               let statement else {
-            return WhoopSleepSnapshot(isSleeping: false, sampleAt: nil, finalizedRecord: nil)
+            return .noData
         }
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_double(statement, 1, cutoff)
@@ -536,9 +613,7 @@ final class WhoopStore: @unchecked Sendable {
             ))
         }
 
-        guard let latest = rows.last else {
-            return WhoopSleepSnapshot(isSleeping: false, sampleAt: nil, finalizedRecord: nil)
-        }
+        guard let latest = rows.last else { return .noData }
         let latestDate = Date(timeIntervalSince1970: latest.timestamp)
         let sampleIsCurrent = abs(now.timeIntervalSince(latestDate)) <= 30 * 60
         let lastAsleepTimestamp = rows.last { $0.sleepState == 2 }?.timestamp
@@ -548,14 +623,10 @@ final class WhoopStore: @unchecked Sendable {
             latest.sleepState == 2
                 || lastAsleepTimestamp.map { latest.timestamp - $0 < 30 * 60 } == true
         )
-        guard !isSleeping else {
-            return WhoopSleepSnapshot(isSleeping: true, sampleAt: latestDate, finalizedRecord: nil)
-        }
+        guard !isSleeping else { return .sleeping(latestDate) }
 
         let asleepRows = rows.filter { $0.sleepState == 2 }
-        guard !asleepRows.isEmpty else {
-            return WhoopSleepSnapshot(isSleeping: false, sampleAt: latestDate, finalizedRecord: nil)
-        }
+        guard !asleepRows.isEmpty else { return .awake(latestDate, nil) }
 
         // The strap can briefly leave state 2 during an awakening. Treat asleep
         // points less than 45 minutes apart as one night, then choose the latest.
@@ -571,49 +642,155 @@ final class WhoopStore: @unchecked Sendable {
         guard let session = groups.last,
               let firstSleep = session.first,
               let lastSleep = session.last else {
-            return WhoopSleepSnapshot(isSleeping: false, sampleAt: latestDate, finalizedRecord: nil)
+            return .awake(latestDate, nil)
         }
 
         let wakeRows = rows.filter {
             $0.timestamp > lastSleep.timestamp && $0.sleepState != 2
         }
-        let wakeCoverage = Set(wakeRows.map { Int($0.timestamp) }).count
         let sessionSpan = max(1, Int(lastSleep.timestamp - firstSleep.timestamp) + 1)
         let sessionRows = rows.filter {
             $0.timestamp >= firstSleep.timestamp && $0.timestamp <= lastSleep.timestamp
         }
-        let sessionCoverage = Double(Set(sessionRows.map { Int($0.timestamp) }).count) / Double(sessionSpan)
-        let asleepSeconds = Set(session.map { Int($0.timestamp) }).count
+        let candidate = SleepCandidate(
+            sessionRows: sessionRows,
+            firstSleep: firstSleep,
+            lastSleep: lastSleep,
+            latest: latest,
+            asleepSeconds: Set(session.map { Int($0.timestamp) }).count,
+            sessionCoverage: Double(Set(sessionRows.map { Int($0.timestamp) }).count) / Double(sessionSpan),
+            wakeCoverage: Set(wakeRows.map { Int($0.timestamp) }).count
+        )
+        return .awake(latestDate, candidate)
+    }
 
-        // Conservative gates: main sleep only, at least 30 minutes of confirmed
-        // wake afterwards, and enough 1 Hz evidence that gaps cannot dominate.
-        guard asleepSeconds >= 3 * 60 * 60,
-              wakeCoverage >= 30 * 60,
-              latest.timestamp - lastSleep.timestamp >= 30 * 60,
-              sessionCoverage >= 0.50 else {
-            return WhoopSleepSnapshot(isSleeping: false, sampleAt: latestDate, finalizedRecord: nil)
+    /// Automatic path. Stores only a main sleep the strap itself marked asleep,
+    /// followed by at least 30 minutes of banked wake data. A night that clears
+    /// the evidence gates but not the wake gates is reported as pending so the
+    /// dashboard can offer to finish it instead of silently showing dashes.
+    private func analyzeLatestSleep(now: Date = .now) -> WhoopSleepSnapshot {
+        switch analyze(now: now) {
+        case .noData:
+            return WhoopSleepSnapshot(
+                isSleeping: false,
+                sampleAt: nil,
+                finalizedRecord: nil,
+                pendingSleep: nil
+            )
+
+        case .sleeping(let sampleAt):
+            return WhoopSleepSnapshot(
+                isSleeping: true,
+                sampleAt: sampleAt,
+                finalizedRecord: nil,
+                pendingSleep: nil
+            )
+
+        case .awake(let sampleAt, let candidate):
+            guard let database,
+                  let candidate,
+                  candidate.meetsEvidenceGates else {
+                return WhoopSleepSnapshot(
+                    isSleeping: false,
+                    sampleAt: sampleAt,
+                    finalizedRecord: nil,
+                    pendingSleep: nil
+                )
+            }
+
+            guard candidate.meetsWakeGates else {
+                let alreadyStored = storedSleepID(forDateKey: candidate.dateKey, database: database) != nil
+                return WhoopSleepSnapshot(
+                    isSleeping: false,
+                    sampleAt: sampleAt,
+                    finalizedRecord: nil,
+                    pendingSleep: alreadyStored ? nil : candidate.pendingSleep
+                )
+            }
+
+            let record = derivedRecord(for: candidate, now: now, database: database)
+            _ = upsertLocalDailyHealthRecord(record, database: database)
+            return WhoopSleepSnapshot(
+                isSleeping: false,
+                sampleAt: sampleAt,
+                finalizedRecord: record,
+                pendingSleep: nil
+            )
         }
+    }
 
-        let durationMinutes = Double(asleepSeconds) / 60.0
-        let restingHR = restingHeartRate(rows: sessionRows)
-        let hrv = nightlyRMSSD(rows: sessionRows.filter { $0.sleepState == 2 })
+    /// Manual path behind the dashboard's Process control. It waives only the
+    /// wake-timing gates, because pressing the button is itself the proof that
+    /// the night is over.
+    func finalizePendingSleep(
+        completion: @escaping @Sendable (Result<DailyHealthRecord, WhoopSleepProcessError>) -> Void
+    ) {
+        queue.async { [self] in
+            let now = Date()
+            guard let database else {
+                completion(.failure(.storeUnavailable))
+                return
+            }
+
+            switch analyze(now: now) {
+            case .noData:
+                completion(.failure(.noRecentData))
+
+            case .sleeping:
+                completion(.failure(.stillAsleep))
+
+            case .awake(_, let candidate):
+                guard let candidate else {
+                    completion(.failure(.noSleepDetected))
+                    return
+                }
+                guard candidate.meetsEvidenceGates else {
+                    completion(.failure(.insufficientEvidence))
+                    return
+                }
+                let record = derivedRecord(for: candidate, now: now, database: database)
+                guard upsertLocalDailyHealthRecord(record, database: database) else {
+                    completion(.failure(.writeFailed))
+                    return
+                }
+                completion(.success(record))
+            }
+        }
+    }
+
+    private func derivedRecord(
+        for candidate: SleepCandidate,
+        now: Date,
+        database: OpaquePointer
+    ) -> DailyHealthRecord {
+        let durationMinutes = candidate.durationMinutes
+        let restingHR = restingHeartRate(rows: candidate.sessionRows)
+        let hrv = nightlyRMSSD(rows: candidate.sessionRows.filter { $0.sleepState == 2 })
         let needMinutes = personalizedSleepNeedMinutes(database: database)
         let sleepScore = min(100, durationMinutes / max(needMinutes, 1) * 100)
-        let wakeDate = Date(timeIntervalSince1970: lastSleep.timestamp)
-        let record = DailyHealthRecord(
-            dateKey: Self.dateKeyFormatter.string(from: wakeDate),
+        return DailyHealthRecord(
+            dateKey: candidate.dateKey,
             sleepScore: sleepScore,
             sleepDurationMinutes: durationMinutes,
             hrvRMSSDMilliseconds: hrv,
             restingHeartRateBPM: restingHR,
-            sleepID: "local-\(Int(firstSleep.timestamp))-\(Int(lastSleep.timestamp))",
+            sleepID: candidate.sleepID,
             cycleID: nil,
             source: "whoop5_local",
             sourceArchive: nil,
             sourceUpdatedAt: ISO8601DateFormatter().string(from: now)
         )
-        _ = upsertLocalDailyHealthRecord(record, database: database)
-        return WhoopSleepSnapshot(isSleeping: false, sampleAt: latestDate, finalizedRecord: record)
+    }
+
+    private func storedSleepID(forDateKey dateKey: String, database: OpaquePointer) -> String? {
+        let sql = "SELECT sleep_id FROM daily_health_metric WHERE date_key = ? LIMIT 1"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return nil }
+        defer { sqlite3_finalize(statement) }
+        bind(dateKey, to: 1, in: statement)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        return textColumn(statement, 0)
     }
 
     private func restingHeartRate(rows: [HistoricalRow]) -> Double? {
@@ -753,7 +930,7 @@ final class WhoopStore: @unchecked Sendable {
         return sqlite3_step(statement) == SQLITE_DONE
     }
 
-    private static let dateKeyFormatter: DateFormatter = {
+    static let dateKeyFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.timeZone = .current

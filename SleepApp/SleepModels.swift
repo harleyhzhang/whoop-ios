@@ -53,6 +53,17 @@ final class HealthHistoryModel: ObservableObject {
         return "WHOOP API history · \(records.count) nights · through \(latestRecord.date.formatted(.dateTime.month(.abbreviated).day()))"
     }
 
+    /// Applies one freshly derived night without waiting for the full reload, so
+    /// the dashboard can update on the frame after a manual process.
+    func merge(_ record: DailyHealthRecord) {
+        if let index = records.firstIndex(where: { $0.dateKey == record.dateKey }) {
+            records[index] = record
+        } else {
+            records.append(record)
+            records.sort { $0.dateKey < $1.dateKey }
+        }
+    }
+
     func reload() {
         isLoading = true
         store.loadDailyHealthRecords { [weak self] result in
