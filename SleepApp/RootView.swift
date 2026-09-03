@@ -10,6 +10,7 @@ struct RootView: View {
     @State private var currentDate = Date()
     @StateObject private var whoopCollector = WhoopHandshakeProbe()
     @StateObject private var history = HealthHistoryModel()
+    @Namespace private var rangeSelectionNamespace
 
     private var referenceDate: Date { currentDate }
 
@@ -279,7 +280,9 @@ struct RootView: View {
         HStack(spacing: 2) {
             ForEach(HealthRange.allCases) { range in
                 Button {
-                    selectedRange = range
+                    withAnimation(.smooth(duration: 0.34, extraBounce: 0.14)) {
+                        selectedRange = range
+                    }
                 } label: {
                     Text(range.rawValue)
                         .font(.callout.weight(.medium))
@@ -288,7 +291,15 @@ struct RootView: View {
                         .frame(height: 32)
                         .background {
                             if selectedRange == range {
+                                // One highlight shared across every option rather
+                                // than a background inserted per button, so the
+                                // glass travels to the new option instead of
+                                // vanishing from one and appearing on the next.
                                 rangeSelectionHighlight
+                                    .matchedGeometryEffect(
+                                        id: "rangeSelectionHighlight",
+                                        in: rangeSelectionNamespace
+                                    )
                             }
                         }
                 }
@@ -304,8 +315,12 @@ struct RootView: View {
     @ViewBuilder
     private var rangeSelector: some View {
         if #available(iOS 26.0, *) {
-            rangeSelectorButtons
-                .glassEffect(.regular, in: Capsule(style: .continuous))
+            // The container is what lets the travelling highlight blend with the
+            // track's own glass while it moves, rather than sliding over it.
+            GlassEffectContainer(spacing: 0) {
+                rangeSelectorButtons
+                    .glassEffect(.regular, in: Capsule(style: .continuous))
+            }
         } else {
             rangeSelectorButtons
                 .background(.ultraThinMaterial, in: Capsule(style: .continuous))
