@@ -100,6 +100,36 @@ The app should eventually cover the complete personal loop:
   hysteresis to prevent threshold jitter, plus one completion alert when a
   subsequent reading reaches 100%. All three paths were exercised with
   debug-only simulator triggers that do not persist synthetic health data.
+- Every sleep derivation is expressed in elapsed time against the strap's own
+  observed cadence. The WHOOP 5 historical record is not one hertz: it stores
+  roughly one distinct sample every six seconds, and a given night can be
+  sparser still. Three derivations had been written as if it were one hertz and
+  all three were unreachable or wrong in practice. Duration counted distinct
+  seconds carrying a sample, so an eight-hour night measured as minutes; the
+  evidence gates required 10,800 such seconds and 50% of them, which no night
+  could ever reach; and resting heart rate required 120 samples in a five-minute
+  window, which no window ever held, so it was always nil. Duration now
+  integrates elapsed time across consecutive asleep samples, matching WHOOP's
+  total-sleep-time definition, with any gap beyond the outage cap contributing
+  one sample rather than the whole gap. Coverage now measures the fraction of
+  the session the strap gave evidence for, counting only gaps beyond that same
+  cap; sampling density is deliberately excluded, because a night recorded every
+  sixteen seconds is still fully observed. Resting heart rate scales its window
+  requirement to what the observed cadence can deliver.
+- Every finished night in the window is banked, not only the most recent. The
+  strap trims history once a chunk is acknowledged, so a night that ended while
+  the app was never opened would otherwise be lost permanently. A locally
+  derived row missing a metric is re-derived so a fix to one derivation repairs
+  the rows it already wrote; an archived WHOOP row is authoritative and is never
+  overwritten.
+- Calibrated against the 306 archived WHOOP nights rather than against synthetic
+  fixtures. Two real nights derived locally on 2026-09-03 gave 7h41m and 8h01m
+  with RHR 51 and 50 and HRV 74 and 66. WHOOP's own last thirty archived nights
+  run a median HRV of 57.5 across 44-76 and a median RHR of 56 across 53-62, so
+  local HRV sits slightly high and local RHR slightly low while both stay near
+  WHOOP's distribution. The consistent direction suggests the local windows
+  favour the calmest part of the night more than WHOOP's do; this is a known
+  methodological difference, not a demonstrated defect.
 - Sleep finalization separates detection from storage. The automatic path still
   requires at least three hours asleep, 50% one-hertz session coverage, thirty
   minutes of banked wake data, and thirty minutes since the last asleep sample.

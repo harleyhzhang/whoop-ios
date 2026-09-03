@@ -92,37 +92,44 @@ struct WhoopPendingSleep: Sendable, Equatable {
     let durationMinutes: Double
 }
 
-/// A factual account of why the latest night did or did not become a record.
-/// Written beside the database so a night that produced nothing can still be
-/// explained after the fact instead of only showing dashes.
+/// A factual account of what the strap actually banked and how each gate judged
+/// it, so a night that produced no record can be explained instead of only
+/// showing dashes.
 struct WhoopSleepDiagnostics: Codable, Sendable {
     let generatedAt: String
     let windowHours: Int
     let sampleCount: Int
-    let distinctSeconds: Int
     let firstSampleAt: String?
     let lastSampleAt: String?
     let secondsSinceLastSample: Int?
-    let medianSampleIntervalSeconds: Double?
+    let observedCadenceSeconds: Double?
     let largestGapSeconds: Int?
-    let asleepSampleCount: Int
     let sleepStateHistogram: [String: Int]
-    let sessionStartedAt: String?
-    let sessionEndedAt: String?
-    let sessionSpanSeconds: Int?
-    let asleepDistinctSeconds: Int?
-    let sessionCoverage: Double?
-    let wakeCoverageSeconds: Int?
-    let secondsSinceLastAsleep: Int?
-    let passesDurationGate: Bool?
-    let passesCoverageGate: Bool?
-    let passesWakeCoverageGate: Bool?
-    let passesWakeElapsedGate: Bool?
-    let storedRecordForSessionDate: String?
     let rawType47PacketTotal: Int
     let historicalSampleTotal: Int
     let recentType47Outcomes: [String: Int]
+    let sessions: [WhoopSleepSessionDiagnostics]
     let outcome: String
+}
+
+struct WhoopSleepSessionDiagnostics: Codable, Sendable {
+    let startedAt: String
+    let endedAt: String
+    let spanMinutes: Double
+    let durationMinutes: Double
+    let sampleCount: Int
+    let coverage: Double
+    let sampleDensity: Double
+    let bankedWakeMinutes: Double
+    let minutesSinceLastAsleep: Double
+    let passesDurationGate: Bool
+    let passesCoverageGate: Bool
+    let passesWakeCoverageGate: Bool
+    let passesWakeElapsedGate: Bool
+    let dateKey: String
+    let storedSleepID: String?
+    let storedSummary: String?
+    let verdict: String
 }
 
 enum WhoopSleepProcessError: Error, Sendable {
@@ -575,7 +582,7 @@ final class WhoopStore: @unchecked Sendable {
         execute(succeeded ? "COMMIT" : "ROLLBACK")
     }
 
-    private struct HistoricalRow {
+    struct HistoricalRow {
         let timestamp: TimeInterval
         let heartRate: Int
         let rrIntervals: [Double]
@@ -584,12 +591,19 @@ final class WhoopStore: @unchecked Sendable {
 
     private struct SleepCandidate {
         let sessionRows: [HistoricalRow]
+        let asleepRows: [HistoricalRow]
         let firstSleep: HistoricalRow
         let lastSleep: HistoricalRow
         let latest: HistoricalRow
-        let asleepSeconds: Int
+        /// Observed spacing of the strap's own historical record.
+        let cadenceSeconds: Double
+        /// Total sleep time in WHOOP's sense: elapsed time the strap marked
+        /// asleep, excluding awakenings, not a count of seconds carrying a sample.
+        let asleepSeconds: Double
+        /// Observed samples over samples expected at the observed cadence.
         let sessionCoverage: Double
-        let wakeCoverage: Int
+        /// Elapsed wake time banked after the session ended.
+        let wakeSeconds: Double
 
         var sleepID: String {
             "local-\(Int(firstSleep.timestamp))-\(Int(lastSleep.timestamp))"
@@ -597,8 +611,9 @@ final class WhoopStore: @unchecked Sendable {
 
         var startedAt: Date { Date(timeIntervalSince1970: firstSleep.timestamp) }
         var endedAt: Date { Date(timeIntervalSince1970: lastSleep.timestamp) }
-        var durationMinutes: Double { Double(asleepSeconds) / 60.0 }
+        var durationMinutes: Double { asleepSeconds / 60.0 }
         var dateKey: String { WhoopStore.dateKeyFormatter.string(from: endedAt) }
+        var secondsSinceLastAsleep: Double { latest.timestamp - lastSleep.timestamp }
 
         /// Evidence gates. A manual process never waives these: they decide
         /// whether the night can be honestly scored at all.
@@ -610,7 +625,7 @@ final class WhoopStore: @unchecked Sendable {
         /// yet. Pressing Process answers that question directly, so the manual
         /// path waives them while keeping the evidence gates intact.
         var meetsWakeGates: Bool {
-            wakeCoverage >= 30 * 60 && latest.timestamp - lastSleep.timestamp >= 30 * 60
+            wakeSeconds >= 30 * 60 && secondsSinceLastAsleep >= 30 * 60
         }
 
         var pendingSleep: WhoopPendingSleep {
@@ -623,18 +638,74 @@ final class WhoopStore: @unchecked Sendable {
         }
     }
 
+    /// The strap's historical record is not one hertz. It stores roughly one
+    /// distinct sample every six seconds, so every duration and coverage figure
+    /// is derived from the observed cadence rather than from counting seconds
+    /// that happen to carry a sample. Counting seconds made a full night look
+    /// like minutes and put both evidence gates permanently out of reach.
+    static func cadenceSeconds(of rows: [HistoricalRow]) -> Double {
+        guard rows.count > 1 else { return 6 }
+        var gaps: [Double] = []
+        for index in 1..<rows.count {
+            let delta = rows[index].timestamp - rows[index - 1].timestamp
+            if delta > 0, delta <= 300 { gaps.append(delta) }
+        }
+        guard !gaps.isEmpty else { return 6 }
+        gaps.sort()
+        return min(max(gaps[gaps.count / 2], 1), 60)
+    }
+
+    /// Fraction of a session the strap actually gave evidence for. Only gaps
+    /// longer than the outage cap count against it, which is the same cap the
+    /// duration integration refuses to count as sleep, so the two agree.
+    /// Sampling density is deliberately excluded: a night recorded every sixteen
+    /// seconds instead of every six is still a fully observed night, and gating
+    /// on density rejected good nights for a property that does not threaten
+    /// the duration estimate.
+    static func observedFraction(of rows: [HistoricalRow], cadence: Double) -> Double {
+        guard rows.count > 1, let first = rows.first, let last = rows.last else { return 0 }
+        let span = max(1.0, last.timestamp - first.timestamp)
+        let cap = max(cadence * 4, 120.0)
+        var unobserved = 0.0
+        for index in 1..<rows.count {
+            let delta = rows[index].timestamp - rows[index - 1].timestamp
+            if delta > cap { unobserved += delta - cadence }
+        }
+        return max(0.0, min(1.0, (span - unobserved) / span))
+    }
+
+    /// Elapsed time represented by a run of samples. A gap longer than the
+    /// outage cap contributes one sample of time rather than the whole gap, so
+    /// neither a dropout nor a long awakening is ever counted as sleep.
+    static func elapsedSeconds(across rows: [HistoricalRow], cadence: Double) -> Double {
+        guard !rows.isEmpty else { return 0 }
+        guard rows.count > 1 else { return cadence }
+        let cap = max(cadence * 4, 120.0)
+        var total = cadence
+        for index in 1..<rows.count {
+            let delta = rows[index].timestamp - rows[index - 1].timestamp
+            total += delta <= cap ? delta : cadence
+        }
+        return total
+    }
+
     private enum SleepAnalysis {
         case noData
         case sleeping(Date)
-        case awake(Date, SleepCandidate?)
+        /// Every main sleep in the window, oldest first. All of them are
+        /// considered, not only the most recent: a night that ends while the app
+        /// is never opened would otherwise be skipped permanently, because the
+        /// strap trims its history once a chunk is acknowledged.
+        case awake(Date, [SleepCandidate])
     }
 
     /// Detects the latest main sleep without storing anything. Keeping detection
     /// separate from finalization lets the dashboard surface a night the
     /// automatic timing gates have not banked yet, and lets a manual process
     /// finish that exact night rather than re-deriving a different session.
-    private func analyze(now: Date) -> SleepAnalysis {
-        guard let database else { return .noData }
+    /// The 48-hour window every sleep decision is made from.
+    private func recentHistoricalRows(now: Date) -> [HistoricalRow] {
+        guard let database else { return [] }
         let cutoff = now.addingTimeInterval(-48 * 60 * 60).timeIntervalSince1970
         let sql = """
             SELECT sample_at, heart_rate, rr_intervals_json, sleep_state
@@ -644,27 +715,26 @@ final class WhoopStore: @unchecked Sendable {
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else {
-            return .noData
-        }
+              let statement else { return [] }
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_double(statement, 1, cutoff)
 
         var rows: [HistoricalRow] = []
         while sqlite3_step(statement) == SQLITE_ROW {
-            let timestamp = sqlite3_column_double(statement, 0)
-            let heartRate = Int(sqlite3_column_int(statement, 1))
             let rrText = textColumn(statement, 2) ?? "[]"
-            let rr = (try? JSONDecoder().decode([Double].self, from: Data(rrText.utf8))) ?? []
-            let sleepState = Int(sqlite3_column_int(statement, 3))
             rows.append(HistoricalRow(
-                timestamp: timestamp,
-                heartRate: heartRate,
-                rrIntervals: rr,
-                sleepState: sleepState
+                timestamp: sqlite3_column_double(statement, 0),
+                heartRate: Int(sqlite3_column_int(statement, 1)),
+                rrIntervals: (try? JSONDecoder().decode([Double].self, from: Data(rrText.utf8))) ?? [],
+                sleepState: Int(sqlite3_column_int(statement, 3))
             ))
         }
+        return rows
+    }
 
+    private func analyze(now: Date) -> SleepAnalysis {
+        guard database != nil else { return .noData }
+        let rows = recentHistoricalRows(now: now)
         guard let latest = rows.last else { return .noData }
         let latestDate = Date(timeIntervalSince1970: latest.timestamp)
         let sampleIsCurrent = abs(now.timeIntervalSince(latestDate)) <= 30 * 60
@@ -678,7 +748,7 @@ final class WhoopStore: @unchecked Sendable {
         guard !isSleeping else { return .sleeping(latestDate) }
 
         let asleepRows = rows.filter { $0.sleepState == 2 }
-        guard !asleepRows.isEmpty else { return .awake(latestDate, nil) }
+        guard !asleepRows.isEmpty else { return .awake(latestDate, []) }
 
         // The strap can briefly leave state 2 during an awakening. Treat asleep
         // points less than 45 minutes apart as one night, then choose the latest.
@@ -691,29 +761,29 @@ final class WhoopStore: @unchecked Sendable {
                 groups.append([row])
             }
         }
-        guard let session = groups.last,
-              let firstSleep = session.first,
-              let lastSleep = session.last else {
-            return .awake(latestDate, nil)
+        let cadence = Self.cadenceSeconds(of: rows)
+        var candidates: [SleepCandidate] = []
+        for session in groups {
+            guard let firstSleep = session.first, let lastSleep = session.last else { continue }
+            let sessionRows = rows.filter {
+                $0.timestamp >= firstSleep.timestamp && $0.timestamp <= lastSleep.timestamp
+            }
+            let wakeRows = rows.filter {
+                $0.timestamp > lastSleep.timestamp && $0.sleepState != 2
+            }
+            candidates.append(SleepCandidate(
+                sessionRows: sessionRows,
+                asleepRows: session,
+                firstSleep: firstSleep,
+                lastSleep: lastSleep,
+                latest: latest,
+                cadenceSeconds: cadence,
+                asleepSeconds: Self.elapsedSeconds(across: session, cadence: cadence),
+                sessionCoverage: Self.observedFraction(of: sessionRows, cadence: cadence),
+                wakeSeconds: Self.elapsedSeconds(across: wakeRows, cadence: cadence)
+            ))
         }
-
-        let wakeRows = rows.filter {
-            $0.timestamp > lastSleep.timestamp && $0.sleepState != 2
-        }
-        let sessionSpan = max(1, Int(lastSleep.timestamp - firstSleep.timestamp) + 1)
-        let sessionRows = rows.filter {
-            $0.timestamp >= firstSleep.timestamp && $0.timestamp <= lastSleep.timestamp
-        }
-        let candidate = SleepCandidate(
-            sessionRows: sessionRows,
-            firstSleep: firstSleep,
-            lastSleep: lastSleep,
-            latest: latest,
-            asleepSeconds: Set(session.map { Int($0.timestamp) }).count,
-            sessionCoverage: Double(Set(sessionRows.map { Int($0.timestamp) }).count) / Double(sessionSpan),
-            wakeCoverage: Set(wakeRows.map { Int($0.timestamp) }).count
-        )
-        return .awake(latestDate, candidate)
+        return .awake(latestDate, candidates)
     }
 
     /// Automatic path. Stores only a main sleep the strap itself marked asleep,
@@ -738,10 +808,8 @@ final class WhoopStore: @unchecked Sendable {
                 pendingSleep: nil
             )
 
-        case .awake(let sampleAt, let candidate):
-            guard let database,
-                  let candidate,
-                  candidate.meetsEvidenceGates else {
+        case .awake(let sampleAt, let candidates):
+            guard let database, let latest = candidates.last else {
                 return WhoopSleepSnapshot(
                     isSleeping: false,
                     sampleAt: sampleAt,
@@ -750,23 +818,31 @@ final class WhoopStore: @unchecked Sendable {
                 )
             }
 
-            guard candidate.meetsWakeGates else {
-                let alreadyStored = storedSleepID(forDateKey: candidate.dateKey, database: database) != nil
-                return WhoopSleepSnapshot(
-                    isSleeping: false,
-                    sampleAt: sampleAt,
-                    finalizedRecord: nil,
-                    pendingSleep: alreadyStored ? nil : candidate.pendingSleep
-                )
+            // Bank every finished night still missing from the store, not just
+            // the newest one, so a night nobody opened the app for is not lost.
+            var newest: DailyHealthRecord?
+            for candidate in candidates where candidate.meetsEvidenceGates && candidate.meetsWakeGates {
+                guard shouldDerive(dateKey: candidate.dateKey, database: database) else { continue }
+                let record = derivedRecord(for: candidate, now: now, database: database)
+                if upsertLocalDailyHealthRecord(record, database: database) {
+                    newest = record
+                }
             }
 
-            let record = derivedRecord(for: candidate, now: now, database: database)
-            _ = upsertLocalDailyHealthRecord(record, database: database)
+            let pending: WhoopPendingSleep?
+            if latest.meetsEvidenceGates,
+               !latest.meetsWakeGates,
+               shouldDerive(dateKey: latest.dateKey, database: database) {
+                pending = latest.pendingSleep
+            } else {
+                pending = nil
+            }
+
             return WhoopSleepSnapshot(
                 isSleeping: false,
                 sampleAt: sampleAt,
-                finalizedRecord: record,
-                pendingSleep: nil
+                finalizedRecord: newest,
+                pendingSleep: pending
             )
         }
     }
@@ -791,8 +867,8 @@ final class WhoopStore: @unchecked Sendable {
             case .sleeping:
                 completion(.failure(.stillAsleep))
 
-            case .awake(_, let candidate):
-                guard let candidate else {
+            case .awake(_, let candidates):
+                guard let candidate = candidates.last else {
                     completion(.failure(.noSleepDetected))
                     return
                 }
@@ -810,20 +886,16 @@ final class WhoopStore: @unchecked Sendable {
         }
     }
 
-    /// Recomputes the same window the analyzer uses and reports every input and
-    /// gate result, including the cases where the analyzer bails early.
     func sleepDiagnostics(
         now: Date = .now,
         completion: @escaping @Sendable (WhoopSleepDiagnostics) -> Void
     ) {
-        queue.async { [self] in
-            completion(buildSleepDiagnostics(now: now))
-        }
+        queue.async { [self] in completion(buildSleepDiagnostics(now: now)) }
     }
 
-    /// Writes the diagnostics beside the database as JSON. The file is small and
-    /// overwritten each time, so it can be pulled off the device when the
-    /// dashboard shows nothing and the reason is not obvious.
+    /// Writes the diagnostics beside the database as JSON. Small and overwritten
+    /// each time, so it can be pulled off the device when the dashboard shows
+    /// nothing and the reason is not obvious.
     func writeSleepDiagnostics(now: Date = .now) {
         queue.async { [self] in
             let diagnostics = buildSleepDiagnostics(now: now)
@@ -840,141 +912,108 @@ final class WhoopStore: @unchecked Sendable {
 
     private func buildSleepDiagnostics(now: Date) -> WhoopSleepDiagnostics {
         let iso = ISO8601DateFormatter()
+        let audit = historicalDecodeAudit()
         func stamp(_ interval: TimeInterval) -> String {
             iso.string(from: Date(timeIntervalSince1970: interval))
         }
-        let audit = historicalDecodeAudit()
-        func empty(_ outcome: String) -> WhoopSleepDiagnostics {
-            WhoopSleepDiagnostics(
-                generatedAt: iso.string(from: now), windowHours: 48, sampleCount: 0,
-                distinctSeconds: 0, firstSampleAt: nil, lastSampleAt: nil,
-                secondsSinceLastSample: nil, medianSampleIntervalSeconds: nil,
-                largestGapSeconds: nil, asleepSampleCount: 0, sleepStateHistogram: [:],
-                sessionStartedAt: nil, sessionEndedAt: nil, sessionSpanSeconds: nil,
-                asleepDistinctSeconds: nil, sessionCoverage: nil, wakeCoverageSeconds: nil,
-                secondsSinceLastAsleep: nil, passesDurationGate: nil, passesCoverageGate: nil,
-                passesWakeCoverageGate: nil, passesWakeElapsedGate: nil,
-                storedRecordForSessionDate: nil,
-                rawType47PacketTotal: audit.rawTotal,
-                historicalSampleTotal: audit.sampleTotal,
-                recentType47Outcomes: audit.outcomes,
-                outcome: outcome
-            )
-        }
-
-        guard let database else { return empty("no database") }
-        let cutoff = now.addingTimeInterval(-48 * 60 * 60).timeIntervalSince1970
-        let sql = """
-            SELECT sample_at, sleep_state
-            FROM whoop_historical_sample
-            WHERE sample_at >= ?
-            ORDER BY sample_at ASC
-            """
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else {
-            return empty("could not read whoop_historical_sample")
-        }
-        defer { sqlite3_finalize(statement) }
-        sqlite3_bind_double(statement, 1, cutoff)
-
-        var stamps: [TimeInterval] = []
-        var states: [Int] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            stamps.append(sqlite3_column_double(statement, 0))
-            states.append(Int(sqlite3_column_int(statement, 1)))
-        }
-        guard let first = stamps.first, let last = stamps.last else {
-            return empty("no historical samples in the last 48 hours")
-        }
-
-        var histogram: [String: Int] = [:]
-        for state in states { histogram["\(state)", default: 0] += 1 }
-
-        var gaps: [Double] = []
-        for index in 1..<max(stamps.count, 1) where stamps.count > 1 {
-            gaps.append(stamps[index] - stamps[index - 1])
-        }
-        let sortedGaps = gaps.sorted()
-        let medianGap = sortedGaps.isEmpty ? nil : sortedGaps[sortedGaps.count / 2]
-
-        let asleep = zip(stamps, states).filter { $0.1 == 2 }.map(\.0)
-        guard let lastAsleep = asleep.last else {
+        func shell(_ outcome: String, rows: [HistoricalRow] = []) -> WhoopSleepDiagnostics {
+            var histogram: [String: Int] = [:]
+            for row in rows { histogram["\(row.sleepState)", default: 0] += 1 }
             return WhoopSleepDiagnostics(
                 generatedAt: iso.string(from: now), windowHours: 48,
-                sampleCount: stamps.count, distinctSeconds: Set(stamps.map(Int.init)).count,
-                firstSampleAt: stamp(first), lastSampleAt: stamp(last),
-                secondsSinceLastSample: Int(now.timeIntervalSince1970 - last),
-                medianSampleIntervalSeconds: medianGap, largestGapSeconds: sortedGaps.last.map(Int.init),
-                asleepSampleCount: 0, sleepStateHistogram: histogram,
-                sessionStartedAt: nil, sessionEndedAt: nil, sessionSpanSeconds: nil,
-                asleepDistinctSeconds: nil, sessionCoverage: nil, wakeCoverageSeconds: nil,
-                secondsSinceLastAsleep: nil, passesDurationGate: nil, passesCoverageGate: nil,
-                passesWakeCoverageGate: nil, passesWakeElapsedGate: nil,
-                storedRecordForSessionDate: nil,
+                sampleCount: rows.count,
+                firstSampleAt: rows.first.map { stamp($0.timestamp) },
+                lastSampleAt: rows.last.map { stamp($0.timestamp) },
+                secondsSinceLastSample: rows.last.map { Int(now.timeIntervalSince1970 - $0.timestamp) },
+                observedCadenceSeconds: rows.isEmpty ? nil : Self.cadenceSeconds(of: rows),
+                largestGapSeconds: nil, sleepStateHistogram: histogram,
                 rawType47PacketTotal: audit.rawTotal,
                 historicalSampleTotal: audit.sampleTotal,
                 recentType47Outcomes: audit.outcomes,
-                outcome: "no sample carried sleep_state 2 in the last 48 hours"
+                sessions: [], outcome: outcome
             )
         }
 
-        var groups: [[TimeInterval]] = []
-        for value in asleep {
-            if let previous = groups.last?.last, value - previous <= 45 * 60 {
-                groups[groups.count - 1].append(value)
+        guard let database else { return shell("no database") }
+        let rows = recentHistoricalRows(now: now)
+        guard !rows.isEmpty else { return shell("no historical samples in the last 48 hours") }
+
+        var histogram: [String: Int] = [:]
+        for row in rows { histogram["\(row.sleepState)", default: 0] += 1 }
+        let cadence = Self.cadenceSeconds(of: rows)
+        var largestGap = 0.0
+        for index in 1..<rows.count {
+            largestGap = max(largestGap, rows[index].timestamp - rows[index - 1].timestamp)
+        }
+
+        let asleepRows = rows.filter { $0.sleepState == 2 }
+        var groups: [[HistoricalRow]] = []
+        for row in asleepRows {
+            if let previous = groups.last?.last,
+               row.timestamp - previous.timestamp <= 45 * 60 {
+                groups[groups.count - 1].append(row)
             } else {
-                groups.append([value])
+                groups.append([row])
             }
         }
-        let session = groups.last ?? []
-        let sessionStart = session.first ?? lastAsleep
-        let sessionEnd = session.last ?? lastAsleep
-        let span = max(1, Int(sessionEnd - sessionStart) + 1)
-        let inSession = stamps.filter { $0 >= sessionStart && $0 <= sessionEnd }
-        let coverage = Double(Set(inSession.map(Int.init)).count) / Double(span)
-        let asleepSeconds = Set(session.map(Int.init)).count
-        let wakeCoverage = Set(
-            zip(stamps, states).filter { $0.0 > sessionEnd && $0.1 != 2 }.map { Int($0.0) }
-        ).count
-        let sinceLastAsleep = Int(last - sessionEnd)
-        let dateKey = Self.dateKeyFormatter.string(from: Date(timeIntervalSince1970: sessionEnd))
 
-        let durationGate = asleepSeconds >= 3 * 60 * 60
-        let coverageGate = coverage >= 0.50
-        let wakeCoverageGate = wakeCoverage >= 30 * 60
-        let wakeElapsedGate = sinceLastAsleep >= 30 * 60
-        let stored = storedSleepID(forDateKey: dateKey, database: database)
+        let latest = rows[rows.count - 1]
+        var sessions: [WhoopSleepSessionDiagnostics] = []
+        for group in groups {
+            guard let first = group.first, let last = group.last else { continue }
+            let span = max(1.0, last.timestamp - first.timestamp)
+            let inSession = rows.filter { $0.timestamp >= first.timestamp && $0.timestamp <= last.timestamp }
+            let wakeRows = rows.filter { $0.timestamp > last.timestamp && $0.sleepState != 2 }
+            let duration = Self.elapsedSeconds(across: group, cadence: cadence)
+            let coverage = Self.observedFraction(of: inSession, cadence: cadence)
+            let density = min(1.0, Double(inSession.count) / max(1.0, span / cadence))
+            let wake = Self.elapsedSeconds(across: wakeRows, cadence: cadence)
+            let since = latest.timestamp - last.timestamp
+            let dateKey = Self.dateKeyFormatter.string(from: Date(timeIntervalSince1970: last.timestamp))
+            let stored = storedSleepID(forDateKey: dateKey, database: database)
+            let durationGate = duration >= 3 * 60 * 60
+            let coverageGate = coverage >= 0.50
+            let wakeGate = wake >= 30 * 60
+            let elapsedGate = since >= 30 * 60
 
-        let outcome: String
-        if stored != nil {
-            outcome = "already stored for \(dateKey)"
-        } else if !durationGate || !coverageGate {
-            outcome = "blocked by evidence gates; no Process control is offered"
-        } else if !wakeCoverageGate || !wakeElapsedGate {
-            outcome = "pending; Process control should be visible"
-        } else {
-            outcome = "all gates pass; should have finalized automatically"
+            let verdict: String
+            if stored != nil {
+                verdict = "already stored"
+            } else if !durationGate || !coverageGate {
+                verdict = "blocked by evidence gates; no Process control offered"
+            } else if !wakeGate || !elapsedGate {
+                verdict = "pending; Process control visible"
+            } else {
+                verdict = "all gates pass; finalizes automatically"
+            }
+
+            sessions.append(WhoopSleepSessionDiagnostics(
+                startedAt: stamp(first.timestamp), endedAt: stamp(last.timestamp),
+                spanMinutes: (span / 60).rounded(), durationMinutes: (duration / 60).rounded(),
+                sampleCount: inSession.count, coverage: coverage, sampleDensity: density,
+                bankedWakeMinutes: (wake / 60).rounded(),
+                minutesSinceLastAsleep: (since / 60).rounded(),
+                passesDurationGate: durationGate, passesCoverageGate: coverageGate,
+                passesWakeCoverageGate: wakeGate, passesWakeElapsedGate: elapsedGate,
+                dateKey: dateKey, storedSleepID: stored,
+                storedSummary: storedRecordSummary(forDateKey: dateKey, database: database),
+                verdict: verdict
+            ))
         }
 
         return WhoopSleepDiagnostics(
             generatedAt: iso.string(from: now), windowHours: 48,
-            sampleCount: stamps.count, distinctSeconds: Set(stamps.map(Int.init)).count,
-            firstSampleAt: stamp(first), lastSampleAt: stamp(last),
-            secondsSinceLastSample: Int(now.timeIntervalSince1970 - last),
-            medianSampleIntervalSeconds: medianGap, largestGapSeconds: sortedGaps.last.map(Int.init),
-            asleepSampleCount: asleep.count, sleepStateHistogram: histogram,
-            sessionStartedAt: stamp(sessionStart), sessionEndedAt: stamp(sessionEnd),
-            sessionSpanSeconds: span, asleepDistinctSeconds: asleepSeconds,
-            sessionCoverage: coverage, wakeCoverageSeconds: wakeCoverage,
-            secondsSinceLastAsleep: sinceLastAsleep,
-            passesDurationGate: durationGate, passesCoverageGate: coverageGate,
-            passesWakeCoverageGate: wakeCoverageGate, passesWakeElapsedGate: wakeElapsedGate,
-            storedRecordForSessionDate: stored,
+            sampleCount: rows.count,
+            firstSampleAt: stamp(rows[0].timestamp),
+            lastSampleAt: stamp(latest.timestamp),
+            secondsSinceLastSample: Int(now.timeIntervalSince1970 - latest.timestamp),
+            observedCadenceSeconds: cadence, largestGapSeconds: Int(largestGap),
+            sleepStateHistogram: histogram,
             rawType47PacketTotal: audit.rawTotal,
             historicalSampleTotal: audit.sampleTotal,
             recentType47Outcomes: audit.outcomes,
-            outcome: outcome
+            sessions: sessions,
+            outcome: sessions.last?.verdict ?? "no sample carried sleep_state 2 in the last 48 hours"
         )
     }
 
@@ -985,7 +1024,6 @@ final class WhoopStore: @unchecked Sendable {
         guard let database else { return (0, 0, [:]) }
         let rawTotal = Int((try? scalarInt(database, sql: "SELECT COUNT(*) FROM whoop_raw_packet WHERE frame_type = 47")) ?? 0)
         let sampleTotal = Int((try? scalarInt(database, sql: "SELECT COUNT(*) FROM whoop_historical_sample")) ?? 0)
-
         var outcomes: [String: Int] = [:]
         let sql = """
             SELECT payload FROM whoop_raw_packet
@@ -999,8 +1037,7 @@ final class WhoopStore: @unchecked Sendable {
         defer { sqlite3_finalize(statement) }
         while sqlite3_step(statement) == SQLITE_ROW {
             guard let blob = sqlite3_column_blob(statement, 0) else { continue }
-            let length = Int(sqlite3_column_bytes(statement, 0))
-            let data = Data(bytes: blob, count: length)
+            let data = Data(bytes: blob, count: Int(sqlite3_column_bytes(statement, 0)))
             outcomes[WhoopDecodedHistorical.decodeFailureReason(data), default: 0] += 1
         }
         return (rawTotal, sampleTotal, outcomes)
@@ -1012,7 +1049,7 @@ final class WhoopStore: @unchecked Sendable {
         database: OpaquePointer
     ) -> DailyHealthRecord {
         let durationMinutes = candidate.durationMinutes
-        let restingHR = restingHeartRate(rows: candidate.sessionRows)
+        let restingHR = restingHeartRate(rows: candidate.sessionRows, cadence: candidate.cadenceSeconds)
         let hrv = nightlyRMSSD(rows: candidate.sessionRows.filter { $0.sleepState == 2 })
         let needMinutes = personalizedSleepNeedMinutes(database: database)
         let sleepScore = min(100, durationMinutes / max(needMinutes, 1) * 100)
@@ -1030,6 +1067,46 @@ final class WhoopStore: @unchecked Sendable {
         )
     }
 
+    /// Whether a night still needs deriving. A locally derived row with a metric
+    /// missing is re-derived, so a fix to one of the derivations repairs the
+    /// nights it already wrote instead of leaving them permanently incomplete.
+    /// An archived WHOOP row is authoritative and never overwritten.
+    private func shouldDerive(dateKey: String, database: OpaquePointer) -> Bool {
+        let sql = """
+            SELECT source, sleep_score, sleep_duration_minutes,
+                   hrv_rmssd_milliseconds, resting_heart_rate_bpm
+            FROM daily_health_metric WHERE date_key = ? LIMIT 1
+            """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return false }
+        defer { sqlite3_finalize(statement) }
+        bind(dateKey, to: 1, in: statement)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return true }
+        guard textColumn(statement, 0) == "whoop5_local" else { return false }
+        return (1...4).contains { sqlite3_column_type(statement, Int32($0)) == SQLITE_NULL }
+    }
+
+    private func storedRecordSummary(forDateKey dateKey: String, database: OpaquePointer) -> String? {
+        let sql = """
+            SELECT sleep_score, sleep_duration_minutes, hrv_rmssd_milliseconds,
+                   resting_heart_rate_bpm, source
+            FROM daily_health_metric WHERE date_key = ? LIMIT 1
+            """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return nil }
+        defer { sqlite3_finalize(statement) }
+        bind(dateKey, to: 1, in: statement)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        let score = sqlite3_column_double(statement, 0)
+        let duration = sqlite3_column_double(statement, 1)
+        let hrv = sqlite3_column_type(statement, 2) == SQLITE_NULL ? nil : sqlite3_column_double(statement, 2)
+        let rhr = sqlite3_column_type(statement, 3) == SQLITE_NULL ? nil : sqlite3_column_double(statement, 3)
+        let source = textColumn(statement, 4) ?? "?"
+        return "score \(Int(score.rounded()))% | \(Int(duration.rounded())) min | HRV \(hrv.map { String(Int($0.rounded())) } ?? "nil") | RHR \(rhr.map { String(Int($0.rounded())) } ?? "nil") | \(source)"
+    }
+
     private func storedSleepID(forDateKey dateKey: String, database: OpaquePointer) -> String? {
         let sql = "SELECT sleep_id FROM daily_health_metric WHERE date_key = ? LIMIT 1"
         var statement: OpaquePointer?
@@ -1041,15 +1118,21 @@ final class WhoopStore: @unchecked Sendable {
         return textColumn(statement, 0)
     }
 
-    private func restingHeartRate(rows: [HistoricalRow]) -> Double? {
+    /// Lowest five-minute mean heart rate across the night. The minimum sample
+    /// requirement is a fraction of what the observed cadence can actually
+    /// deliver in five minutes; a fixed count assumed a one-hertz record and so
+    /// no window ever qualified, leaving resting heart rate permanently nil.
+    private func restingHeartRate(rows: [HistoricalRow], cadence: Double) -> Double? {
         guard let start = rows.first?.timestamp, let end = rows.last?.timestamp else { return nil }
+        let expectedPerWindow = 5 * 60 / max(cadence, 1)
+        let required = max(3, Int((expectedPerWindow * 0.4).rounded()))
         var means: [Double] = []
         var windowStart = start
         while windowStart <= end {
             let values = rows.filter {
                 $0.timestamp >= windowStart && $0.timestamp < windowStart + 5 * 60 && $0.heartRate > 0
             }.map { Double($0.heartRate) }
-            if values.count >= 120 {
+            if values.count >= required {
                 means.append(values.reduce(0, +) / Double(values.count))
             }
             windowStart += 5 * 60
