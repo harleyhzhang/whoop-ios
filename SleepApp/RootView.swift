@@ -8,6 +8,7 @@ struct RootView: View {
     @State private var selectedDate: Date?
     @State private var activeMetric: MetricKind?
     @State private var currentDate = Date()
+    @State private var debugMockPendingSleepDismissed = false
     @StateObject private var whoopCollector = WhoopHandshakeProbe()
     @StateObject private var history = HealthHistoryModel()
     @Namespace private var rangeSelectionNamespace
@@ -78,18 +79,35 @@ struct RootView: View {
         return whoopCollector.isConnected
     }
 
+    private var displayedPendingSleep: WhoopPendingSleep? {
+        #if DEBUG
+        if !debugMockPendingSleepDismissed,
+           let rawMinutes = ProcessInfo.processInfo.environment["WHOOP_MOCK_PENDING_SLEEP_MINUTES"],
+           let minutes = Double(rawMinutes) {
+            return WhoopPendingSleep(
+                sleepID: "mock-pending-sleep",
+                startedAt: currentDate.addingTimeInterval(-minutes * 60),
+                endedAt: currentDate,
+                durationMinutes: minutes
+            )
+        }
+        #endif
+
+        return whoopCollector.pendingSleep
+    }
+
     var body: some View {
         ZStack {
             Color(uiColor: .systemGroupedBackground).ignoresSafeArea()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    dateHeader
                     sleepDetectedSection
                         .animation(
                             .smooth(duration: 0.45, extraBounce: 0.18),
-                            value: whoopCollector.pendingSleep
+                            value: displayedPendingSleep
                         )
+                    dateHeader
                     summaryGrid
                     rangePicker
 
@@ -134,6 +152,7 @@ struct RootView: View {
                     )
                 }
                 .padding(.horizontal, 16)
+                .padding(.top, 8)
                 .padding(.bottom, 32)
             }
             .scrollIndicators(.hidden)
@@ -222,40 +241,42 @@ struct RootView: View {
                 "WHOOP \(whoopConnected ? "connected" : "disconnected"), battery \(whoopBatteryLevel.map { "\($0) percent" } ?? "unavailable")"
             )
         }
-        .padding(.top, 8)
     }
 
-    /// One borderless line between the date and the summary. It exists only
-    /// while the store reports a detected night that is not written yet, so a
-    /// night the automatic gates finish first never shows it at all.
+    /// A compact status card above the entire dashboard. It exists only while
+    /// the store reports a detected night that is not written yet, so a night
+    /// the automatic gates finish first never shows it at all.
     @ViewBuilder
     private var sleepDetectedSection: some View {
-        if let pending = whoopCollector.pendingSleep {
-            sleepDetectedRow(pending)
+        if let pending = displayedPendingSleep {
+            sleepDetectedCard(pending)
                 .transition(
-                    .asymmetric(
-                        insertion: .opacity.combined(with: .scale(scale: 0.96, anchor: .top))
-                            .combined(with: .move(edge: .top)),
-                        removal: .opacity.combined(with: .scale(scale: 0.94, anchor: .top))
+                    .modifier(
+                        active: SleepDetectedCardHeightTransition(progress: 0),
+                        identity: SleepDetectedCardHeightTransition(progress: 1)
                     )
                 )
         }
     }
 
-    private func sleepDetectedRow(_ pending: WhoopPendingSleep) -> some View {
-        HStack(spacing: 7) {
+    private func sleepDetectedCard(_ pending: WhoopPendingSleep) -> some View {
+        HStack(spacing: 12) {
             Image(systemName: "moon.zzz.fill")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(sleepAccent)
+                .frame(width: 34, height: 34)
+                .background(sleepAccent.opacity(0.14), in: Circle())
 
-            Text("Sleep detected")
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(.primary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Sleep detected")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.primary)
 
-            Text(whoopCollector.sleepProcessFailure ?? formatDuration(pending.durationMinutes / 60))
-                .font(.system(size: 15, weight: .regular))
-                .foregroundStyle(whoopCollector.sleepProcessFailure == nil ? .secondary : Color.orange)
-                .contentTransition(.opacity)
+                Text(whoopCollector.sleepProcessFailure ?? formatDuration(pending.durationMinutes / 60))
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(whoopCollector.sleepProcessFailure == nil ? .secondary : Color.orange)
+                    .contentTransition(.opacity)
+            }
 
             Spacer(minLength: 8)
 
@@ -264,23 +285,42 @@ struct RootView: View {
                 // actor, so wrapping the call is what puts that removal inside
                 // the animated transaction.
                 withAnimation(.smooth(duration: 0.45, extraBounce: 0.18)) {
-                    whoopCollector.processPendingSleep()
+                    processPendingSleepCard()
                 }
             } label: {
                 Text("Process")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(sleepAccent)
-                    .padding(.horizontal, 13)
-                    .frame(height: 30)
-                    .background(sleepAccent.opacity(0.16), in: Capsule(style: .continuous))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .frame(height: 32)
+                    .background(sleepAccent, in: Capsule(style: .continuous))
             }
             .buttonStyle(.plain)
             .disabled(whoopCollector.isProcessingSleep)
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-            "Sleep detected, \(formatDuration(pending.durationMinutes / 60)). Double tap Process to finish it."
+        .padding(.horizontal, 14)
+        .frame(height: SleepDetectedCardHeightTransition.expandedHeight)
+        .background(
+            Color(uiColor: .secondarySystemGroupedBackground),
+            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
         )
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(.white.opacity(0.055), lineWidth: 0.5)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Sleep detected, \(formatDuration(pending.durationMinutes / 60))")
+    }
+
+    private func processPendingSleepCard() {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["WHOOP_MOCK_PENDING_SLEEP_MINUTES"] != nil {
+            debugMockPendingSleepDismissed = true
+            return
+        }
+        #endif
+
+        whoopCollector.processPendingSleep()
     }
 
     private var sleepAccent: Color { Color(red: 0.39, green: 0.69, blue: 1.0) }
@@ -993,6 +1033,24 @@ struct RootView: View {
         let high = values.max() ?? 1
         let padding = max((high - low) * 0.18, 0.5)
         return (low - padding)...(high + padding)
+    }
+}
+
+private struct SleepDetectedCardHeightTransition: ViewModifier, Animatable {
+    static let expandedHeight: CGFloat = 64
+
+    var progress: CGFloat
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .frame(height: Self.expandedHeight * progress, alignment: .top)
+            .opacity(progress)
+            .clipped()
     }
 }
 
