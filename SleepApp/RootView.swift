@@ -4,7 +4,7 @@ import UIKit
 
 struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
-    @State private var selectedRange: HealthRange = .month
+    @AppStorage("selectedHealthRange") private var selectedRange: HealthRange = .month
     @State private var selectedDate: Date?
     @State private var activeMetric: MetricKind?
     @State private var currentDate = Date()
@@ -617,7 +617,7 @@ struct RootView: View {
                 : lastDate
         }
         let averageLevels = adaptiveAverageLevels(from: series.daily, for: selectedRange)
-        return VStack(spacing: 3) {
+        return VStack(spacing: 0) {
             Chart {
                 ForEach(plottedPoints) { point in
                     AreaMark(
@@ -732,27 +732,37 @@ struct RootView: View {
                     }
                 }
             }
-            .chartXAxis {
-                if selectedRange.usesMonthlyAxis {
-                    AxisMarks(values: monthTicks) { value in
-                        AxisValueLabel(collisionResolution: .disabled) {
-                            if let date = value.as(Date.self) {
-                                monthlyAxisLabel(for: date, firstTick: monthTicks.first)
-                            }
-                        }
-                    }
-                }
-            }
+            // Range labels live in the fixed-height footer below. Keeping them
+            // out of Swift Charts prevents it from reserving a second,
+            // invisible strip beneath the plot.
+            .chartXAxis(.hidden)
             .chartLegend(.hidden)
             .frame(maxWidth: .infinity)
             .frame(height: 126)
             .accessibilityLabel("\(title), \(selectedRange.accessibilityName)")
 
-            if !selectedRange.usesMonthlyAxis {
-                chartAxisFooter(firstDate: firstDate, middleDate: middleDate, lastDate: lastDate)
-            }
+            rangeAxisFooter(
+                monthDates: monthTicks,
+                firstDate: firstDate,
+                middleDate: middleDate,
+                lastDate: lastDate
+            )
         }
         .frame(height: 145, alignment: .top)
+    }
+
+    @ViewBuilder
+    private func rangeAxisFooter(
+        monthDates: [Date],
+        firstDate: Date,
+        middleDate: Date,
+        lastDate: Date
+    ) -> some View {
+        if selectedRange.usesMonthlyAxis {
+            monthlyAxisFooter(dates: monthDates)
+        } else {
+            chartAxisFooter(firstDate: firstDate, middleDate: middleDate, lastDate: lastDate)
+        }
     }
 
     @ViewBuilder
@@ -769,6 +779,24 @@ struct RootView: View {
         .lineLimit(1)
         .minimumScaleFactor(0.8)
         .padding(.trailing, 28)
+        .frame(height: 19, alignment: .top)
+    }
+
+    private func monthlyAxisFooter(dates: [Date]) -> some View {
+        HStack(spacing: 0) {
+            ForEach(Array(dates.enumerated()), id: \.offset) { index, date in
+                monthlyAxisLabel(for: date, firstTick: dates.first)
+                    .frame(maxWidth: .infinity)
+                    .accessibilityLabel(
+                        date.formatted(.dateTime.month(.wide).year())
+                    )
+                    .accessibilitySortPriority(Double(dates.count - index))
+            }
+        }
+        // Match the plot width rather than extending beneath the trailing
+        // y-axis values. Equal-width cells make each month visually regular.
+        .padding(.trailing, 28)
+        .frame(height: 19, alignment: .top)
     }
 
     private func monthlyAxisDates(in points: [MetricPoint]) -> [Date] {
