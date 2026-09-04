@@ -69,10 +69,9 @@ The app should eventually cover the complete personal loop:
 - One-week and one-month charts retain compact start/midpoint/latest labels.
   Three-month, one-year, and all-history charts label every represented month
   without vertical month gridlines or tick marks; three months shows
-  abbreviated months, while longer ranges use compact month initials with year
-  markers at the start and each January. Long-range labels use equal-width,
-  plot-aligned footer cells so the initials are evenly spaced and the chart no
-  longer reserves an empty strip below them.
+  abbreviated months. Longer ranges show at most four evenly distributed,
+  abbreviated month-and-year labels in equal-width, plot-aligned footer cells,
+  so the chart stays readable and no longer reserves an empty strip below them.
 - The Trends selector persists the most recently used range and restores its
   selected highlight and charts when the app next opens.
 - For 3M, 1Y, and All, charts overlay independent contrasting average levels.

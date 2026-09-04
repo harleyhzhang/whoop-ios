@@ -785,7 +785,7 @@ struct RootView: View {
     private func monthlyAxisFooter(dates: [Date]) -> some View {
         HStack(spacing: 0) {
             ForEach(Array(dates.enumerated()), id: \.offset) { index, date in
-                monthlyAxisLabel(for: date, firstTick: dates.first)
+                monthlyAxisLabel(for: date)
                     .frame(maxWidth: .infinity)
                     .accessibilityLabel(
                         date.formatted(.dateTime.month(.wide).year())
@@ -810,7 +810,7 @@ struct RootView: View {
             return (components.year ?? 0) * 100 + (components.month ?? 0)
         }
 
-        return grouped.values.compactMap { month in
+        let representedMonths: [Date] = grouped.values.compactMap { month in
             guard let representativeDate = month.first?.date,
                   let interval = calendar.dateInterval(of: .month, for: representativeDate) else {
                 return nil
@@ -823,6 +823,18 @@ struct RootView: View {
             return Date(timeIntervalSinceReferenceDate: midpoint)
         }
         .sorted()
+
+        let maximumTickCount = 4
+        guard representedMonths.count > maximumTickCount else {
+            return representedMonths
+        }
+
+        let lastIndex = representedMonths.count - 1
+        return (0..<maximumTickCount).map { position in
+            let fraction = Double(position) / Double(maximumTickCount - 1)
+            let index = Int((fraction * Double(lastIndex)).rounded())
+            return representedMonths[index]
+        }
     }
 
     private func adaptiveAverageLevels(
@@ -888,13 +900,10 @@ struct RootView: View {
     }
 
     @ViewBuilder
-    private func monthlyAxisLabel(for date: Date, firstTick: Date?) -> some View {
-        let calendar = Calendar.current
+    private func monthlyAxisLabel(for date: Date) -> some View {
         VStack(spacing: 0) {
-            Text(date, format: .dateTime.month(.narrow))
-            if date == firstTick || calendar.component(.month, from: date) == 1 {
-                Text(date, format: .dateTime.year(.twoDigits))
-            }
+            Text(date, format: .dateTime.month(.abbreviated))
+            Text(date, format: .dateTime.year(.twoDigits))
         }
         .font(.system(size: 8, weight: .medium))
         .foregroundStyle(.secondary)
