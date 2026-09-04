@@ -48,8 +48,12 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     private var lastTelemetryCacheWriteAt: Date?
     private var realtimeKeepaliveTask: Task<Void, Never>?
     private var historicalRefreshTask: Task<Void, Never>?
+    private var historicalWatchdogTask: Task<Void, Never>?
     private var historicalSyncActive = false
+    private var lastHistoricalProgressAt: Date?
+    private var newestHistoricalSampleAtInSync: Date?
     private var lastAcknowledgedHistoricalEndData: [UInt8]?
+    private var lastHistoricalAcknowledgementAt: Date?
     private var lastSleepAnalysisAt: Date?
     private var lastFinalizedSleepID: String?
     /// Suppresses the pending row between an optimistic tap and the refresh that
@@ -99,6 +103,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     deinit {
         realtimeKeepaliveTask?.cancel()
         historicalRefreshTask?.cancel()
+        historicalWatchdogTask?.cancel()
     }
 
     private func record(_ message: String) {
@@ -353,6 +358,9 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
               handshakeState.hasPrefix("Acknowledged"),
               let commandCharacteristic else { return }
         historicalSyncActive = true
+        lastHistoricalProgressAt = .now
+        newestHistoricalSampleAtInSync = nil
+        startHistoricalWatchdog()
         commandSequence &+= 1
         let frame = Self.puffinCommandFrame(cmd: 22, seq: commandSequence, payload: [0x00])
         record("Starting persisted WHOOP historical offload, seq \(commandSequence)")
@@ -362,11 +370,22 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     @discardableResult
     private func acknowledgeHistoricalChunk(endData: [UInt8]) -> Bool {
         guard endData.count == 8,
-              endData != lastAcknowledgedHistoricalEndData,
               let peripheral,
               peripheral.state == .connected,
               let commandCharacteristic else { return false }
+
+        // The band repeats an unacknowledged chunk terminator. Suppress the
+        // immediate notification burst, but retry after a short interval. The
+        // old permanent duplicate guard could lose one BLE write and leave the
+        // offload marked active forever, blocking every future refresh.
+        let now = Date()
+        if endData == lastAcknowledgedHistoricalEndData,
+           let lastHistoricalAcknowledgementAt,
+           now.timeIntervalSince(lastHistoricalAcknowledgementAt) < 2 {
+            return false
+        }
         lastAcknowledgedHistoricalEndData = endData
+        lastHistoricalAcknowledgementAt = now
         commandSequence &+= 1
         let frame = Self.puffinCommandFrame(
             cmd: 23,
@@ -376,6 +395,33 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         record("Acknowledging durably stored historical chunk, seq \(commandSequence)")
         peripheral.writeValue(Data(frame), for: commandCharacteristic, type: .withResponse)
         return true
+    }
+
+    private func startHistoricalWatchdog() {
+        guard historicalWatchdogTask == nil else { return }
+        historicalWatchdogTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                guard !Task.isCancelled, let self else { return }
+                guard self.historicalSyncActive else {
+                    self.historicalWatchdogTask = nil
+                    return
+                }
+                let stalledFor = self.lastHistoricalProgressAt.map { Date().timeIntervalSince($0) }
+                    ?? .infinity
+                guard stalledFor >= 90 else { continue }
+
+                self.record("Historical offload stalled for \(Int(stalledFor)) seconds; resetting the session and retrying")
+                self.historicalSyncActive = false
+                self.lastHistoricalProgressAt = nil
+                self.newestHistoricalSampleAtInSync = nil
+                self.lastAcknowledgedHistoricalEndData = nil
+                self.lastHistoricalAcknowledgementAt = nil
+                self.historicalWatchdogTask = nil
+                self.beginHistoricalSync()
+                return
+            }
+        }
     }
 
     private func armRealtimeHeartRate() {
@@ -655,8 +701,13 @@ extension WhoopHandshakeProbe: CBCentralManagerDelegate {
             realtimeKeepaliveTask = nil
             historicalRefreshTask?.cancel()
             historicalRefreshTask = nil
+            historicalWatchdogTask?.cancel()
+            historicalWatchdogTask = nil
             historicalSyncActive = false
+            lastHistoricalProgressAt = nil
+            newestHistoricalSampleAtInSync = nil
             lastAcknowledgedHistoricalEndData = nil
+            lastHistoricalAcknowledgementAt = nil
             canAttemptHandshake = false
             status = "Disconnected: \(detail)"
             Task { @MainActor [weak self] in
@@ -782,9 +833,21 @@ extension WhoopHandshakeProbe: CBPeripheralDelegate {
                 let historicalEndData = metadataType == 2 && bytes.count >= 29
                     ? Array(bytes[21..<29])
                     : nil
+                // Count only forward movement through decoded history. The
+                // band may replay the same packet or chunk ending thousands of
+                // times while waiting for an acknowledgement; treating those
+                // duplicates as progress would defeat the stall watchdog.
+                if let sampleAt = historical?.sampleAt,
+                   newestHistoricalSampleAtInSync.map({ sampleAt > $0 }) ?? true {
+                    newestHistoricalSampleAtInSync = sampleAt
+                    lastHistoricalProgressAt = .now
+                }
                 if metadataType == 1 {
                     historicalSyncActive = true
+                    newestHistoricalSampleAtInSync = nil
                     lastAcknowledgedHistoricalEndData = nil
+                    lastHistoricalAcknowledgementAt = nil
+                    startHistoricalWatchdog()
                 }
                 store.append(
                     packet: data,
@@ -806,6 +869,12 @@ extension WhoopHandshakeProbe: CBPeripheralDelegate {
                             }
                         } else if metadataType == 3 {
                             self.historicalSyncActive = false
+                            self.lastHistoricalProgressAt = nil
+                            self.newestHistoricalSampleAtInSync = nil
+                            self.lastAcknowledgedHistoricalEndData = nil
+                            self.lastHistoricalAcknowledgementAt = nil
+                            self.historicalWatchdogTask?.cancel()
+                            self.historicalWatchdogTask = nil
                             self.refreshSleepSnapshot(force: true)
                             self.scheduleHistoricalSync()
                         }

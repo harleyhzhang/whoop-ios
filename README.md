@@ -149,7 +149,7 @@ The app should eventually cover the complete personal loop:
   the domain so the round line cap overhanging the final point is dimmed with
   the rest of the line instead of staying at full strength on the right edge.
 - Sleep finalization separates detection from storage. The automatic path still
-  requires at least three hours asleep, 50% one-hertz session coverage, thirty
+  requires at least three hours asleep, 50% observed-session coverage, thirty
   minutes of banked wake data, and thirty minutes since the last asleep sample.
   A night that clears the first two evidence gates but not the two wake-timing
   gates is now reported as pending instead of silently rendering dashes, and the
@@ -161,6 +161,12 @@ The app should eventually cover the complete personal loop:
   land without waiting for a full history reload. A failed process restores the
   line with a short reason and pulls history from the strap before the next
   attempt. A night the automatic path finalizes first never shows the line.
+- Historical offload is self-healing. A missing final metadata packet no longer
+  leaves the in-memory sync latch active forever: a watchdog resets and retries
+  an offload after 90 seconds without history progress. Repeated chunk endings
+  are still coalesced during their immediate notification burst, but the app
+  retries their acknowledgement after two seconds instead of permanently
+  suppressing it after the first BLE write.
 - The 2026-09-01 real-history build was installed in place and visibly launched
   on the paired iPhone; the dashboard rendered the imported history correctly.
 - The generated seed remains in Harley's private data tree rather than the
