@@ -79,8 +79,8 @@ struct WhoopSleepSnapshot: Sendable {
     let isSleeping: Bool
     let sampleAt: Date?
     let finalizedRecord: DailyHealthRecord?
-    /// A main sleep the strap already marked asleep that cleared the evidence
-    /// gates but is not stored yet. Non-nil is exactly the condition the
+    /// A main sleep the strap has detected but has not atomically stored with
+    /// all four primary metrics yet. Non-nil is exactly the condition the
     /// dashboard reports as "Sleep detected".
     let pendingSleep: WhoopPendingSleep?
 }
@@ -138,6 +138,7 @@ enum WhoopSleepProcessError: Error, Sendable {
     case stillAsleep
     case noSleepDetected
     case insufficientEvidence
+    case metricsStillLoading
     case writeFailed
 
     var message: String {
@@ -147,6 +148,7 @@ enum WhoopSleepProcessError: Error, Sendable {
         case .stillAsleep: return "Still asleep"
         case .noSleepDetected: return "No sleep detected"
         case .insufficientEvidence: return "Not enough data to score"
+        case .metricsStillLoading: return "Still receiving sleep data"
         case .writeFailed: return "Could not save"
         }
     }
@@ -198,10 +200,11 @@ final class WhoopStore: @unchecked Sendable {
     }
 
     func refreshSleepSnapshot(
+        allowAutomaticFinalization: Bool = false,
         completion: @escaping @Sendable (WhoopSleepSnapshot) -> Void
     ) {
         queue.async { [self] in
-            completion(analyzeLatestSleep())
+            completion(analyzeLatestSleep(allowAutomaticFinalization: allowAutomaticFinalization))
         }
     }
 
@@ -218,6 +221,11 @@ final class WhoopStore: @unchecked Sendable {
                        hrv_rmssd_milliseconds, resting_heart_rate_bpm,
                        sleep_id, cycle_id, source, source_archive, source_updated_at
                 FROM daily_health_metric
+                WHERE source NOT LIKE 'whoop5_local_%'
+                   OR (sleep_score IS NOT NULL
+                       AND sleep_duration_minutes IS NOT NULL
+                       AND hrv_rmssd_milliseconds IS NOT NULL
+                       AND resting_heart_rate_bpm IS NOT NULL)
                 ORDER BY date_key ASC
                 """
             var statement: OpaquePointer?
@@ -597,9 +605,10 @@ final class WhoopStore: @unchecked Sendable {
         let latest: HistoricalRow
         /// Observed spacing of the strap's own historical record.
         let cadenceSeconds: Double
-        /// Total sleep time in WHOOP's sense: elapsed time the strap marked
-        /// asleep, excluding awakenings, not a count of seconds carrying a sample.
-        let asleepSeconds: Double
+        /// The detected sleep interval. A bounded `up` interval followed by
+        /// more sleep remains inside the same night; otherwise a false interim
+        /// state can shorten a still-running night by an hour.
+        let sleepSeconds: Double
         /// Observed samples over samples expected at the observed cadence.
         let sessionCoverage: Double
         /// Elapsed wake time banked after the session ended.
@@ -611,14 +620,14 @@ final class WhoopStore: @unchecked Sendable {
 
         var startedAt: Date { Date(timeIntervalSince1970: firstSleep.timestamp) }
         var endedAt: Date { Date(timeIntervalSince1970: lastSleep.timestamp) }
-        var durationMinutes: Double { asleepSeconds / 60.0 }
+        var durationMinutes: Double { sleepSeconds / 60.0 }
         var dateKey: String { WhoopStore.dateKeyFormatter.string(from: endedAt) }
         var secondsSinceLastAsleep: Double { latest.timestamp - lastSleep.timestamp }
 
         /// Evidence gates. A manual process never waives these: they decide
         /// whether the night can be honestly scored at all.
         var meetsEvidenceGates: Bool {
-            asleepSeconds >= 3 * 60 * 60 && sessionCoverage >= 0.50
+            sleepSeconds >= 3 * 60 * 60 && sessionCoverage >= 0.50
         }
 
         /// Timing gates. These only ask whether Harley has actually woken up
@@ -689,6 +698,25 @@ final class WhoopStore: @unchecked Sendable {
         return total
     }
 
+    /// A long `up` interval can occur inside a night and then return to the
+    /// strap's explicit asleep state. Keep that as one sleep session. A gap
+    /// longer than 90 minutes is treated as a separate sleep instead.
+    static func groupedAsleepRows(
+        _ asleepRows: [HistoricalRow],
+        maximumInterruptionSeconds: Double = 90 * 60
+    ) -> [[HistoricalRow]] {
+        var groups: [[HistoricalRow]] = []
+        for row in asleepRows {
+            if let last = groups.last?.last,
+               row.timestamp - last.timestamp <= maximumInterruptionSeconds {
+                groups[groups.count - 1].append(row)
+            } else {
+                groups.append([row])
+            }
+        }
+        return groups
+    }
+
     private enum SleepAnalysis {
         case noData
         case sleeping(Date)
@@ -739,35 +767,29 @@ final class WhoopStore: @unchecked Sendable {
         let latestDate = Date(timeIntervalSince1970: latest.timestamp)
         let sampleIsCurrent = abs(now.timeIntervalSince(latestDate)) <= 30 * 60
         let lastAsleepTimestamp = rows.last { $0.sleepState == 2 }?.timestamp
-        // Keep the pending state through short awakenings; the same 30-minute
-        // wake threshold below flips the UI and finalizes the night together.
-        let isSleeping = sampleIsCurrent && (
-            latest.sleepState == 2
-                || lastAsleepTimestamp.map { latest.timestamp - $0 < 30 * 60 } == true
-        )
+        // State 3 ("up") can occur inside a still-running night and is followed
+        // by more state-2 sleep in real captures. Keep dashes through it. The
+        // first current state-0 sample is the wake transition and should expose
+        // Process immediately rather than waiting another 30 minutes.
+        let recentSleepBeforeUp = lastAsleepTimestamp.map {
+            latest.timestamp - $0 <= 90 * 60
+        } == true
+        let isSleeping = sampleIsCurrent
+            && (latest.sleepState == 2
+                || (latest.sleepState == 3 && recentSleepBeforeUp))
         guard !isSleeping else { return .sleeping(latestDate) }
 
         let asleepRows = rows.filter { $0.sleepState == 2 }
         guard !asleepRows.isEmpty else { return .awake(latestDate, []) }
 
-        // The strap can briefly leave state 2 during an awakening. Treat asleep
-        // points less than 45 minutes apart as one night, then choose the latest.
-        var groups: [[HistoricalRow]] = []
-        for row in asleepRows {
-            if let last = groups.last?.last,
-               row.timestamp - last.timestamp <= 45 * 60 {
-                groups[groups.count - 1].append(row)
-            } else {
-                groups.append([row])
-            }
-        }
-        let cadence = Self.cadenceSeconds(of: rows)
+        let groups = Self.groupedAsleepRows(asleepRows)
         var candidates: [SleepCandidate] = []
         for session in groups {
             guard let firstSleep = session.first, let lastSleep = session.last else { continue }
             let sessionRows = rows.filter {
                 $0.timestamp >= firstSleep.timestamp && $0.timestamp <= lastSleep.timestamp
             }
+            let cadence = Self.cadenceSeconds(of: sessionRows)
             let wakeRows = rows.filter {
                 $0.timestamp > lastSleep.timestamp && $0.sleepState != 2
             }
@@ -778,7 +800,7 @@ final class WhoopStore: @unchecked Sendable {
                 lastSleep: lastSleep,
                 latest: latest,
                 cadenceSeconds: cadence,
-                asleepSeconds: Self.elapsedSeconds(across: session, cadence: cadence),
+                sleepSeconds: Self.elapsedSeconds(across: sessionRows, cadence: cadence),
                 sessionCoverage: Self.observedFraction(of: sessionRows, cadence: cadence),
                 wakeSeconds: Self.elapsedSeconds(across: wakeRows, cadence: cadence)
             ))
@@ -790,7 +812,10 @@ final class WhoopStore: @unchecked Sendable {
     /// followed by at least 30 minutes of banked wake data. A night that clears
     /// the evidence gates but not the wake gates is reported as pending so the
     /// dashboard can offer to finish it instead of silently showing dashes.
-    private func analyzeLatestSleep(now: Date = .now) -> WhoopSleepSnapshot {
+    private func analyzeLatestSleep(
+        now: Date = .now,
+        allowAutomaticFinalization: Bool = false
+    ) -> WhoopSleepSnapshot {
         switch analyze(now: now) {
         case .noData:
             return WhoopSleepSnapshot(
@@ -818,21 +843,27 @@ final class WhoopStore: @unchecked Sendable {
                 )
             }
 
-            // Bank every finished night still missing from the store, not just
-            // the newest one, so a night nobody opened the app for is not lost.
+            // Only a completed history offload may bank a night, and the four
+            // primary metrics are written together. The persisted completion
+            // marker also makes this safe immediately after an app relaunch;
+            // a newer partial chunk invalidates it until the next COMPLETE.
+            let coherentHistory = allowAutomaticFinalization
+                && completedOffloadCoversLatestHistory(database: database)
             var newest: DailyHealthRecord?
-            for candidate in candidates where candidate.meetsEvidenceGates && candidate.meetsWakeGates {
+            for candidate in candidates
+                where coherentHistory
+                    && candidate.meetsEvidenceGates
+                    && candidate.meetsWakeGates {
                 guard shouldDerive(dateKey: candidate.dateKey, database: database) else { continue }
                 let record = derivedRecord(for: candidate, now: now)
+                guard record.hasCompletePrimarySleepMetrics else { continue }
                 if upsertLocalDailyHealthRecord(record, database: database) {
                     newest = record
                 }
             }
 
             let pending: WhoopPendingSleep?
-            if latest.meetsEvidenceGates,
-               !latest.meetsWakeGates,
-               shouldDerive(dateKey: latest.dateKey, database: database) {
+            if shouldDerive(dateKey: latest.dateKey, database: database) {
                 pending = latest.pendingSleep
             } else {
                 pending = nil
@@ -877,6 +908,10 @@ final class WhoopStore: @unchecked Sendable {
                     return
                 }
                 let record = derivedRecord(for: candidate, now: now)
+                guard record.hasCompletePrimarySleepMetrics else {
+                    completion(.failure(.metricsStillLoading))
+                    return
+                }
                 guard upsertLocalDailyHealthRecord(record, database: database) else {
                     completion(.failure(.writeFailed))
                     return
@@ -947,15 +982,7 @@ final class WhoopStore: @unchecked Sendable {
         }
 
         let asleepRows = rows.filter { $0.sleepState == 2 }
-        var groups: [[HistoricalRow]] = []
-        for row in asleepRows {
-            if let previous = groups.last?.last,
-               row.timestamp - previous.timestamp <= 45 * 60 {
-                groups[groups.count - 1].append(row)
-            } else {
-                groups.append([row])
-            }
-        }
+        let groups = Self.groupedAsleepRows(asleepRows)
 
         let latest = rows[rows.count - 1]
         var sessions: [WhoopSleepSessionDiagnostics] = []
@@ -963,24 +990,41 @@ final class WhoopStore: @unchecked Sendable {
             guard let first = group.first, let last = group.last else { continue }
             let span = max(1.0, last.timestamp - first.timestamp)
             let inSession = rows.filter { $0.timestamp >= first.timestamp && $0.timestamp <= last.timestamp }
+            let sessionCadence = Self.cadenceSeconds(of: inSession)
             let wakeRows = rows.filter { $0.timestamp > last.timestamp && $0.sleepState != 2 }
-            let duration = Self.elapsedSeconds(across: group, cadence: cadence)
-            let coverage = Self.observedFraction(of: inSession, cadence: cadence)
-            let density = min(1.0, Double(inSession.count) / max(1.0, span / cadence))
-            let wake = Self.elapsedSeconds(across: wakeRows, cadence: cadence)
+            let duration = Self.elapsedSeconds(across: inSession, cadence: sessionCadence)
+            let coverage = Self.observedFraction(of: inSession, cadence: sessionCadence)
+            let density = min(1.0, Double(inSession.count) / max(1.0, span / sessionCadence))
+            let wake = Self.elapsedSeconds(across: wakeRows, cadence: sessionCadence)
             let since = latest.timestamp - last.timestamp
             let dateKey = Self.dateKeyFormatter.string(from: Date(timeIntervalSince1970: last.timestamp))
             let stored = storedSleepID(forDateKey: dateKey, database: database)
+            let storedComplete = !shouldDerive(dateKey: dateKey, database: database)
             let durationGate = duration >= 3 * 60 * 60
             let coverageGate = coverage >= 0.50
             let wakeGate = wake >= 30 * 60
             let elapsedGate = since >= 30 * 60
 
+            let candidate = SleepCandidate(
+                sessionRows: inSession,
+                asleepRows: group,
+                firstSleep: first,
+                lastSleep: last,
+                latest: latest,
+                cadenceSeconds: sessionCadence,
+                sleepSeconds: duration,
+                sessionCoverage: coverage,
+                wakeSeconds: wake
+            )
+            let metricsComplete = derivedRecord(for: candidate, now: now).hasCompletePrimarySleepMetrics
+
             let verdict: String
-            if stored != nil {
+            if storedComplete {
                 verdict = "already stored"
             } else if !durationGate || !coverageGate {
-                verdict = "blocked by evidence gates; no Process control offered"
+                verdict = "pending; Process visible, evidence incomplete"
+            } else if !metricsComplete {
+                verdict = "pending; Process visible, primary metrics still loading"
             } else if !wakeGate || !elapsedGate {
                 verdict = "pending; Process control visible"
             } else {
@@ -1049,7 +1093,10 @@ final class WhoopStore: @unchecked Sendable {
     ) -> DailyHealthRecord {
         let durationMinutes = candidate.durationMinutes
         let restingHR = restingHeartRate(rows: candidate.sessionRows, cadence: candidate.cadenceSeconds)
-        let hrv = nightlyRMSSD(rows: candidate.sessionRows.filter { $0.sleepState == 2 })
+        let hrv = nightlyRMSSD(
+            rows: candidate.sessionRows.filter { $0.sleepState == 2 },
+            cadence: candidate.cadenceSeconds
+        )
         let sleepScore = min(
             Self.maximumSleepScore,
             durationMinutes / Self.baselineSleepNeedMinutes * 100
@@ -1088,6 +1135,33 @@ final class WhoopStore: @unchecked Sendable {
               source.hasPrefix(Self.localSourcePrefix) else { return false }
         if source != Self.localSource { return true }
         return (1...4).contains { sqlite3_column_type(statement, Int32($0)) == SQLITE_NULL }
+    }
+
+    /// A HISTORY_COMPLETE packet is inserted after every sample in its offload
+    /// on the store's serial queue. If the newest sample was received later
+    /// than the newest completion, a chunk is still in flight and must not be
+    /// published yet. This survives relaunches without a second state store.
+    private func completedOffloadCoversLatestHistory(database: OpaquePointer) -> Bool {
+        let sql = """
+            SELECT
+                (SELECT MAX(p.received_at)
+                 FROM whoop_historical_sample h
+                 JOIN whoop_raw_packet p ON p.id = h.source_packet_id),
+                (SELECT MAX(received_at)
+                 FROM whoop_raw_packet
+                 WHERE frame_type = 49
+                   AND hex(substr(payload, 11, 1)) = '03')
+            """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return false }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW,
+              sqlite3_column_type(statement, 0) != SQLITE_NULL,
+              sqlite3_column_type(statement, 1) != SQLITE_NULL else { return false }
+        let newestSampleReceivedAt = sqlite3_column_double(statement, 0)
+        let newestCompletionReceivedAt = sqlite3_column_double(statement, 1)
+        return newestCompletionReceivedAt >= newestSampleReceivedAt
     }
 
     private func storedRecordSummary(forDateKey dateKey: String, database: OpaquePointer) -> String? {
@@ -1143,8 +1217,10 @@ final class WhoopStore: @unchecked Sendable {
         return means.min().map { $0.rounded() }
     }
 
-    private func nightlyRMSSD(rows: [HistoricalRow]) -> Double? {
+    private func nightlyRMSSD(rows: [HistoricalRow], cadence: Double) -> Double? {
         guard let start = rows.first?.timestamp, let end = rows.last?.timestamp else { return nil }
+        let expectedPerWindow = 5 * 60 / max(cadence, 1)
+        let required = max(5, Int((expectedPerWindow * 0.4).rounded()))
         var windowValues: [Double] = []
         var windowStart = start
         while windowStart <= end {
@@ -1152,7 +1228,7 @@ final class WhoopStore: @unchecked Sendable {
                 $0.timestamp >= windowStart && $0.timestamp < windowStart + 5 * 60
             }.flatMap(\.rrIntervals)
             let cleaned = cleanRR(raw)
-            if cleaned.values.count >= 20,
+            if cleaned.values.count >= required,
                let value = rmssd(values: cleaned.values, contiguous: cleaned.contiguous) {
                 windowValues.append(value)
             }

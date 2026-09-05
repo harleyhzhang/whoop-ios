@@ -13,7 +13,9 @@ struct RootView: View {
     @StateObject private var history = HealthHistoryModel()
     @Namespace private var rangeSelectionNamespace
 
-    private var referenceDate: Date { currentDate }
+    private var referenceDate: Date {
+        sleepMetricsArePending ? currentDate : (currentSleepRecord?.date ?? currentDate)
+    }
 
     /// A range is offered only when the history is long enough to mean anything
     /// by it. All history is always offered; it is the one range that describes
@@ -35,7 +37,8 @@ struct RootView: View {
     }
 
     private var currentSleepRecord: DailyHealthRecord? {
-        sleepMetricsArePending ? nil : todayRecord
+        guard !sleepMetricsArePending else { return nil }
+        return todayRecord ?? history.latestRecord
     }
 
     private var sleepMetricsArePending: Bool {
@@ -44,7 +47,7 @@ struct RootView: View {
             return true
         }
         #endif
-        return whoopCollector.isSleeping
+        return whoopCollector.isSleeping || displayedPendingSleep != nil
     }
 
     private var liveHeartRateValue: String {

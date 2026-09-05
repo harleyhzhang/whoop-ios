@@ -136,16 +136,24 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
                 self.cacheHeartRate(sample.heartRate, receivedAt: sample.receivedAt)
             }
         }
-        refreshSleepSnapshot(force: true)
+        // A completed offload already persisted before a relaunch is still a
+        // coherent source. The store verifies that completion marker covers
+        // the newest history row before it permits an automatic write.
+        refreshSleepSnapshot(force: true, allowAutomaticFinalization: true)
     }
 
-    private func refreshSleepSnapshot(force: Bool = false) {
+    private func refreshSleepSnapshot(
+        force: Bool = false,
+        allowAutomaticFinalization: Bool = false
+    ) {
         let now = Date()
         guard force || lastSleepAnalysisAt.map({ now.timeIntervalSince($0) >= 30 }) ?? true else {
             return
         }
         lastSleepAnalysisAt = now
-        store.refreshSleepSnapshot { [weak self] snapshot in
+        store.refreshSleepSnapshot(
+            allowAutomaticFinalization: allowAutomaticFinalization
+        ) { [weak self] snapshot in
             Task { @MainActor in
                 guard let self else { return }
                 self.isSleeping = snapshot.isSleeping
@@ -157,6 +165,11 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
                     NotificationCenter.default.post(name: .whoopDailyHealthUpdated, object: record)
                 }
             }
+        }
+        if force {
+            // Queue this after the forced analysis so the small on-device
+            // diagnostic always describes the state the dashboard just used.
+            store.writeSleepDiagnostics(now: now)
         }
     }
 
@@ -875,7 +888,15 @@ extension WhoopHandshakeProbe: CBPeripheralDelegate {
                             self.lastHistoricalAcknowledgementAt = nil
                             self.historicalWatchdogTask?.cancel()
                             self.historicalWatchdogTask = nil
-                            self.refreshSleepSnapshot(force: true)
+                            // HISTORY_COMPLETE is the only point where the
+                            // offload is a coherent whole. Automatic processing
+                            // is forbidden at chunk boundaries because that can
+                            // publish duration before the rest of the night,
+                            // HRV, and RHR have arrived.
+                            self.refreshSleepSnapshot(
+                                force: true,
+                                allowAutomaticFinalization: true
+                            )
                             self.scheduleHistoricalSync()
                         }
                     }

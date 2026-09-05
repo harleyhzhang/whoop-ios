@@ -39,8 +39,22 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.clintonst.sideload.sleep
         PRODUCT_NAME: WHOOP
+        PRODUCT_MODULE_NAME: Sleep
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: WM8M9CQZF8
     scheme:
-      testTargets: []
+      testTargets:
+        - SleepTests
+  SleepTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: SleepTests
+    dependencies:
+      - target: Sleep
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.clintonst.sideload.sleep.tests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/WHOOP.app/WHOOP"
+        BUNDLE_LOADER: "$(TEST_HOST)"

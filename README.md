@@ -151,21 +151,23 @@ The app should eventually cover the complete personal loop:
   the translucent future region shows through it, and that region extends past
   the domain so the round line cap overhanging the final point is dimmed with
   the rest of the line instead of staying at full strength on the right edge.
-- Sleep finalization separates detection from storage. The automatic path still
-  requires at least three hours asleep, 50% observed-session coverage, thirty
-  minutes of banked wake data, and thirty minutes since the last asleep sample.
-  A night that clears the first two evidence gates but not the two wake-timing
-  gates is now reported as pending instead of silently rendering dashes. The
-  dashboard shows a compact rounded `Sleep detected` card above the date with
-  its duration and a `Process` control. Pressing Process collapses the card's
-  actual height so the dashboard slides upward. It waives only the wake-timing
-  gates, because
-  the press is itself the proof that the night is over; it never waives the
-  evidence gates. The card is dismissed before the work starts and the finished
-  night is applied to the dashboard directly from the completion, so the values
-  land without waiting for a full history reload. A failed process restores the
-  line with a short reason and pulls history from the strap before the next
-  attempt. A night the automatic path finalizes first never shows the line.
+- Sleep finalization is an explicit state machine. Before a new sleep begins,
+  the dashboard continues showing the latest completed night. While the band
+  reports sleep—or the interim `up` state inside the same night—the four
+  sleep-derived metrics show dashes. As soon as the band reports awake, the
+  dashboard exposes the compact `Sleep detected` card and `Process` control;
+  that control remains until the night is stored or automatic processing wins.
+  The automatic path still requires at least three hours of detected sleep,
+  50% observed-session coverage, thirty minutes of banked wake data, and thirty
+  minutes since the last asleep sample. It additionally requires a persisted
+  HISTORY_COMPLETE marker covering the newest sample. Score, duration, HRV,
+  and RHR are derived first and committed only when all four are present, so a
+  partial night can never replace the previous one in the UI. Pressing Process
+  waives only the wake-timing gates; it never waives evidence or metric
+  completeness. A failed process restores the control with a short reason and
+  pulls history from the strap. Internal `up` intervals shorter than ninety
+  minutes remain part of one detected night, preventing a mid-sleep state from
+  splitting and prematurely storing the first portion.
 - Historical offload is self-healing. A missing final metadata packet no longer
   leaves the in-memory sync latch active forever: a watchdog resets and retries
   an offload after 90 seconds without history progress. Repeated chunk endings

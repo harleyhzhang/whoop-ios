@@ -19,6 +19,13 @@ struct DailyHealthRecord: Codable, Hashable, Identifiable, Sendable {
 
     var id: String { dateKey }
 
+    var hasCompletePrimarySleepMetrics: Bool {
+        sleepScore != nil
+            && sleepDurationMinutes != nil
+            && hrvRMSSDMilliseconds != nil
+            && restingHeartRateBPM != nil
+    }
+
     var date: Date {
         let pieces = dateKey.split(separator: "-").compactMap { Int($0) }
         guard pieces.count == 3 else { return .distantPast }

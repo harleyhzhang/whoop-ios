@@ -13,8 +13,19 @@
 		58D3DEF10CE8C5D53FB5BFE4 /* SleepApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64308BD33686D78BFFF93E84 /* SleepApp.swift */; };
 		5D38DACDD5370856CB867D42 /* WhoopStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34128B1D49DD54D79E178CB2 /* WhoopStore.swift */; };
 		C0CF86213AC8FAC5442DD2A9 /* HandshakeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1269FF26BC9F48E71BE0D707 /* HandshakeView.swift */; };
+		D53AF91AE001734DB878CFEE /* WhoopSleepStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FF6293132088FACDFF53B0A /* WhoopSleepStateTests.swift */; };
 		DB61E79F693E407B5086D2EF /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3ECA72687BA9425EEE8B38F8 /* RootView.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		50D26755D5F855E1C632BD7B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = D72287C3CA7F4F9C38CD605A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 9EB5F8D007CF094E489E734A;
+			remoteInfo = Sleep;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		1269FF26BC9F48E71BE0D707 /* HandshakeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandshakeView.swift; sourceTree = "<group>"; };
@@ -25,7 +36,9 @@
 		5AFDD42A4C609A6413DEEC82 /* SleepModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepModels.swift; sourceTree = "<group>"; };
 		64308BD33686D78BFFF93E84 /* SleepApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepApp.swift; sourceTree = "<group>"; };
 		8B0E32E21B547DBCEE5C67BB /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		8FF6293132088FACDFF53B0A /* WhoopSleepStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopSleepStateTests.swift; sourceTree = "<group>"; };
 		ACA50ED0CA372D20A4C7FCC2 /* WhoopHandshakeProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopHandshakeProbe.swift; sourceTree = "<group>"; };
+		B7B060DFAE4F0CF319ED266C /* SleepTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = SleepTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -33,6 +46,7 @@
 			isa = PBXGroup;
 			children = (
 				48C35C4BEADBA6D32F648C1E /* Sleep.app */,
+				B7B060DFAE4F0CF319ED266C /* SleepTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -53,9 +67,18 @@
 			isa = PBXGroup;
 			children = (
 				8B593030069B7CA3EB6D542E /* SleepApp */,
+				B87C1B89EE4AEC8D322AF1F7 /* SleepTests */,
 				DDCB9E698C64F40842261644 /* WhoopHandshakeApp */,
 				80DEC4C4DBB50CD649290670 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		B87C1B89EE4AEC8D322AF1F7 /* SleepTests */ = {
+			isa = PBXGroup;
+			children = (
+				8FF6293132088FACDFF53B0A /* WhoopSleepStateTests.swift */,
+			);
+			path = SleepTests;
 			sourceTree = "<group>";
 		};
 		DDCB9E698C64F40842261644 /* WhoopHandshakeApp */ = {
@@ -71,6 +94,24 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		9E8275851F9D82497491ACD0 /* SleepTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E90BF44CD43E6A84F10E65E6 /* Build configuration list for PBXNativeTarget "SleepTests" */;
+			buildPhases = (
+				AF266BAD8665F8C2633190A0 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				EA209D3BC8EB02DFE555133F /* PBXTargetDependency */,
+			);
+			name = SleepTests;
+			packageProductDependencies = (
+			);
+			productName = SleepTests;
+			productReference = B7B060DFAE4F0CF319ED266C /* SleepTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		9EB5F8D007CF094E489E734A /* Sleep */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = C595061A14557CD32B2A58E3 /* Build configuration list for PBXNativeTarget "Sleep" */;
@@ -120,6 +161,7 @@
 			projectRoot = "";
 			targets = (
 				9EB5F8D007CF094E489E734A /* Sleep */,
+				9E8275851F9D82497491ACD0 /* SleepTests */,
 			);
 		};
 /* End PBXProject section */
@@ -170,9 +212,41 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AF266BAD8665F8C2633190A0 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D53AF91AE001734DB878CFEE /* WhoopSleepStateTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		EA209D3BC8EB02DFE555133F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 9EB5F8D007CF094E489E734A /* Sleep */;
+			targetProxy = 50D26755D5F855E1C632BD7B /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		37C0CCE708B5E5F62E7F81DD /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.clintonst.sideload.sleep.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/WHOOP.app/WHOOP";
+			};
+			name = Debug;
+		};
 		76B2BAA8C9E44CE16EB7B5F6 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -186,6 +260,7 @@
 					"@executable_path/Frameworks",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.clintonst.sideload.sleep;
+				PRODUCT_MODULE_NAME = Sleep;
 				PRODUCT_NAME = WHOOP;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -205,9 +280,26 @@
 					"@executable_path/Frameworks",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.clintonst.sideload.sleep;
+				PRODUCT_MODULE_NAME = Sleep;
 				PRODUCT_NAME = WHOOP;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		8F32F06C59008761AA0A2E56 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.clintonst.sideload.sleep.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/WHOOP.app/WHOOP";
 			};
 			name = Release;
 		};
@@ -351,6 +443,15 @@
 			buildConfigurations = (
 				76B2BAA8C9E44CE16EB7B5F6 /* Debug */,
 				77FC8490614BE91CDCA76A74 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		E90BF44CD43E6A84F10E65E6 /* Build configuration list for PBXNativeTarget "SleepTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				37C0CCE708B5E5F62E7F81DD /* Debug */,
+				8F32F06C59008761AA0A2E56 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
