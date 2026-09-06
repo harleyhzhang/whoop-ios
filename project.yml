@@ -60,6 +60,7 @@ targets:
       - target: Sleep
     settings:
       base:
+        GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.clintonst.sideload.sleep.tests
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/WHOOP.app/WHOOP"
         BUNDLE_LOADER: "$(TEST_HOST)"

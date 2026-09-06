@@ -116,6 +116,21 @@ final class WhoopSleepStateTests: XCTestCase {
         ))
     }
 
+    func testRealtimeRMSSDUsesRobustMedianAcrossWindows() {
+        let packets = [
+            WhoopStore.RealtimeRRPacket(timestamp: 1, intervals: [900, 1_000]),
+            WhoopStore.RealtimeRRPacket(timestamp: 301, intervals: [900, 950]),
+            WhoopStore.RealtimeRRPacket(timestamp: 601, intervals: [800, 1_000]),
+        ]
+
+        let value = WhoopStore.rmssdFromRealtimePackets(
+            packets,
+            minimumDifferencesPerWindow: 1
+        )
+
+        XCTAssertEqual(value ?? 0, 100, accuracy: 0.001)
+    }
+
     func testRealtimeRMSSDPerformanceAcrossEightHourStream() {
         let packets = (0..<(8 * 60 * 60)).map { second in
             WhoopStore.RealtimeRRPacket(

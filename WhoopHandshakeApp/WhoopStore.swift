@@ -2169,10 +2169,12 @@ final class WhoopStore: @unchecked Sendable {
         return ranges
     }
 
-    /// Computes five-minute RMSSD windows while allowing continuity only inside
-    /// one packet or across packets delivered no more than three seconds apart.
-    /// Filtering an implausible beat breaks the chain rather than stitching its
-    /// neighbours together. Returning nil is preferable to false precision.
+    /// Computes artifact-filtered five-minute RMSSD windows while allowing
+    /// continuity only inside one packet or across packets delivered no more
+    /// than three seconds apart. An interval more than 20% from that window's
+    /// median breaks the chain rather than stitching its neighbours together.
+    /// The nightly median prevents a few motion-heavy windows from dominating
+    /// the result. Returning nil is preferable to false precision.
     static func rmssdFromRealtimePackets(
         _ packets: [RealtimeRRPacket],
         minimumDifferencesPerWindow: Int = 20
@@ -2186,36 +2188,49 @@ final class WhoopStore: @unchecked Sendable {
                 ? lhs.intervals.count < rhs.intervals.count
                 : lhs.timestamp < rhs.timestamp
         }
-        var differencesByWindow: [Int: [Double]] = [:]
-        var previousInterval: Double?
-        var previousPacketTimestamp: TimeInterval?
-        var previousWasValid = false
-
-        for packet in ordered {
-            let packetGap = previousPacketTimestamp.map { packet.timestamp - $0 }
-            for (index, interval) in packet.intervals.enumerated() {
-                let valid = (300...2_000).contains(interval)
-                let crossesPacket = index == 0
-                let adjacent = crossesPacket
-                    ? packetGap.map { $0 > 0 && $0 <= 3 } == true
-                    : true
-                if valid, previousWasValid, adjacent, let previousInterval {
-                    let difference = interval - previousInterval
-                    let window = Int(packet.timestamp / 300)
-                    differencesByWindow[window, default: []].append(difference * difference)
+        let windows = Dictionary(grouping: ordered) { Int($0.timestamp / 300) }
+        var values: [Double] = []
+        for packets in windows.values {
+            let plausible = packets
+                .flatMap(\.intervals)
+                .filter { (300...2_000).contains($0) }
+                .sorted()
+            guard !plausible.isEmpty else { continue }
+            let middle = plausible.count / 2
+            let median = plausible.count.isMultiple(of: 2)
+                ? (plausible[middle - 1] + plausible[middle]) / 2
+                : plausible[middle]
+            var squares: [Double] = []
+            var previousInterval: Double?
+            var previousPacketTimestamp: TimeInterval?
+            var previousWasValid = false
+            for packet in packets {
+                let packetGap = previousPacketTimestamp.map { packet.timestamp - $0 }
+                for (index, interval) in packet.intervals.enumerated() {
+                    let valid = (300...2_000).contains(interval)
+                        && median > 0
+                        && abs(interval - median) / median <= 0.20
+                    let adjacent = index > 0
+                        || packetGap.map { $0 > 0 && $0 <= 3 } == true
+                    if valid, previousWasValid, adjacent, let previousInterval {
+                        let difference = interval - previousInterval
+                        squares.append(difference * difference)
+                    }
+                    previousInterval = valid ? interval : nil
+                    previousWasValid = valid
                 }
-                previousInterval = valid ? interval : nil
-                previousWasValid = valid
+                previousPacketTimestamp = packet.timestamp
             }
-            previousPacketTimestamp = packet.timestamp
-        }
-
-        let values = differencesByWindow.values.compactMap { squares -> Double? in
-            guard squares.count >= minimumDifferencesPerWindow else { return nil }
-            return sqrt(squares.reduce(0, +) / Double(squares.count))
+            if squares.count >= minimumDifferencesPerWindow {
+                values.append(sqrt(squares.reduce(0, +) / Double(squares.count)))
+            }
         }
         guard !values.isEmpty else { return nil }
-        return values.reduce(0, +) / Double(values.count)
+        values.sort()
+        let middle = values.count / 2
+        return values.count.isMultiple(of: 2)
+            ? (values[middle - 1] + values[middle]) / 2
+            : values[middle]
     }
 
     /// Baseline sleep need, calibrated against WHOOP's own archived scores.
@@ -2243,7 +2258,7 @@ final class WhoopStore: @unchecked Sendable {
     /// the previous version instead of leaving stale values in the history.
     /// Anything with the `whoop5_local` prefix is ours; anything else is an
     /// archived WHOOP row and is authoritative.
-    static let localSource = "whoop5_local_v3"
+    static let localSource = "whoop5_local_v4"
     static let localSourcePrefix = "whoop5_local"
 
     private func upsertLocalDailyHealthRecord(
