@@ -702,6 +702,11 @@ final class WhoopStore: @unchecked Sendable {
         let sleepState: Int
     }
 
+    struct RealtimeRRPacket: Sendable {
+        let timestamp: TimeInterval
+        let intervals: [Double]
+    }
+
     private struct SleepCandidate {
         let sessionRows: [HistoricalRow]
         let asleepRows: [HistoricalRow]
@@ -905,7 +910,11 @@ final class WhoopStore: @unchecked Sendable {
                 lastSleep: lastSleep,
                 latest: latest,
                 cadenceSeconds: cadence,
-                sleepSeconds: Self.elapsedSeconds(across: sessionRows, cadence: cadence),
+                // State 3 ("up") may bridge two state-2 runs into one night,
+                // but it is not sleep. Group with the asleep rows and measure
+                // with the asleep rows; conflating those two operations added
+                // an hour-long up interval to a real night's duration.
+                sleepSeconds: Self.elapsedSeconds(across: session, cadence: cadence),
                 sessionCoverage: Self.observedFraction(of: sessionRows, cadence: cadence),
                 wakeSeconds: Self.elapsedSeconds(across: wakeRows, cadence: cadence)
             ))
@@ -1204,11 +1213,8 @@ final class WhoopStore: @unchecked Sendable {
         now: Date
     ) -> DailyHealthRecord {
         let durationMinutes = candidate.durationMinutes
-        let restingHR = restingHeartRate(rows: candidate.sessionRows, cadence: candidate.cadenceSeconds)
-        let hrv = nightlyRMSSD(
-            rows: candidate.sessionRows.filter { $0.sleepState == 2 },
-            cadence: candidate.cadenceSeconds
-        )
+        let restingHR = restingHeartRate(rows: candidate.asleepRows, cadence: candidate.cadenceSeconds)
+        let hrv = nightlyRMSSD(for: candidate)
         let sleepScore = min(
             Self.maximumSleepScore,
             durationMinutes / Self.baselineSleepNeedMinutes * 100
@@ -1227,11 +1233,11 @@ final class WhoopStore: @unchecked Sendable {
         )
     }
 
-    /// Whether a night still needs deriving. In addition to incomplete or
-    /// older-version local rows, a later coherent offload may repair a row when
-    /// it proves the same date contains materially more sleep. This is strictly
-    /// grow-only so a partial reconstruction can never shrink a good record.
-    /// An archived WHOOP row remains authoritative and is never overwritten.
+    /// Whether a night still needs deriving. Older local model versions are
+    /// always replaced once a coherent offload exists, including when a bug fix
+    /// correctly makes a metric smaller. Within one model version, a later
+    /// offload remains grow-only so a partial reconstruction cannot shrink a
+    /// settled record. Archived WHOOP rows remain authoritative.
     private func shouldDerive(candidate: SleepCandidate, database: OpaquePointer) -> Bool {
         let sql = """
             SELECT source, sleep_score, sleep_duration_minutes,
@@ -1346,62 +1352,124 @@ final class WhoopStore: @unchecked Sendable {
         return means.min().map { $0.rounded() }
     }
 
-    private func nightlyRMSSD(rows: [HistoricalRow], cadence: Double) -> Double? {
-        guard let start = rows.first?.timestamp, let end = rows.last?.timestamp else { return nil }
-        let expectedPerWindow = 5 * 60 / max(cadence, 1)
-        let required = max(5, Int((expectedPerWindow * 0.4).rounded()))
-        var windowValues: [Double] = []
-        var windowStart = start
-        while windowStart <= end {
-            let raw = rows.filter {
-                $0.timestamp >= windowStart && $0.timestamp < windowStart + 5 * 60
-            }.flatMap(\.rrIntervals)
-            let cleaned = cleanRR(raw)
-            if cleaned.values.count >= required,
-               let value = rmssd(values: cleaned.values, contiguous: cleaned.contiguous) {
-                windowValues.append(value)
-            }
-            windowStart += 5 * 60
+    /// RMSSD requires differences between adjacent heartbeats. Historical v18
+    /// records are too sparse to prove adjacency: almost every record contains
+    /// zero or one R-R value. Use the dense realtime stream and preserve packet
+    /// boundaries and device timestamps instead of flattening unrelated beats.
+    private func nightlyRMSSD(for candidate: SleepCandidate) -> Double? {
+        guard let database else { return nil }
+        let packets = realtimeRRPackets(
+            database: database,
+            from: candidate.firstSleep.timestamp - 30,
+            through: candidate.lastSleep.timestamp + 30
+        )
+        let ranges = Self.observedAsleepRanges(
+            rows: candidate.asleepRows,
+            cadence: candidate.cadenceSeconds
+        )
+        let asleepPackets = packets.filter { packet in
+            ranges.contains { packet.timestamp >= $0.lowerBound && packet.timestamp <= $0.upperBound }
         }
-        guard !windowValues.isEmpty else { return nil }
-        return windowValues.reduce(0, +) / Double(windowValues.count)
+        return Self.rmssdFromRealtimePackets(asleepPackets)
     }
 
-    private func cleanRR(_ raw: [Double]) -> (values: [Double], contiguous: [Bool]) {
-        let ranged = raw.enumerated().filter { (300...2_000).contains($0.element) }
-        var kept: [(offset: Int, element: Double)] = []
-        for index in ranged.indices {
-            let low = max(ranged.startIndex, index - 2)
-            let high = min(ranged.index(before: ranged.endIndex), index + 2)
-            let neighbours = (low...high).filter { $0 != index }.map { ranged[$0].element }.sorted()
-            guard neighbours.count >= 2 else {
-                kept.append(ranged[index])
-                continue
-            }
-            let median = neighbours.count.isMultiple(of: 2)
-                ? (neighbours[neighbours.count / 2 - 1] + neighbours[neighbours.count / 2]) / 2
-                : neighbours[neighbours.count / 2]
-            if median <= 0 || abs(ranged[index].element - median) / median <= 0.20 {
-                kept.append(ranged[index])
+    private func realtimeRRPackets(
+        database: OpaquePointer,
+        from start: TimeInterval,
+        through end: TimeInterval
+    ) -> [RealtimeRRPacket] {
+        let sql = """
+            SELECT COALESCE(device_timestamp, received_at), rr_intervals_json
+            FROM heart_rate_sample
+            WHERE COALESCE(device_timestamp, received_at) BETWEEN ? AND ?
+              AND source = 'whoop5_type40'
+              AND rr_intervals_json != '[]'
+            ORDER BY COALESCE(device_timestamp, received_at), received_at
+            """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return [] }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_double(statement, 1, start)
+        sqlite3_bind_double(statement, 2, end)
+        var packets: [RealtimeRRPacket] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let text = textColumn(statement, 1) ?? "[]"
+            let intervals = (try? JSONDecoder().decode([Double].self, from: Data(text.utf8))) ?? []
+            if !intervals.isEmpty {
+                packets.append(RealtimeRRPacket(
+                    timestamp: sqlite3_column_double(statement, 0),
+                    intervals: intervals
+                ))
             }
         }
-        let values = kept.map(\.element)
-        let contiguous = kept.indices.map { index in
-            index > 0 && kept[index].offset == kept[index - 1].offset + 1
-        }
-        return (values, contiguous)
+        return packets
     }
 
-    private func rmssd(values: [Double], contiguous: [Bool]) -> Double? {
-        guard values.count == contiguous.count else { return nil }
-        var sum = 0.0
-        var count = 0
-        for index in 1..<values.count where contiguous[index] {
-            let difference = values[index] - values[index - 1]
-            sum += difference * difference
-            count += 1
+    static func observedAsleepRanges(
+        rows: [HistoricalRow],
+        cadence: Double
+    ) -> [ClosedRange<TimeInterval>] {
+        guard let first = rows.first else { return [] }
+        let maximumGap = max(cadence * 4, 120)
+        var ranges: [ClosedRange<TimeInterval>] = []
+        var start = first.timestamp
+        var previous = first.timestamp
+        for row in rows.dropFirst() {
+            if row.timestamp - previous > maximumGap {
+                ranges.append((start - cadence)...(previous + cadence))
+                start = row.timestamp
+            }
+            previous = row.timestamp
         }
-        return count > 0 ? sqrt(sum / Double(count)) : nil
+        ranges.append((start - cadence)...(previous + cadence))
+        return ranges
+    }
+
+    /// Computes five-minute RMSSD windows while allowing continuity only inside
+    /// one packet or across packets delivered no more than three seconds apart.
+    /// Filtering an implausible beat breaks the chain rather than stitching its
+    /// neighbours together. Returning nil is preferable to false precision.
+    static func rmssdFromRealtimePackets(
+        _ packets: [RealtimeRRPacket],
+        minimumDifferencesPerWindow: Int = 20
+    ) -> Double? {
+        guard !packets.isEmpty else { return nil }
+        let ordered = packets.sorted { lhs, rhs in
+            lhs.timestamp == rhs.timestamp
+                ? lhs.intervals.count < rhs.intervals.count
+                : lhs.timestamp < rhs.timestamp
+        }
+        var differencesByWindow: [Int: [Double]] = [:]
+        var previousInterval: Double?
+        var previousPacketTimestamp: TimeInterval?
+        var previousWasValid = false
+
+        for packet in ordered {
+            let packetGap = previousPacketTimestamp.map { packet.timestamp - $0 }
+            for (index, interval) in packet.intervals.enumerated() {
+                let valid = (300...2_000).contains(interval)
+                let crossesPacket = index == 0
+                let adjacent = crossesPacket
+                    ? packetGap.map { $0 > 0 && $0 <= 3 } == true
+                    : true
+                if valid, previousWasValid, adjacent, let previousInterval {
+                    let difference = interval - previousInterval
+                    let window = Int(packet.timestamp / 300)
+                    differencesByWindow[window, default: []].append(difference * difference)
+                }
+                previousInterval = valid ? interval : nil
+                previousWasValid = valid
+            }
+            previousPacketTimestamp = packet.timestamp
+        }
+
+        let values = differencesByWindow.values.compactMap { squares -> Double? in
+            guard squares.count >= minimumDifferencesPerWindow else { return nil }
+            return sqrt(squares.reduce(0, +) / Double(squares.count))
+        }
+        guard !values.isEmpty else { return nil }
+        return values.reduce(0, +) / Double(values.count)
     }
 
     /// Baseline sleep need, calibrated against WHOOP's own archived scores.
@@ -1429,7 +1497,7 @@ final class WhoopStore: @unchecked Sendable {
     /// the previous version instead of leaving stale values in the history.
     /// Anything with the `whoop5_local` prefix is ours; anything else is an
     /// archived WHOOP row and is authoritative.
-    static let localSource = "whoop5_local_v2"
+    static let localSource = "whoop5_local_v3"
     static let localSourcePrefix = "whoop5_local"
 
     private func upsertLocalDailyHealthRecord(

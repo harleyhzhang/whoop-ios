@@ -31,6 +31,74 @@ final class WhoopSleepStateTests: XCTestCase {
         XCTAssertEqual(WhoopStore.groupedAsleepRows(rows).count, 2)
     }
 
+    func testUpStateGroupsOneNightButDoesNotAddSleepDuration() {
+        let asleep = [
+            row(at: 0, state: 2),
+            row(at: 60, state: 2),
+            row(at: 20 * 60, state: 2),
+            row(at: 21 * 60, state: 2),
+        ]
+
+        XCTAssertEqual(WhoopStore.groupedAsleepRows(asleep).count, 1)
+        XCTAssertEqual(
+            WhoopStore.elapsedSeconds(across: asleep, cadence: 60),
+            4 * 60,
+            accuracy: 0.001
+        )
+    }
+
+    func testObservedAsleepRangesExcludeLongUpInterval() {
+        let asleep = [
+            row(at: 0, state: 2),
+            row(at: 60, state: 2),
+            row(at: 20 * 60, state: 2),
+            row(at: 21 * 60, state: 2),
+        ]
+
+        let ranges = WhoopStore.observedAsleepRanges(rows: asleep, cadence: 60)
+
+        XCTAssertEqual(ranges.count, 2)
+        XCTAssertFalse(ranges.contains { $0.contains(10 * 60) })
+    }
+
+    func testRealtimeRMSSDUsesAdjacentPackets() {
+        let packets = [
+            WhoopStore.RealtimeRRPacket(timestamp: 1, intervals: [900, 1_000]),
+            WhoopStore.RealtimeRRPacket(timestamp: 2, intervals: [900]),
+        ]
+
+        let value = WhoopStore.rmssdFromRealtimePackets(
+            packets,
+            minimumDifferencesPerWindow: 2
+        )
+
+        XCTAssertNotNil(value)
+        XCTAssertEqual(value ?? 0, 100, accuracy: 0.001)
+    }
+
+    func testRealtimeRMSSDBreaksContinuityAcrossDeliveryGap() {
+        let packets = [
+            WhoopStore.RealtimeRRPacket(timestamp: 1, intervals: [900]),
+            WhoopStore.RealtimeRRPacket(timestamp: 10, intervals: [1_000]),
+        ]
+
+        XCTAssertNil(WhoopStore.rmssdFromRealtimePackets(
+            packets,
+            minimumDifferencesPerWindow: 1
+        ))
+    }
+
+    func testRealtimeRMSSDRejectsImplausibleBeatWithoutBridgingIt() {
+        let packets = [
+            WhoopStore.RealtimeRRPacket(timestamp: 1, intervals: [900, 100, 1_000]),
+        ]
+
+        XCTAssertNil(WhoopStore.rmssdFromRealtimePackets(
+            packets,
+            minimumDifferencesPerWindow: 1
+        ))
+    }
+
     func testPrimaryMetricsMustArriveTogether() {
         let partial = DailyHealthRecord(
             dateKey: "2026-09-05",
