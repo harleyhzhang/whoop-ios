@@ -1091,7 +1091,7 @@ private struct SleepDetectedCardHeightTransition: ViewModifier, Animatable {
 
     var progress: CGFloat
 
-    var animatableData: CGFloat {
+    nonisolated var animatableData: CGFloat {
         get { progress }
         set { progress = newValue }
     }

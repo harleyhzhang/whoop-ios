@@ -47,6 +47,7 @@ struct WhoopDecodedRealtime: Sendable {
     let deviceTimestamp: UInt32?
     let heartRate: Int
     let rrIntervals: [UInt16]
+    let source: String
 }
 
 struct WhoopDecodedHistorical: Sendable {
@@ -217,6 +218,11 @@ struct WhoopLatestHeartRateSample: Sendable {
     let receivedAt: Date
 }
 
+struct WhoopPacketPersistenceResult: Sendable {
+    let success: Bool
+    let deliverySequence: Int64?
+}
+
 /// Append-only local evidence store for direct WHOOP packets and derived samples.
 /// Raw frames are retained so later protocol improvements never require another capture.
 final class WhoopStore: @unchecked Sendable {
@@ -227,7 +233,7 @@ final class WhoopStore: @unchecked Sendable {
     private var database: OpaquePointer?
     private var nextDeliverySequence: Int64 = 1
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
-    private static let schemaVersion = 2
+    private static let schemaVersion = 3
     private static let decoderVersion = 2
 
     init(databaseURL: URL? = nil, runBackgroundDecoding: Bool = true) {
@@ -251,8 +257,10 @@ final class WhoopStore: @unchecked Sendable {
         frameType: UInt8?,
         realtime: WhoopDecodedRealtime?,
         historical: WhoopDecodedHistorical?,
+        offloadSessionID: String? = nil,
+        deduplicateTransportRetries: Bool = true,
         deliveredAt: Date = .now,
-        completion: @escaping @Sendable (Bool) -> Void
+        completion: @escaping @Sendable (WhoopPacketPersistenceResult) -> Void
     ) {
         queue.async { [self] in
             completion(insert(
@@ -262,8 +270,60 @@ final class WhoopStore: @unchecked Sendable {
                 frameType: frameType,
                 realtime: realtime,
                 historical: historical,
+                offloadSessionID: offloadSessionID,
+                deduplicateTransportRetries: deduplicateTransportRetries,
                 deliveredAt: deliveredAt
             ))
+        }
+    }
+
+    func beginHistoricalOffload(
+        peripheralID: UUID,
+        startedAt: Date = .now,
+        completion: @escaping @Sendable (String?) -> Void
+    ) {
+        queue.async { [self] in
+            guard let database else {
+                completion(nil)
+                return
+            }
+            let sessionID = UUID().uuidString
+            let sql = """
+                INSERT INTO whoop_offload_session
+                (id, peripheral_id, started_at, status)
+                VALUES (?, ?, ?, 'in_progress')
+                """
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+                  let statement else {
+                completion(nil)
+                return
+            }
+            bind(sessionID, to: 1, in: statement)
+            bind(peripheralID.uuidString, to: 2, in: statement)
+            sqlite3_bind_double(statement, 3, startedAt.timeIntervalSince1970)
+            let succeeded = sqlite3_step(statement) == SQLITE_DONE
+            sqlite3_finalize(statement)
+            completion(succeeded ? sessionID : nil)
+        }
+    }
+
+    func abandonHistoricalOffload(_ sessionID: String, reason: String) {
+        queue.async { [self] in
+            guard let database else { return }
+            let sql = """
+                UPDATE whoop_offload_session
+                SET status = 'abandoned', completed_at = ?, failure_reason = ?
+                WHERE id = ? AND status = 'in_progress'
+                """
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+                  let statement else { return }
+            defer { sqlite3_finalize(statement) }
+            sqlite3_bind_double(statement, 1, Date().timeIntervalSince1970)
+            bind(reason, to: 2, in: statement)
+            bind(sessionID, to: 3, in: statement)
+            _ = sqlite3_step(statement)
         }
     }
 
@@ -417,6 +477,7 @@ final class WhoopStore: @unchecked Sendable {
             database!,
             sql: "SELECT COALESCE(MAX(delivery_sequence), 0) FROM whoop_raw_packet"
         )) ?? 0) + 1
+        abandonInterruptedOffloads()
         backfillHistoricalSamplesIfNeeded()
         if databaseURLOverride == nil { importBundledHistory() }
     }
@@ -548,6 +609,35 @@ final class WhoopStore: @unchecked Sendable {
                     value TEXT NOT NULL
                 )
                 """)
+        case 3:
+            return addColumnIfNeeded(
+                table: "whoop_raw_packet",
+                column: "offload_session_id",
+                declaration: "TEXT"
+            )
+            && execute("""
+                CREATE TABLE IF NOT EXISTS whoop_offload_session (
+                    id TEXT PRIMARY KEY,
+                    peripheral_id TEXT NOT NULL,
+                    started_at REAL NOT NULL,
+                    completed_at REAL,
+                    first_sequence INTEGER,
+                    last_sequence INTEGER,
+                    completion_sequence INTEGER,
+                    completion_packet_id TEXT,
+                    status TEXT NOT NULL CHECK(status IN ('in_progress','complete','abandoned')),
+                    failure_reason TEXT,
+                    FOREIGN KEY(completion_packet_id) REFERENCES whoop_raw_packet(id)
+                )
+                """)
+            && execute("CREATE INDEX IF NOT EXISTS whoop_offload_session_status ON whoop_offload_session(status, completed_at)")
+            && execute("CREATE INDEX IF NOT EXISTS whoop_raw_packet_offload_session ON whoop_raw_packet(offload_session_id, delivery_sequence)")
+            && execute("""
+                UPDATE whoop_offload_session
+                SET status = 'abandoned', completed_at = strftime('%s','now'),
+                    failure_reason = 'app relaunched before completion'
+                WHERE status = 'in_progress'
+                """)
         default:
             return false
         }
@@ -574,8 +664,20 @@ final class WhoopStore: @unchecked Sendable {
               let url = Bundle.main.url(forResource: "whoop-history", withExtension: "json"),
               let data = try? Data(contentsOf: url),
               let records = try? JSONDecoder().decode([DailyHealthRecord].self, from: data) else { return }
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        guard metadataValue(database: database, key: "bundled-history-sha256") != digest else {
+            return
+        }
         guard execute("BEGIN IMMEDIATE") else { return }
         for record in records where !upsertDailyHealthRecord(record, database: database) {
+            execute("ROLLBACK")
+            return
+        }
+        guard setMetadataValue(
+            database: database,
+            key: "bundled-history-sha256",
+            value: digest
+        ) else {
             execute("ROLLBACK")
             return
         }
@@ -634,9 +736,13 @@ final class WhoopStore: @unchecked Sendable {
         frameType: UInt8?,
         realtime: WhoopDecodedRealtime?,
         historical: WhoopDecodedHistorical?,
+        offloadSessionID: String?,
+        deduplicateTransportRetries: Bool,
         deliveredAt: Date
-    ) -> Bool {
-        guard let database else { return false }
+    ) -> WhoopPacketPersistenceResult {
+        guard let database else {
+            return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
+        }
         let packetID = UUID().uuidString
         let receivedAt = deliveredAt.timeIntervalSince1970
         let deliverySequence = nextDeliverySequence
@@ -646,13 +752,18 @@ final class WhoopStore: @unchecked Sendable {
             characteristicUUID: characteristicUUID,
             payload: packet
         )
-        guard execute("BEGIN IMMEDIATE") else { return false }
-        switch registerPacketSignature(
-            database: database,
-            signature: signature,
-            packetID: packetID,
-            receivedAt: receivedAt
-        ) {
+        guard execute("BEGIN IMMEDIATE") else {
+            return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
+        }
+        let registration: PacketSignatureRegistration = deduplicateTransportRetries
+            ? registerPacketSignature(
+                database: database,
+                signature: signature,
+                packetID: packetID,
+                receivedAt: receivedAt
+            )
+            : .new
+        switch registration {
         case .duplicate(let canonicalPacketID):
             guard decodePacketIfNeeded(
                 database: database,
@@ -661,33 +772,47 @@ final class WhoopStore: @unchecked Sendable {
                 historical: historical
             ) else {
                 execute("ROLLBACK")
-                return false
+                return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
             }
-            guard execute("COMMIT") else { execute("ROLLBACK"); return false }
-            return true
+            guard updateOffloadProgress(
+                database: database,
+                sessionID: offloadSessionID,
+                deliverySequence: deliverySequence,
+                packetID: canonicalPacketID,
+                packet: packet
+            ) else {
+                execute("ROLLBACK")
+                return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
+            }
+            guard execute("COMMIT") else {
+                execute("ROLLBACK")
+                return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
+            }
+            return WhoopPacketPersistenceResult(success: true, deliverySequence: deliverySequence)
         case .new:
             break
         case .failed:
             execute("ROLLBACK")
-            return false
+            return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
         }
         guard insertPacket(
             database: database,
             id: packetID,
             receivedAt: receivedAt,
             deliverySequence: deliverySequence,
+            offloadSessionID: offloadSessionID,
             peripheralID: peripheralID.uuidString,
             characteristicUUID: characteristicUUID,
             frameType: frameType,
             payload: packet
         ) else {
             execute("ROLLBACK")
-            return false
+            return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
         }
         if let realtime,
            !insertRealtime(database: database, packetID: packetID, receivedAt: receivedAt, realtime: realtime) {
             execute("ROLLBACK")
-            return false
+            return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
         }
         guard decodePacketIfNeeded(
             database: database,
@@ -696,10 +821,23 @@ final class WhoopStore: @unchecked Sendable {
             historical: historical
         ) else {
             execute("ROLLBACK")
-            return false
+            return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
         }
-        guard execute("COMMIT") else { execute("ROLLBACK"); return false }
-        return true
+        guard updateOffloadProgress(
+            database: database,
+            sessionID: offloadSessionID,
+            deliverySequence: deliverySequence,
+            packetID: packetID,
+            packet: packet
+        ) else {
+            execute("ROLLBACK")
+            return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
+        }
+        guard execute("COMMIT") else {
+            execute("ROLLBACK")
+            return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
+        }
+        return WhoopPacketPersistenceResult(success: true, deliverySequence: deliverySequence)
     }
 
     private enum PacketSignatureRegistration {
@@ -775,6 +913,7 @@ final class WhoopStore: @unchecked Sendable {
         id: String,
         receivedAt: TimeInterval,
         deliverySequence: Int64,
+        offloadSessionID: String?,
         peripheralID: String,
         characteristicUUID: String,
         frameType: UInt8?,
@@ -782,9 +921,9 @@ final class WhoopStore: @unchecked Sendable {
     ) -> Bool {
         let sql = """
             INSERT INTO whoop_raw_packet
-            (id, received_at, delivery_sequence, peripheral_id,
+            (id, received_at, delivery_sequence, offload_session_id, peripheral_id,
              characteristic_uuid, frame_type, protocol_version, crc_valid, payload)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
@@ -793,23 +932,79 @@ final class WhoopStore: @unchecked Sendable {
         bind(id, to: 1, in: statement)
         sqlite3_bind_double(statement, 2, receivedAt)
         sqlite3_bind_int64(statement, 3, deliverySequence)
-        bind(peripheralID, to: 4, in: statement)
-        bind(characteristicUUID, to: 5, in: statement)
+        bind(offloadSessionID, to: 4, in: statement)
+        bind(peripheralID, to: 5, in: statement)
+        bind(characteristicUUID, to: 6, in: statement)
         if let frameType {
-            sqlite3_bind_int(statement, 6, Int32(frameType))
-        } else {
-            sqlite3_bind_null(statement, 6)
-        }
-        if payload.count > 9 {
-            sqlite3_bind_int(statement, 7, Int32(payload[9]))
+            sqlite3_bind_int(statement, 7, Int32(frameType))
         } else {
             sqlite3_bind_null(statement, 7)
         }
-        sqlite3_bind_int(statement, 8, WhoopFrameIntegrity.isValid(payload) ? 1 : 0)
+        if payload.count > 9 {
+            sqlite3_bind_int(statement, 8, Int32(payload[9]))
+        } else {
+            sqlite3_bind_null(statement, 8)
+        }
+        sqlite3_bind_int(statement, 9, WhoopFrameIntegrity.isValid(payload) ? 1 : 0)
         _ = payload.withUnsafeBytes {
-            sqlite3_bind_blob(statement, 9, $0.baseAddress, Int32($0.count), Self.transient)
+            sqlite3_bind_blob(statement, 10, $0.baseAddress, Int32($0.count), Self.transient)
         }
         return sqlite3_step(statement) == SQLITE_DONE
+    }
+
+    private func updateOffloadProgress(
+        database: OpaquePointer,
+        sessionID: String?,
+        deliverySequence: Int64,
+        packetID: String,
+        packet: Data
+    ) -> Bool {
+        guard let sessionID else { return true }
+        let isCompletion = packet.count > 10
+            && (packet[8] == 49 || packet[8] == 56)
+            && packet[10] == 3
+            && WhoopFrameIntegrity.isValid(packet)
+        let sql: String
+        if isCompletion {
+            sql = """
+                UPDATE whoop_offload_session
+                SET first_sequence = COALESCE(first_sequence, ?),
+                    last_sequence = ?, completion_sequence = ?,
+                    completion_packet_id = ?, completed_at = ?,
+                    status = 'complete', failure_reason = NULL
+                WHERE id = ? AND status = 'in_progress'
+                """
+        } else {
+            sql = """
+                UPDATE whoop_offload_session
+                SET first_sequence = COALESCE(first_sequence, ?), last_sequence = ?
+                WHERE id = ? AND status = 'in_progress'
+                """
+        }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return false }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, deliverySequence)
+        sqlite3_bind_int64(statement, 2, deliverySequence)
+        if isCompletion {
+            sqlite3_bind_int64(statement, 3, deliverySequence)
+            bind(packetID, to: 4, in: statement)
+            sqlite3_bind_double(statement, 5, Date().timeIntervalSince1970)
+            bind(sessionID, to: 6, in: statement)
+        } else {
+            bind(sessionID, to: 3, in: statement)
+        }
+        return sqlite3_step(statement) == SQLITE_DONE && sqlite3_changes(database) == 1
+    }
+
+    private func abandonInterruptedOffloads() {
+        _ = execute("""
+            UPDATE whoop_offload_session
+            SET status = 'abandoned', completed_at = strftime('%s','now'),
+                failure_reason = 'app relaunched before completion'
+            WHERE status = 'in_progress'
+            """)
     }
 
     private func decodePacketIfNeeded(
@@ -1020,7 +1215,7 @@ final class WhoopStore: @unchecked Sendable {
         let sql = """
             INSERT INTO heart_rate_sample
             (id, source_packet_id, received_at, device_timestamp, heart_rate, rr_intervals_json, source)
-            VALUES (?, ?, ?, ?, ?, ?, 'whoop5_type40')
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
@@ -1037,6 +1232,7 @@ final class WhoopStore: @unchecked Sendable {
         sqlite3_bind_int(statement, 5, Int32(realtime.heartRate))
         let rrJSON = "[" + realtime.rrIntervals.map(String.init).joined(separator: ",") + "]"
         bind(rrJSON, to: 6, in: statement)
+        bind(realtime.source, to: 7, in: statement)
         return sqlite3_step(statement) == SQLITE_DONE
     }
 
@@ -1460,6 +1656,13 @@ final class WhoopStore: @unchecked Sendable {
         queue.async { [self] in completion(buildSleepDiagnostics(now: now)) }
     }
 
+    func completedOffloadCoversLatestHistoryForTesting() -> Bool {
+        queue.sync { [self] in
+            guard let database else { return false }
+            return completedOffloadCoversLatestHistory(database: database)
+        }
+    }
+
     /// Writes the diagnostics beside the database as JSON. Small and overwritten
     /// each time, so it can be pulled off the device when the dashboard shows
     /// nothing and the reason is not obvious.
@@ -1683,20 +1886,18 @@ final class WhoopStore: @unchecked Sendable {
         return candidateDurationMinutes > existingDurationMinutes + 1
     }
 
-    /// A HISTORY_COMPLETE packet is inserted after every sample in its offload
-    /// on the store's serial queue. If the newest sample was received later
-    /// than the newest completion, a chunk is still in flight and must not be
-    /// published yet. This survives relaunches without a second state store.
+    /// A completed offload is an explicit, CRC-validated durable session. The
+    /// completion sequence must cover every unique historical sample currently
+    /// stored; a later partial offload invalidates the proof until it completes.
     private func completedOffloadCoversLatestHistory(database: OpaquePointer) -> Bool {
         let sql = """
             SELECT
-                (SELECT MAX(p.received_at)
+                (SELECT COALESCE(MAX(p.delivery_sequence), 0)
                  FROM whoop_historical_sample h
                  JOIN whoop_raw_packet p ON p.id = h.source_packet_id),
-                (SELECT MAX(received_at)
-                 FROM whoop_raw_packet
-                 WHERE frame_type = 49
-                   AND hex(substr(payload, 11, 1)) = '03')
+                (SELECT MAX(completion_sequence)
+                 FROM whoop_offload_session
+                 WHERE status = 'complete')
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
@@ -1705,9 +1906,9 @@ final class WhoopStore: @unchecked Sendable {
         guard sqlite3_step(statement) == SQLITE_ROW,
               sqlite3_column_type(statement, 0) != SQLITE_NULL,
               sqlite3_column_type(statement, 1) != SQLITE_NULL else { return false }
-        let newestSampleReceivedAt = sqlite3_column_double(statement, 0)
-        let newestCompletionReceivedAt = sqlite3_column_double(statement, 1)
-        return newestCompletionReceivedAt >= newestSampleReceivedAt
+        let newestSampleSequence = sqlite3_column_int64(statement, 0)
+        let newestCompletionSequence = sqlite3_column_int64(statement, 1)
+        return newestCompletionSequence >= newestSampleSequence
     }
 
     private func storedRecordSummary(forDateKey dateKey: String, database: OpaquePointer) -> String? {
@@ -1769,31 +1970,45 @@ final class WhoopStore: @unchecked Sendable {
     /// boundaries and device timestamps instead of flattening unrelated beats.
     private func nightlyRMSSD(for candidate: SleepCandidate) -> Double? {
         guard let database else { return nil }
-        let packets = realtimeRRPackets(
+        let standardPackets = realtimeRRPackets(
             database: database,
             from: candidate.firstSleep.timestamp - 30,
-            through: candidate.lastSleep.timestamp + 30
+            through: candidate.lastSleep.timestamp + 30,
+            source: "standard_2a37"
         )
         let ranges = Self.observedAsleepRanges(
             rows: candidate.asleepRows,
             cadence: candidate.cadenceSeconds
         )
-        let asleepPackets = packets.filter { packet in
+        let asleepStandardPackets = standardPackets.filter { packet in
             ranges.contains { packet.timestamp >= $0.lowerBound && packet.timestamp <= $0.upperBound }
         }
-        return Self.rmssdFromRealtimePackets(asleepPackets)
+        if let value = Self.rmssdFromRealtimePackets(asleepStandardPackets) {
+            return value
+        }
+        let proprietaryPackets = realtimeRRPackets(
+            database: database,
+            from: candidate.firstSleep.timestamp - 30,
+            through: candidate.lastSleep.timestamp + 30,
+            source: "whoop5_type40"
+        )
+        let asleepProprietaryPackets = proprietaryPackets.filter { packet in
+            ranges.contains { packet.timestamp >= $0.lowerBound && packet.timestamp <= $0.upperBound }
+        }
+        return Self.rmssdFromRealtimePackets(asleepProprietaryPackets)
     }
 
     private func realtimeRRPackets(
         database: OpaquePointer,
         from start: TimeInterval,
-        through end: TimeInterval
+        through end: TimeInterval,
+        source: String
     ) -> [RealtimeRRPacket] {
         let sql = """
             SELECT COALESCE(device_timestamp, received_at), rr_intervals_json
             FROM heart_rate_sample
             WHERE COALESCE(device_timestamp, received_at) BETWEEN ? AND ?
-              AND source = 'whoop5_type40'
+              AND source = ?
               AND rr_intervals_json != '[]'
             ORDER BY COALESCE(device_timestamp, received_at), received_at
             """
@@ -1803,6 +2018,7 @@ final class WhoopStore: @unchecked Sendable {
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_double(statement, 1, start)
         sqlite3_bind_double(statement, 2, end)
+        bind(source, to: 3, in: statement)
         var packets: [RealtimeRRPacket] = []
         while sqlite3_step(statement) == SQLITE_ROW {
             let text = textColumn(statement, 1) ?? "[]"

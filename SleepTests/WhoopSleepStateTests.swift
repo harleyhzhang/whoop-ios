@@ -3,6 +3,14 @@ import SQLite3
 @testable import Sleep
 
 final class WhoopSleepStateTests: XCTestCase {
+    func testReconnectPolicyBacksOffAndCapsAtOneMinute() {
+        XCTAssertEqual(WhoopReconnectPolicy.delaySeconds(forAttempt: 0), 2)
+        XCTAssertEqual(WhoopReconnectPolicy.delaySeconds(forAttempt: 1), 4)
+        XCTAssertEqual(WhoopReconnectPolicy.delaySeconds(forAttempt: 4), 32)
+        XCTAssertEqual(WhoopReconnectPolicy.delaySeconds(forAttempt: 5), 60)
+        XCTAssertEqual(WhoopReconnectPolicy.delaySeconds(forAttempt: 100), 60)
+    }
+
     func testInterimUpStateDoesNotSplitOneNight() {
         var firstRun: [WhoopStore.HistoricalRow] = []
         for timestamp in stride(from: 0.0, through: 7 * 60 * 60, by: 20.0) {
@@ -230,11 +238,82 @@ final class WhoopSleepStateTests: XCTestCase {
         var database: OpaquePointer?
         XCTAssertEqual(sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READONLY, nil), SQLITE_OK)
         defer { if let database { sqlite3_close(database) } }
-        XCTAssertEqual(scalarInt(database, sql: "PRAGMA user_version"), 2)
+        XCTAssertEqual(scalarInt(database, sql: "PRAGMA user_version"), 3)
         XCTAssertEqual(scalarInt(
             database,
             sql: "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('whoop_decode_result','whoop_ppg_packet','whoop_store_metadata')"
         ), 3)
+    }
+
+    func testOffloadCompletionRequiresDurableCRCValidCompletionAfterHistory() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = WhoopStore(
+            databaseURL: directory.appendingPathComponent("sleep.sqlite3"),
+            runBackgroundDecoding: false
+        )
+        let peripheral = UUID()
+        let sessionID = try await beginOffload(store: store, peripheral: peripheral)
+        let history = version18Frame(timestamp: 1_800_000_000, sleepState: 2)
+
+        let historyResult = try await append(
+            history,
+            store: store,
+            peripheral: peripheral,
+            sessionID: sessionID
+        )
+        XCTAssertTrue(historyResult.success)
+        XCTAssertFalse(store.completedOffloadCoversLatestHistoryForTesting())
+
+        let completion = metadataFrame(type: 3)
+        let completionResult = try await append(
+            completion,
+            store: store,
+            peripheral: peripheral,
+            sessionID: sessionID
+        )
+        XCTAssertTrue(completionResult.success)
+        XCTAssertTrue(store.completedOffloadCoversLatestHistoryForTesting())
+
+        let newerHistoryResult = try await append(
+            version18Frame(timestamp: 1_800_000_100, sleepState: 2),
+            store: store,
+            peripheral: peripheral,
+            sessionID: nil
+        )
+        XCTAssertTrue(newerHistoryResult.success)
+        XCTAssertFalse(store.completedOffloadCoversLatestHistoryForTesting())
+    }
+
+    func testCorruptCompletionCannotCompleteOffload() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = WhoopStore(
+            databaseURL: directory.appendingPathComponent("sleep.sqlite3"),
+            runBackgroundDecoding: false
+        )
+        let peripheral = UUID()
+        let sessionID = try await beginOffload(store: store, peripheral: peripheral)
+        let historyResult = try await append(
+            version18Frame(timestamp: 1_800_000_000, sleepState: 2),
+            store: store,
+            peripheral: peripheral,
+            sessionID: sessionID
+        )
+        XCTAssertTrue(historyResult.success)
+        var completion = metadataFrame(type: 3)
+        completion[11] ^= 0x01
+        let completionResult = try await append(
+            completion,
+            store: store,
+            peripheral: peripheral,
+            sessionID: sessionID
+        )
+        XCTAssertTrue(completionResult.success)
+
+        XCTAssertFalse(store.completedOffloadCoversLatestHistoryForTesting())
     }
 
     private func row(at timestamp: TimeInterval, state: Int) -> WhoopStore.HistoricalRow {
@@ -278,6 +357,81 @@ final class WhoopSleepStateTests: XCTestCase {
         bytes[86] = UInt8(truncatingIfNeeded: crc >> 16)
         bytes[87] = UInt8(truncatingIfNeeded: crc >> 24)
         return Data(bytes)
+    }
+
+    private func version18Frame(timestamp: UInt32, sleepState: UInt8) -> Data {
+        var bytes = framedPacket(length: 124, type: 47, version: 18)
+        bytes[15] = UInt8(truncatingIfNeeded: timestamp)
+        bytes[16] = UInt8(truncatingIfNeeded: timestamp >> 8)
+        bytes[17] = UInt8(truncatingIfNeeded: timestamp >> 16)
+        bytes[18] = UInt8(truncatingIfNeeded: timestamp >> 24)
+        bytes[22] = 55
+        bytes[81] = sleepState << 4
+        finishChecksums(&bytes)
+        return Data(bytes)
+    }
+
+    private func metadataFrame(type: UInt8) -> Data {
+        var bytes = framedPacket(length: 16, type: 49, version: 1)
+        bytes[10] = type
+        finishChecksums(&bytes)
+        return Data(bytes)
+    }
+
+    private func framedPacket(length: Int, type: UInt8, version: UInt8) -> [UInt8] {
+        var bytes = [UInt8](repeating: 0, count: length)
+        bytes[0] = 0xAA
+        bytes[1] = 0x01
+        let declared = UInt16(length - 8)
+        bytes[2] = UInt8(truncatingIfNeeded: declared)
+        bytes[3] = UInt8(truncatingIfNeeded: declared >> 8)
+        bytes[4] = 0x01
+        bytes[8] = type
+        bytes[9] = version
+        return bytes
+    }
+
+    private func finishChecksums(_ bytes: inout [UInt8]) {
+        let headerCRC = WhoopFrameIntegrity.crc16Modbus(bytes[0..<6])
+        bytes[6] = UInt8(truncatingIfNeeded: headerCRC)
+        bytes[7] = UInt8(truncatingIfNeeded: headerCRC >> 8)
+        let payloadEnd = bytes.count - 4
+        let crc = WhoopFrameIntegrity.crc32(bytes[8..<payloadEnd])
+        bytes[payloadEnd] = UInt8(truncatingIfNeeded: crc)
+        bytes[payloadEnd + 1] = UInt8(truncatingIfNeeded: crc >> 8)
+        bytes[payloadEnd + 2] = UInt8(truncatingIfNeeded: crc >> 16)
+        bytes[payloadEnd + 3] = UInt8(truncatingIfNeeded: crc >> 24)
+    }
+
+    private func beginOffload(store: WhoopStore, peripheral: UUID) async throws -> String {
+        let result: String? = await withCheckedContinuation { continuation in
+            store.beginHistoricalOffload(peripheralID: peripheral) {
+                continuation.resume(returning: $0)
+            }
+        }
+        return try XCTUnwrap(result)
+    }
+
+    private func append(
+        _ packet: Data,
+        store: WhoopStore,
+        peripheral: UUID,
+        sessionID: String?
+    ) async throws -> WhoopPacketPersistenceResult {
+        let result: WhoopPacketPersistenceResult = await withCheckedContinuation { continuation in
+            store.append(
+                packet: packet,
+                peripheralID: peripheral,
+                characteristicUUID: "FD4B0003",
+                frameType: packet.count > 8 ? packet[8] : nil,
+                realtime: nil,
+                historical: WhoopDecodedHistorical.decode(packet),
+                offloadSessionID: sessionID
+            ) {
+                continuation.resume(returning: $0)
+            }
+        }
+        return result
     }
 
     private func scalarInt(_ database: OpaquePointer?, sql: String) -> Int64 {

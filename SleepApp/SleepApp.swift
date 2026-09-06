@@ -14,12 +14,14 @@ struct SleepApp: App {
     }
 }
 
+@MainActor
 final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate {
     static let shared = WhoopNotificationManager()
 
     private let center = UNUserNotificationCenter.current()
     private let defaults = UserDefaults.standard
     private var isConfigured = false
+    private var pendingIdentifiers: Set<String> = []
 
     private enum Key {
         static let lastMorningSleepID = "WhoopNotifications.lastMorningSleepID"
@@ -38,9 +40,11 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
         guard !isConfigured else { return }
         isConfigured = true
         center.delegate = self
-        center.getNotificationSettings { [weak self] settings in
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let settings = await center.notificationSettings()
             guard settings.authorizationStatus == .notDetermined else { return }
-            self?.center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+            _ = try? await center.requestAuthorization(options: [.alert, .sound])
         }
 
         #if DEBUG
@@ -60,13 +64,17 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
         let hrv = record.hrvRMSSDMilliseconds.map { "\(Int($0.rounded())) ms" } ?? "—"
         let rhr = record.restingHeartRateBPM.map { "\(Int($0.rounded())) BPM" } ?? "—"
 
-        defaults.set(sleepID, forKey: Key.lastMorningSleepID)
-        defaults.set(record.dateKey, forKey: Key.lastMorningDateKey)
+        let identifier = "whoop.morning.\(record.dateKey)"
+        guard !pendingIdentifiers.contains(identifier) else { return }
         deliver(
-            identifier: "whoop.morning.\(record.dateKey)",
+            identifier: identifier,
             title: "Sleep ready",
             body: "\(score) · \(duration) · HRV \(hrv) · RHR \(rhr)"
-        )
+        ) { [weak self] succeeded in
+            guard succeeded, let self else { return }
+            self.defaults.set(sleepID, forKey: Key.lastMorningSleepID)
+            self.defaults.set(record.dateKey, forKey: Key.lastMorningDateKey)
+        }
     }
 
     func observeBatteryLevel(_ rawLevel: Int) {
@@ -94,27 +102,27 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
            let previous,
            previous < 100,
            !fullChargeNotified {
-            deliver(
-                identifier: eventIdentifier("whoop.battery.charged"),
+            scheduleBatteryNotification(
+                identifier: "whoop.battery.charged",
                 title: "WHOOP fully charged",
-                body: "Battery reached 100%."
+                body: "Battery reached 100%.",
+                successKey: Key.fullChargeNotified
             )
-            fullChargeNotified = true
         } else if level <= 10, !sentLow10 {
-            deliver(
-                identifier: eventIdentifier("whoop.battery.low.10"),
+            scheduleBatteryNotification(
+                identifier: "whoop.battery.low.10",
                 title: "WHOOP battery at \(level)%",
-                body: "Charge now to avoid missing data."
+                body: "Charge now to avoid missing data.",
+                successKey: Key.sentLow10,
+                additionalSuccessKey: Key.sentLow20
             )
-            sentLow10 = true
-            sentLow20 = true
         } else if level <= 20, !sentLow20 {
-            deliver(
-                identifier: eventIdentifier("whoop.battery.low.20"),
+            scheduleBatteryNotification(
+                identifier: "whoop.battery.low.20",
                 title: "WHOOP battery at \(level)%",
-                body: "Charge before tonight."
+                body: "Charge before tonight.",
+                successKey: Key.sentLow20
             )
-            sentLow20 = true
         }
 
         defaults.set(level, forKey: Key.lastBatteryLevel)
@@ -123,14 +131,49 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
         defaults.set(fullChargeNotified, forKey: Key.fullChargeNotified)
     }
 
-    private func deliver(identifier: String, title: String, body: String) {
+    private func scheduleBatteryNotification(
+        identifier: String,
+        title: String,
+        body: String,
+        successKey: String,
+        additionalSuccessKey: String? = nil
+    ) {
+        guard !pendingIdentifiers.contains(identifier) else { return }
+        deliver(identifier: identifier, title: title, body: body) { [weak self] succeeded in
+            guard succeeded, let self else { return }
+            self.defaults.set(true, forKey: successKey)
+            if let additionalSuccessKey {
+                self.defaults.set(true, forKey: additionalSuccessKey)
+            }
+        }
+    }
+
+    private func deliver(
+        identifier: String,
+        title: String,
+        body: String,
+        completion: @escaping @MainActor (Bool) -> Void = { _ in }
+    ) {
+        pendingIdentifiers.insert(identifier)
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.sound = .default
         content.threadIdentifier = "whoop.local"
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
-        center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: trigger))
+        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let succeeded: Bool
+            do {
+                try await center.add(request)
+                succeeded = true
+            } catch {
+                succeeded = false
+            }
+            pendingIdentifiers.remove(identifier)
+            completion(succeeded)
+        }
     }
 
     private static func formatDuration(_ minutes: Double) -> String {
@@ -138,11 +181,11 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
         return "\(roundedMinutes / 60)h \(String(format: "%02d", roundedMinutes % 60))m"
     }
 
-    private func eventIdentifier(_ prefix: String) -> String {
+    private nonisolated func eventIdentifier(_ prefix: String) -> String {
         "\(prefix).\(UUID().uuidString)"
     }
 
-    func userNotificationCenter(
+    nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
