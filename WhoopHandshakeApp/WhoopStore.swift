@@ -2,6 +2,47 @@ import CryptoKit
 import Foundation
 import SQLite3
 
+enum WhoopFrameIntegrity {
+    static func isValid(_ data: Data) -> Bool {
+        let bytes = [UInt8](data)
+        guard bytes.count >= 12,
+              bytes[0] == 0xAA,
+              Int(UInt16(bytes[2]) | (UInt16(bytes[3]) << 8)) + 8 == bytes.count else {
+            return false
+        }
+        let expectedHeader = UInt16(bytes[6]) | (UInt16(bytes[7]) << 8)
+        guard crc16Modbus(bytes[0..<6]) == expectedHeader else { return false }
+        let payloadEnd = bytes.count - 4
+        let expected = UInt32(bytes[payloadEnd])
+            | (UInt32(bytes[payloadEnd + 1]) << 8)
+            | (UInt32(bytes[payloadEnd + 2]) << 16)
+            | (UInt32(bytes[payloadEnd + 3]) << 24)
+        return crc32(bytes[8..<payloadEnd]) == expected
+    }
+
+    static func crc32<S: Sequence>(_ bytes: S) -> UInt32 where S.Element == UInt8 {
+        var crc: UInt32 = 0xFFFF_FFFF
+        for byte in bytes {
+            crc ^= UInt32(byte)
+            for _ in 0..<8 {
+                crc = crc & 1 == 1 ? (crc >> 1) ^ 0xEDB8_8320 : crc >> 1
+            }
+        }
+        return crc ^ 0xFFFF_FFFF
+    }
+
+    static func crc16Modbus<S: Sequence>(_ bytes: S) -> UInt16 where S.Element == UInt8 {
+        var crc: UInt16 = 0xFFFF
+        for byte in bytes {
+            crc ^= UInt16(byte)
+            for _ in 0..<8 {
+                crc = crc & 1 == 1 ? (crc >> 1) ^ 0xA001 : crc >> 1
+            }
+        }
+        return crc
+    }
+}
+
 struct WhoopDecodedRealtime: Sendable {
     let deviceTimestamp: UInt32?
     let heartRate: Int
@@ -22,7 +63,7 @@ struct WhoopDecodedHistorical: Sendable {
         guard bytes.count == 124,
               bytes[8] == 47,
               bytes[9] == 18,
-              frameCRCIsValid(bytes) else { return nil }
+              WhoopFrameIntegrity.isValid(data) else { return nil }
         let timestamp = UInt32(bytes[15])
             | (UInt32(bytes[16]) << 8)
             | (UInt32(bytes[17]) << 16)
@@ -51,28 +92,42 @@ struct WhoopDecodedHistorical: Sendable {
         if bytes.count != 124 { return "length \(bytes.count), expected 124" }
         if bytes[8] != 47 { return "type \(bytes[8]), expected 47" }
         if bytes[9] != 18 { return "version \(bytes[9]), expected 18" }
-        if !frameCRCIsValid(bytes) { return "CRC mismatch" }
+        if !WhoopFrameIntegrity.isValid(data) { return "CRC mismatch" }
         return "decodes"
     }
+}
 
-    private static func frameCRCIsValid(_ bytes: [UInt8]) -> Bool {
-        let payloadEnd = bytes.count - 4
-        let expected = UInt32(bytes[payloadEnd])
-            | (UInt32(bytes[payloadEnd + 1]) << 8)
-            | (UInt32(bytes[payloadEnd + 2]) << 16)
-            | (UInt32(bytes[payloadEnd + 3]) << 24)
-        return crc32(Array(bytes[8..<payloadEnd])) == expected
-    }
+struct WhoopDecodedPPG: Sendable, Equatable {
+    let sampleAt: Date
+    let channel: Int
+    let samples: [Int16]
 
-    private static func crc32(_ bytes: [UInt8]) -> UInt32 {
-        var crc: UInt32 = 0xFFFF_FFFF
-        for byte in bytes {
-            crc ^= UInt32(byte)
-            for _ in 0..<8 {
-                crc = crc & 1 == 1 ? (crc >> 1) ^ 0xEDB8_8320 : crc >> 1
-            }
+    /// WHOOP 5 v26 is one second of 24 Hz AC-coupled optical data. Channel is
+    /// retained as the firmware's raw non-zero index; no LED colour or
+    /// physiological unit is invented. Harley's current firmware uses values
+    /// beyond the 1...26 range seen in the original reference captures.
+    static func decode(_ data: Data) -> WhoopDecodedPPG? {
+        let bytes = [UInt8](data)
+        guard bytes.count == 88,
+              bytes[8] == 47,
+              bytes[9] == 26,
+              bytes[21] != 0,
+              WhoopFrameIntegrity.isValid(data) else { return nil }
+        let timestamp = UInt32(bytes[15])
+            | (UInt32(bytes[16]) << 8)
+            | (UInt32(bytes[17]) << 16)
+            | (UInt32(bytes[18]) << 24)
+        var samples: [Int16] = []
+        samples.reserveCapacity(24)
+        for offset in stride(from: 27, to: 75, by: 2) {
+            let raw = UInt16(bytes[offset]) | (UInt16(bytes[offset + 1]) << 8)
+            samples.append(Int16(bitPattern: raw))
         }
-        return crc ^ 0xFFFF_FFFF
+        return WhoopDecodedPPG(
+            sampleAt: Date(timeIntervalSince1970: TimeInterval(timestamp)),
+            channel: Int(bytes[21]),
+            samples: samples
+        )
     }
 }
 
@@ -168,11 +223,19 @@ final class WhoopStore: @unchecked Sendable {
     static let shared = WhoopStore()
 
     private let queue = DispatchQueue(label: "com.clintonst.sleep.whoop-store", qos: .utility)
+    private let databaseURLOverride: URL?
     private var database: OpaquePointer?
+    private var nextDeliverySequence: Int64 = 1
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+    private static let schemaVersion = 2
+    private static let decoderVersion = 2
 
-    private init() {
+    init(databaseURL: URL? = nil, runBackgroundDecoding: Bool = true) {
+        databaseURLOverride = databaseURL
         queue.sync { openDatabase() }
+        if runBackgroundDecoding {
+            queue.async { [self] in backfillVersion26PPG() }
+        }
     }
 
     deinit {
@@ -188,6 +251,7 @@ final class WhoopStore: @unchecked Sendable {
         frameType: UInt8?,
         realtime: WhoopDecodedRealtime?,
         historical: WhoopDecodedHistorical?,
+        deliveredAt: Date = .now,
         completion: @escaping @Sendable (Bool) -> Void
     ) {
         queue.async { [self] in
@@ -197,7 +261,8 @@ final class WhoopStore: @unchecked Sendable {
                 characteristicUUID: characteristicUUID,
                 frameType: frameType,
                 realtime: realtime,
-                historical: historical
+                historical: historical,
+                deliveredAt: deliveredAt
             ))
         }
     }
@@ -318,8 +383,17 @@ final class WhoopStore: @unchecked Sendable {
     }
 
     private func openDatabase() {
-        guard let directory = Self.databaseDirectory() else { return }
-        let url = directory.appendingPathComponent("sleep.sqlite3")
+        let url: URL
+        if let databaseURLOverride {
+            url = databaseURLOverride
+            try? FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+        } else {
+            guard let directory = Self.databaseDirectory() else { return }
+            url = directory.appendingPathComponent("sleep.sqlite3")
+        }
         guard sqlite3_open_v2(
             url.path,
             &database,
@@ -333,7 +407,42 @@ final class WhoopStore: @unchecked Sendable {
         let opened = execute("PRAGMA journal_mode=WAL")
             && execute("PRAGMA foreign_keys=ON")
             && execute("PRAGMA busy_timeout=5000")
-            && execute("""
+            && migrateSchema()
+        guard opened else {
+            if let database { sqlite3_close(database) }
+            database = nil
+            return
+        }
+        nextDeliverySequence = ((try? scalarInt(
+            database!,
+            sql: "SELECT COALESCE(MAX(delivery_sequence), 0) FROM whoop_raw_packet"
+        )) ?? 0) + 1
+        backfillHistoricalSamplesIfNeeded()
+        if databaseURLOverride == nil { importBundledHistory() }
+    }
+
+    private func migrateSchema() -> Bool {
+        guard let database,
+              let current = try? scalarInt(database, sql: "PRAGMA user_version"),
+              current <= Self.schemaVersion else { return false }
+        guard current < Self.schemaVersion else { return true }
+        for version in (Int(current) + 1)...Self.schemaVersion {
+            guard execute("BEGIN IMMEDIATE"), applyMigration(version) else {
+                execute("ROLLBACK")
+                return false
+            }
+            guard execute("PRAGMA user_version = \(version)"), execute("COMMIT") else {
+                execute("ROLLBACK")
+                return false
+            }
+        }
+        return true
+    }
+
+    private func applyMigration(_ version: Int) -> Bool {
+        switch version {
+        case 1:
+            return execute("""
                 CREATE TABLE IF NOT EXISTS whoop_raw_packet (
                     id TEXT PRIMARY KEY,
                     received_at REAL NOT NULL,
@@ -391,13 +500,73 @@ final class WhoopStore: @unchecked Sendable {
                     imported_at REAL NOT NULL
                 )
                 """)
-        guard opened else {
-            if let database { sqlite3_close(database) }
-            database = nil
-            return
+        case 2:
+            return addColumnIfNeeded(
+                table: "whoop_raw_packet",
+                column: "delivery_sequence",
+                declaration: "INTEGER"
+            )
+            && addColumnIfNeeded(
+                table: "whoop_raw_packet",
+                column: "protocol_version",
+                declaration: "INTEGER"
+            )
+            && addColumnIfNeeded(
+                table: "whoop_raw_packet",
+                column: "crc_valid",
+                declaration: "INTEGER"
+            )
+            && execute("CREATE INDEX IF NOT EXISTS whoop_raw_packet_delivery_sequence ON whoop_raw_packet(delivery_sequence)")
+            && execute("""
+                CREATE TABLE IF NOT EXISTS whoop_decode_result (
+                    source_packet_id TEXT NOT NULL,
+                    decoder_version INTEGER NOT NULL,
+                    protocol_version INTEGER,
+                    stream TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    error TEXT,
+                    decoded_at REAL NOT NULL,
+                    PRIMARY KEY(source_packet_id, decoder_version),
+                    FOREIGN KEY(source_packet_id) REFERENCES whoop_raw_packet(id)
+                )
+                """)
+            && execute("CREATE INDEX IF NOT EXISTS whoop_decode_result_status ON whoop_decode_result(decoder_version, status)")
+            && execute("""
+                CREATE TABLE IF NOT EXISTS whoop_ppg_packet (
+                    source_packet_id TEXT PRIMARY KEY,
+                    sample_at REAL NOT NULL,
+                    channel INTEGER NOT NULL CHECK(channel BETWEEN 1 AND 255),
+                    sample_rate_hz REAL NOT NULL,
+                    samples_i16_le BLOB NOT NULL,
+                    FOREIGN KEY(source_packet_id) REFERENCES whoop_raw_packet(id)
+                )
+                """)
+            && execute("CREATE INDEX IF NOT EXISTS whoop_ppg_packet_sample_at ON whoop_ppg_packet(sample_at, channel)")
+            && execute("""
+                CREATE TABLE IF NOT EXISTS whoop_store_metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """)
+        default:
+            return false
         }
-        backfillHistoricalSamplesIfNeeded()
-        importBundledHistory()
+    }
+
+    private func addColumnIfNeeded(
+        table: String,
+        column: String,
+        declaration: String
+    ) -> Bool {
+        guard let database else { return false }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, "PRAGMA table_info(\(table))", -1, &statement, nil) == SQLITE_OK,
+              let statement else { return false }
+        defer { sqlite3_finalize(statement) }
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if textColumn(statement, 1) == column { return true }
+        }
+        return execute("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
     }
 
     private func importBundledHistory() {
@@ -464,12 +633,16 @@ final class WhoopStore: @unchecked Sendable {
         characteristicUUID: String,
         frameType: UInt8?,
         realtime: WhoopDecodedRealtime?,
-        historical: WhoopDecodedHistorical?
+        historical: WhoopDecodedHistorical?,
+        deliveredAt: Date
     ) -> Bool {
         guard let database else { return false }
         let packetID = UUID().uuidString
-        let receivedAt = Date().timeIntervalSince1970
+        let receivedAt = deliveredAt.timeIntervalSince1970
+        let deliverySequence = nextDeliverySequence
+        nextDeliverySequence += 1
         let signature = Self.packetSignature(
+            peripheralID: peripheralID,
             characteristicUUID: characteristicUUID,
             payload: packet
         )
@@ -480,7 +653,16 @@ final class WhoopStore: @unchecked Sendable {
             packetID: packetID,
             receivedAt: receivedAt
         ) {
-        case .duplicate:
+        case .duplicate(let canonicalPacketID):
+            guard decodePacketIfNeeded(
+                database: database,
+                packetID: canonicalPacketID,
+                packet: packet,
+                historical: historical
+            ) else {
+                execute("ROLLBACK")
+                return false
+            }
             guard execute("COMMIT") else { execute("ROLLBACK"); return false }
             return true
         case .new:
@@ -493,6 +675,7 @@ final class WhoopStore: @unchecked Sendable {
             database: database,
             id: packetID,
             receivedAt: receivedAt,
+            deliverySequence: deliverySequence,
             peripheralID: peripheralID.uuidString,
             characteristicUUID: characteristicUUID,
             frameType: frameType,
@@ -506,8 +689,12 @@ final class WhoopStore: @unchecked Sendable {
             execute("ROLLBACK")
             return false
         }
-        if let historical,
-           !insertHistorical(database: database, packetID: packetID, sample: historical) {
+        guard decodePacketIfNeeded(
+            database: database,
+            packetID: packetID,
+            packet: packet,
+            historical: historical
+        ) else {
             execute("ROLLBACK")
             return false
         }
@@ -517,7 +704,7 @@ final class WhoopStore: @unchecked Sendable {
 
     private enum PacketSignatureRegistration {
         case new
-        case duplicate
+        case duplicate(String)
         case failed
     }
 
@@ -543,7 +730,17 @@ final class WhoopStore: @unchecked Sendable {
         let updateResult = sqlite3_step(update)
         sqlite3_finalize(update)
         guard updateResult == SQLITE_DONE else { return .failed }
-        if sqlite3_changes(database) > 0 { return .duplicate }
+        if sqlite3_changes(database) > 0 {
+            let selectSQL = "SELECT first_packet_id FROM whoop_packet_replay WHERE signature = ?"
+            var select: OpaquePointer?
+            guard sqlite3_prepare_v2(database, selectSQL, -1, &select, nil) == SQLITE_OK,
+                  let select else { return .failed }
+            defer { sqlite3_finalize(select) }
+            bind(signature, to: 1, in: select)
+            guard sqlite3_step(select) == SQLITE_ROW,
+                  let packetID = textColumn(select, 0) else { return .failed }
+            return .duplicate(packetID)
+        }
 
         let insertSQL = """
             INSERT INTO whoop_packet_replay
@@ -560,8 +757,14 @@ final class WhoopStore: @unchecked Sendable {
         return sqlite3_step(insert) == SQLITE_DONE ? .new : .failed
     }
 
-    static func packetSignature(characteristicUUID: String, payload: Data) -> Data {
-        var input = Data(characteristicUUID.uppercased().utf8)
+    static func packetSignature(
+        peripheralID: UUID,
+        characteristicUUID: String,
+        payload: Data
+    ) -> Data {
+        var input = Data(peripheralID.uuidString.lowercased().utf8)
+        input.append(0)
+        input.append(contentsOf: characteristicUUID.uppercased().utf8)
         input.append(0)
         input.append(payload)
         return Data(SHA256.hash(data: input))
@@ -571,6 +774,7 @@ final class WhoopStore: @unchecked Sendable {
         database: OpaquePointer,
         id: String,
         receivedAt: TimeInterval,
+        deliverySequence: Int64,
         peripheralID: String,
         characteristicUUID: String,
         frameType: UInt8?,
@@ -578,8 +782,9 @@ final class WhoopStore: @unchecked Sendable {
     ) -> Bool {
         let sql = """
             INSERT INTO whoop_raw_packet
-            (id, received_at, peripheral_id, characteristic_uuid, frame_type, payload)
-            VALUES (?, ?, ?, ?, ?, ?)
+            (id, received_at, delivery_sequence, peripheral_id,
+             characteristic_uuid, frame_type, protocol_version, crc_valid, payload)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
@@ -587,16 +792,222 @@ final class WhoopStore: @unchecked Sendable {
         defer { sqlite3_finalize(statement) }
         bind(id, to: 1, in: statement)
         sqlite3_bind_double(statement, 2, receivedAt)
-        bind(peripheralID, to: 3, in: statement)
-        bind(characteristicUUID, to: 4, in: statement)
+        sqlite3_bind_int64(statement, 3, deliverySequence)
+        bind(peripheralID, to: 4, in: statement)
+        bind(characteristicUUID, to: 5, in: statement)
         if let frameType {
-            sqlite3_bind_int(statement, 5, Int32(frameType))
+            sqlite3_bind_int(statement, 6, Int32(frameType))
         } else {
-            sqlite3_bind_null(statement, 5)
+            sqlite3_bind_null(statement, 6)
         }
+        if payload.count > 9 {
+            sqlite3_bind_int(statement, 7, Int32(payload[9]))
+        } else {
+            sqlite3_bind_null(statement, 7)
+        }
+        sqlite3_bind_int(statement, 8, WhoopFrameIntegrity.isValid(payload) ? 1 : 0)
         _ = payload.withUnsafeBytes {
-            sqlite3_bind_blob(statement, 6, $0.baseAddress, Int32($0.count), Self.transient)
+            sqlite3_bind_blob(statement, 9, $0.baseAddress, Int32($0.count), Self.transient)
         }
+        return sqlite3_step(statement) == SQLITE_DONE
+    }
+
+    private func decodePacketIfNeeded(
+        database: OpaquePointer,
+        packetID: String,
+        packet: Data,
+        historical: WhoopDecodedHistorical?
+    ) -> Bool {
+        guard packet.count > 9, packet[8] == 47 else { return true }
+        if decodeResultExists(database: database, packetID: packetID) { return true }
+        let protocolVersion = Int(packet[9])
+        let stream: String
+        let status: String
+        let error: String?
+
+        if let historical = historical ?? WhoopDecodedHistorical.decode(packet) {
+            guard insertHistorical(database: database, packetID: packetID, sample: historical) else {
+                return false
+            }
+            stream = "historical_summary"
+            status = "decoded"
+            error = nil
+        } else if let ppg = WhoopDecodedPPG.decode(packet) {
+            guard insertPPG(database: database, packetID: packetID, packet: ppg) else {
+                return false
+            }
+            stream = "optical_ppg"
+            status = "decoded"
+            error = nil
+        } else {
+            stream = "historical_unknown"
+            status = WhoopFrameIntegrity.isValid(packet) ? "unsupported" : "rejected"
+            error = WhoopFrameIntegrity.isValid(packet)
+                ? "unsupported type-47 version \(protocolVersion), length \(packet.count)"
+                : "CRC mismatch"
+        }
+        return insertDecodeResult(
+            database: database,
+            packetID: packetID,
+            protocolVersion: protocolVersion,
+            stream: stream,
+            status: status,
+            error: error
+        )
+    }
+
+    private func decodeResultExists(database: OpaquePointer, packetID: String) -> Bool {
+        let sql = "SELECT 1 FROM whoop_decode_result WHERE source_packet_id = ? AND decoder_version = ?"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return false }
+        defer { sqlite3_finalize(statement) }
+        bind(packetID, to: 1, in: statement)
+        sqlite3_bind_int(statement, 2, Int32(Self.decoderVersion))
+        return sqlite3_step(statement) == SQLITE_ROW
+    }
+
+    private func insertDecodeResult(
+        database: OpaquePointer,
+        packetID: String,
+        protocolVersion: Int,
+        stream: String,
+        status: String,
+        error: String?
+    ) -> Bool {
+        let sql = """
+            INSERT OR IGNORE INTO whoop_decode_result
+            (source_packet_id, decoder_version, protocol_version, stream, status, error, decoded_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return false }
+        defer { sqlite3_finalize(statement) }
+        bind(packetID, to: 1, in: statement)
+        sqlite3_bind_int(statement, 2, Int32(Self.decoderVersion))
+        sqlite3_bind_int(statement, 3, Int32(protocolVersion))
+        bind(stream, to: 4, in: statement)
+        bind(status, to: 5, in: statement)
+        bind(error, to: 6, in: statement)
+        sqlite3_bind_double(statement, 7, Date().timeIntervalSince1970)
+        return sqlite3_step(statement) == SQLITE_DONE
+    }
+
+    private func insertPPG(
+        database: OpaquePointer,
+        packetID: String,
+        packet: WhoopDecodedPPG
+    ) -> Bool {
+        var samples = Data(capacity: packet.samples.count * 2)
+        for sample in packet.samples {
+            var littleEndian = sample.littleEndian
+            withUnsafeBytes(of: &littleEndian) { samples.append(contentsOf: $0) }
+        }
+        let sql = """
+            INSERT OR IGNORE INTO whoop_ppg_packet
+            (source_packet_id, sample_at, channel, sample_rate_hz, samples_i16_le)
+            VALUES (?, ?, ?, 24, ?)
+            """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return false }
+        defer { sqlite3_finalize(statement) }
+        bind(packetID, to: 1, in: statement)
+        sqlite3_bind_double(statement, 2, packet.sampleAt.timeIntervalSince1970)
+        sqlite3_bind_int(statement, 3, Int32(packet.channel))
+        bind(samples, to: 4, in: statement)
+        return sqlite3_step(statement) == SQLITE_DONE
+    }
+
+    /// Decoder upgrades are replayed from immutable raw evidence. The legacy
+    /// v18 summary table was already backfilled by schema v1; decoder v2 adds
+    /// the previously ignored v26 optical stream in bounded transactions so a
+    /// large phone database remains responsive during migration.
+    private func backfillVersion26PPG(cursor: Int64 = 0, batchSize: Int = 500) {
+        guard let database,
+              metadataValue(database: database, key: "decoder-2-v26-backfill") != "complete" else {
+            return
+        }
+        let sql = """
+            SELECT rowid, id, payload
+            FROM whoop_raw_packet
+            WHERE rowid > ?
+              AND frame_type = 47
+              AND length(payload) = 88
+              AND hex(substr(payload, 10, 1)) = '1A'
+            ORDER BY rowid
+            LIMIT ?
+            """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return }
+        sqlite3_bind_int64(statement, 1, cursor)
+        sqlite3_bind_int(statement, 2, Int32(batchSize))
+        var rows: [(Int64, String, Data)] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if let id = textColumn(statement, 1), let payload = dataColumn(statement, 2) {
+                rows.append((sqlite3_column_int64(statement, 0), id, payload))
+            }
+        }
+        sqlite3_finalize(statement)
+
+        guard !rows.isEmpty else {
+            _ = setMetadataValue(
+                database: database,
+                key: "decoder-2-v26-backfill",
+                value: "complete"
+            )
+            return
+        }
+        guard execute("BEGIN IMMEDIATE") else { return }
+        for (_, packetID, payload) in rows {
+            guard decodePacketIfNeeded(
+                database: database,
+                packetID: packetID,
+                packet: payload,
+                historical: nil
+            ) else {
+                execute("ROLLBACK")
+                return
+            }
+        }
+        guard execute("COMMIT") else {
+            execute("ROLLBACK")
+            return
+        }
+        let nextCursor = rows.last!.0
+        queue.asyncAfter(deadline: .now() + .milliseconds(25)) { [self] in
+            backfillVersion26PPG(cursor: nextCursor, batchSize: batchSize)
+        }
+    }
+
+    private func metadataValue(database: OpaquePointer, key: String) -> String? {
+        let sql = "SELECT value FROM whoop_store_metadata WHERE key = ?"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return nil }
+        defer { sqlite3_finalize(statement) }
+        bind(key, to: 1, in: statement)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        return textColumn(statement, 0)
+    }
+
+    private func setMetadataValue(
+        database: OpaquePointer,
+        key: String,
+        value: String
+    ) -> Bool {
+        let sql = """
+            INSERT INTO whoop_store_metadata(key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return false }
+        defer { sqlite3_finalize(statement) }
+        bind(key, to: 1, in: statement)
+        bind(value, to: 2, in: statement)
         return sqlite3_step(statement) == SQLITE_DONE
     }
 
