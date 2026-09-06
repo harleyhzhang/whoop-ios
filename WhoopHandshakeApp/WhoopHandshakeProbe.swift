@@ -18,6 +18,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     @Published private(set) var sleepProcessFailure: String?
     @Published private(set) var lastConnectedAt: Date?
     @Published private(set) var lastDataReceivedAt: Date?
+    @Published private(set) var lastHeartRateReceivedAt: Date?
     @Published private(set) var rrSummary = "—"
     @Published private(set) var realtimeState = "Not armed"
     @Published private(set) var proprietaryPacketCount = 0
@@ -29,6 +30,20 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     var bluetoothReady: Bool { central?.state == .poweredOn }
     var isConnected: Bool {
         peripheral?.state == .connected && handshakeState.hasPrefix("Acknowledged")
+    }
+
+    var hasFreshHeartRate: Bool {
+        Self.heartRateIsFresh(receivedAt: lastHeartRateReceivedAt)
+    }
+
+    nonisolated static func heartRateIsFresh(
+        receivedAt: Date?,
+        now: Date = .now,
+        maxAge: TimeInterval = 90
+    ) -> Bool {
+        guard let receivedAt else { return false }
+        let age = now.timeIntervalSince(receivedAt)
+        return age >= 0 && age <= maxAge
     }
 
     var diagnosticReport: String {
@@ -46,6 +61,9 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     private var helloAttemptID: UUID?
     private var commandSequence: UInt8 = 1
     private var lastTelemetryCacheWriteAt: Date?
+    private var lastHeartRatePresentationAt: Date?
+    private var lastPacketPresentationAt: Date?
+    private var receivedProprietaryPacketCount = 0
     private var realtimeKeepaliveTask: Task<Void, Never>?
     private var historicalRefreshTask: Task<Void, Never>?
     private var historicalWatchdogTask: Task<Void, Never>?
@@ -127,7 +145,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
             let bpm = defaults.integer(forKey: cachedHeartRateKey)
             if bpm > 0 {
                 heartRate = "\(bpm) bpm"
-                lastDataReceivedAt = defaults.object(forKey: cachedHeartRateDateKey) as? Date
+                lastHeartRateReceivedAt = defaults.object(forKey: cachedHeartRateDateKey) as? Date
             }
         }
 
@@ -135,7 +153,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
             guard let sample else { return }
             Task { @MainActor in
                 guard let self else { return }
-                let cachedDate = self.lastDataReceivedAt ?? .distantPast
+                let cachedDate = self.lastHeartRateReceivedAt ?? .distantPast
                 guard sample.receivedAt > cachedDate else { return }
                 self.cacheHeartRate(sample.heartRate, receivedAt: sample.receivedAt)
             }
@@ -265,17 +283,54 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         }
     }
 
-    private func cacheHeartRate(_ bpm: Int, receivedAt: Date = .now) {
-        guard bpm > 0 else { return }
-        heartRate = "\(bpm) bpm"
-        lastDataReceivedAt = receivedAt
+    @discardableResult
+    private func cacheHeartRate(_ bpm: Int, receivedAt: Date = .now) -> Bool {
+        guard bpm > 0 else { return false }
+        let shouldPresent = lastHeartRatePresentationAt.map {
+            receivedAt.timeIntervalSince($0) >= 2
+        } ?? true
+        if shouldPresent {
+            heartRate = "\(bpm) bpm"
+            lastHeartRateReceivedAt = receivedAt
+            lastHeartRatePresentationAt = receivedAt
+        }
+        presentDataReceived(at: receivedAt)
         guard lastTelemetryCacheWriteAt.map({ receivedAt.timeIntervalSince($0) >= 30 }) ?? true else {
-            return
+            return shouldPresent
         }
         let defaults = UserDefaults.standard
         defaults.set(bpm, forKey: cachedHeartRateKey)
         defaults.set(receivedAt, forKey: cachedHeartRateDateKey)
         lastTelemetryCacheWriteAt = receivedAt
+        return shouldPresent
+    }
+
+    private func presentDataReceived(at receivedAt: Date = .now, force: Bool = false) {
+        guard force || lastDataReceivedAt.map({ receivedAt.timeIntervalSince($0) >= 2 }) ?? true else {
+            return
+        }
+        lastDataReceivedAt = receivedAt
+    }
+
+    private func presentProprietaryPacket(
+        _ data: Data,
+        characteristicUUID: String,
+        force: Bool
+    ) {
+        let now = Date()
+        guard force || lastPacketPresentationAt.map({ now.timeIntervalSince($0) >= 2 }) ?? true else {
+            return
+        }
+        lastPacketPresentationAt = now
+        proprietaryPacketCount = receivedProprietaryPacketCount
+        presentDataReceived(at: now, force: force)
+        let frameType = data.count > 8 ? data[8] : nil
+        latestPacket = frameType.map { String(format: "Type 0x%02X · %d B", $0, data.count) }
+            ?? "Short frame (\(data.count) B)"
+        if force {
+            let preview = data.prefix(24).map { String(format: "%02X", $0) }.joined(separator: " ")
+            record("WHOOP metadata packet #\(receivedProprietaryPacketCount) on \(characteristicUUID), \(data.count) bytes: \(preview)\(data.count > 24 ? " …" : "")")
+        }
     }
 
     private func cacheBatteryLevel(_ level: Int) {
@@ -604,10 +659,10 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
             bpm = Int(bytes[1])
             index = 2
         }
-        cacheHeartRate(bpm)
+        let shouldPresent = cacheHeartRate(bpm)
         if flags & 0x08 != 0 { index += 2 }
         guard flags & 0x10 != 0 else {
-            rrSummary = "No R–R values"
+            if shouldPresent { rrSummary = "No R–R values" }
             return
         }
         var values: [Double] = []
@@ -616,34 +671,32 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
             values.append(Double(raw) / 1024 * 1000)
             index += 2
         }
-        rrSummary = values.map { String(format: "%.0f ms", $0) }.joined(separator: ", ")
-        record("Heart rate packet: \(heartRate), R–R \(rrSummary)")
+        if shouldPresent {
+            rrSummary = values.map { String(format: "%.0f ms", $0) }.joined(separator: ", ")
+        }
     }
 
     @discardableResult
     private func parseWhoop5Packet(_ data: Data) -> WhoopDecodedRealtime? {
         let bytes = [UInt8](data)
-        guard bytes.count > 8 else {
-            latestPacket = "Short frame (\(bytes.count) B)"
-            return nil
-        }
+        guard bytes.count > 8 else { return nil }
         let type = bytes[8]
-        latestPacket = String(format: "Type 0x%02X · %d B", type, bytes.count)
 
         // WHOOP 5 type-40 REALTIME_DATA: timestamp@10, heart rate@16,
         // R–R count@17, then little-endian millisecond intervals@18+.
         guard type == 0x28, bytes.count >= 18 else { return nil }
-        cacheHeartRate(Int(bytes[16]))
+        let shouldPresent = cacheHeartRate(Int(bytes[16]))
         let count = min(Int(bytes[17]), (bytes.count - 18) / 2)
         var values: [UInt16] = []
         for index in 0..<count {
             let offset = 18 + index * 2
             values.append(UInt16(bytes[offset]) | (UInt16(bytes[offset + 1]) << 8))
         }
-        rrSummary = values.isEmpty
-            ? "No R–R values"
-            : values.map { "\($0) ms" }.joined(separator: ", ")
-        record("WHOOP 5 realtime decoded: \(heartRate), R–R \(rrSummary)")
+        if shouldPresent {
+            rrSummary = values.isEmpty
+                ? "No R–R values"
+                : values.map { "\($0) ms" }.joined(separator: ", ")
+        }
         let timestamp = UInt32(bytes[10])
             | (UInt32(bytes[11]) << 8)
             | (UInt32(bytes[12]) << 16)
@@ -860,15 +913,12 @@ extension WhoopHandshakeProbe: CBPeripheralDelegate {
             guard error == nil, let data = characteristic.value else { return }
             if characteristic.uuid == CBUUID(string: "2A37") {
                 parseHeartRate(data)
-                lastDataReceivedAt = .now
             } else if characteristic.uuid == batteryLevelUUID, let level = data.first {
                 cacheBatteryLevel(Int(level))
                 record("Battery level: \(batteryLevel ?? 0)%")
             } else if notifyUUIDs.contains(characteristic.uuid) {
-                proprietaryPacketCount += 1
-                lastDataReceivedAt = .now
-                let preview = data.prefix(24).map { String(format: "%02X", $0) }.joined(separator: " ")
-                record("WHOOP packet #\(proprietaryPacketCount) on \(characteristic.uuid.uuidString), \(data.count) bytes: \(preview)\(data.count > 24 ? " …" : "")")
+                receivedProprietaryPacketCount += 1
+                let packetOrdinal = receivedProprietaryPacketCount
                 let frameType = data.count > 8 ? data[8] : nil
                 let realtime = parseWhoop5Packet(data)
                 let historical = parseWhoop5Historical(data)
@@ -879,6 +929,11 @@ extension WhoopHandshakeProbe: CBPeripheralDelegate {
                 let historicalEndData = metadataType == 2 && bytes.count >= 29
                     ? Array(bytes[21..<29])
                     : nil
+                presentProprietaryPacket(
+                    data,
+                    characteristicUUID: characteristic.uuid.uuidString,
+                    force: metadataType == 1 || (metadataType == 3 && historicalSyncActive)
+                )
                 // Count only forward movement through decoded history. The
                 // band may replay the same packet or chunk ending thousands of
                 // times while waiting for an acknowledgement; treating those
@@ -903,10 +958,20 @@ extension WhoopHandshakeProbe: CBPeripheralDelegate {
                     realtime: realtime,
                     historical: historical
                 ) { [weak self] success in
-                    guard success else { return }
+                    let needsMainActor = !success
+                        || packetOrdinal.isMultiple(of: 250)
+                        || historicalEndData != nil
+                        || metadataType == 3
+                    guard needsMainActor else { return }
                     Task { @MainActor in
                         guard let self else { return }
-                        self.persistedPacketCount += 1
+                        guard success else {
+                            self.record("Failed to persist WHOOP packet #\(packetOrdinal); history was not acknowledged")
+                            return
+                        }
+                        if packetOrdinal.isMultiple(of: 250) {
+                            self.persistedPacketCount = max(self.persistedPacketCount, packetOrdinal)
+                        }
                         if let historicalEndData {
                             // The store queue is serial: reaching this completion proves every
                             // preceding raw and decoded sample in this chunk is durable.
@@ -914,6 +979,9 @@ extension WhoopHandshakeProbe: CBPeripheralDelegate {
                                 self.refreshSleepSnapshot()
                             }
                         } else if metadataType == 3 {
+                            guard self.historicalSyncActive || self.pendingProcessRequest != nil else {
+                                return
+                            }
                             self.historicalSyncActive = false
                             self.lastHistoricalProgressAt = nil
                             self.newestHistoricalSampleAtInSync = nil

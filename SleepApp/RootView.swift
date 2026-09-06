@@ -47,7 +47,9 @@ struct RootView: View {
             return true
         }
         #endif
-        return whoopCollector.isSleeping || displayedPendingSleep != nil
+        return whoopCollector.isSleeping
+            || displayedPendingSleep != nil
+            || whoopCollector.isProcessingSleep
     }
 
     private var liveHeartRateValue: String {
@@ -58,6 +60,7 @@ struct RootView: View {
         }
         #endif
 
+        guard whoopConnected, whoopCollector.hasFreshHeartRate else { return "—" }
         return whoopCollector.heartRate.split(separator: " ").first.map(String.init) ?? "—"
     }
 
@@ -193,9 +196,8 @@ struct RootView: View {
         }
         .task {
             while !Task.isCancelled {
-                currentDate = .now
-                history.reload()
                 try? await Task.sleep(for: .seconds(60))
+                currentDate = .now
             }
         }
     }
@@ -207,7 +209,15 @@ struct RootView: View {
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(.primary)
 
-                if let errorMessage = history.errorMessage {
+                if whoopCollector.isProcessingSleep {
+                    HStack(spacing: 5) {
+                        ProgressView()
+                            .controlSize(.mini)
+                        Text("Finishing sleep…")
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                } else if let errorMessage = history.errorMessage {
                     Text(errorMessage)
                         .font(.caption2)
                         .foregroundStyle(.red)

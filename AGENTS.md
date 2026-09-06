@@ -10,6 +10,10 @@
 - Keep the app fully useful without a hosted service or memory connection.
 - Preserve privacy: no credentials, signing assets, or real health exports in
   Git. Sample fixtures must be synthetic and clearly recognizable as such.
+- Preserve unique raw packet evidence, but compact exact byte-for-byte BLE
+  transport retries on the same characteristic instead of multiplying raw and
+  decoded rows. A retry must still count as durably handled before any history
+  acknowledgement is sent.
 - Prefer Apple frameworks and focused dependencies. The future WHOOP protocol
   layer may reuse compatible NOOP packages after license and integration review.
 - Verify UI changes by building for an iPhone simulator and, when requested,

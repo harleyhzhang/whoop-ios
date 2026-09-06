@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import SQLite3
 
@@ -239,10 +240,14 @@ final class WhoopStore: @unchecked Sendable {
             defer { sqlite3_finalize(statement) }
 
             var records: [DailyHealthRecord] = []
-            while sqlite3_step(statement) == SQLITE_ROW {
+            var stepResult = sqlite3_step(statement)
+            while stepResult == SQLITE_ROW {
                 guard let dateKey = textColumn(statement, 0),
                       let source = textColumn(statement, 7),
-                      let sourceUpdatedAt = textColumn(statement, 9) else { continue }
+                      let sourceUpdatedAt = textColumn(statement, 9) else {
+                    stepResult = sqlite3_step(statement)
+                    continue
+                }
                 records.append(DailyHealthRecord(
                     dateKey: dateKey,
                     sleepScore: doubleColumn(statement, 1),
@@ -255,6 +260,11 @@ final class WhoopStore: @unchecked Sendable {
                     sourceArchive: textColumn(statement, 8),
                     sourceUpdatedAt: sourceUpdatedAt
                 ))
+                stepResult = sqlite3_step(statement)
+            }
+            guard stepResult == SQLITE_DONE else {
+                completion(.failure(StoreError.queryFailed(errorMessage(database))))
+                return
             }
             completion(.success(records))
         }
@@ -308,21 +318,22 @@ final class WhoopStore: @unchecked Sendable {
     }
 
     private func openDatabase() {
-        do {
-            guard let directory = Self.databaseDirectory() else { return }
-            let url = directory.appendingPathComponent("sleep.sqlite3")
-            guard sqlite3_open_v2(
-                url.path,
-                &database,
-                SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
-                nil
-            ) == SQLITE_OK else {
-                database = nil
-                return
-            }
-            execute("PRAGMA journal_mode=WAL")
-            execute("PRAGMA foreign_keys=ON")
-            execute("""
+        guard let directory = Self.databaseDirectory() else { return }
+        let url = directory.appendingPathComponent("sleep.sqlite3")
+        guard sqlite3_open_v2(
+            url.path,
+            &database,
+            SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
+            nil
+        ) == SQLITE_OK else {
+            if let database { sqlite3_close(database) }
+            database = nil
+            return
+        }
+        let opened = execute("PRAGMA journal_mode=WAL")
+            && execute("PRAGMA foreign_keys=ON")
+            && execute("PRAGMA busy_timeout=5000")
+            && execute("""
                 CREATE TABLE IF NOT EXISTS whoop_raw_packet (
                     id TEXT PRIMARY KEY,
                     received_at REAL NOT NULL,
@@ -332,8 +343,8 @@ final class WhoopStore: @unchecked Sendable {
                     payload BLOB NOT NULL
                 )
                 """)
-            execute("CREATE INDEX IF NOT EXISTS whoop_raw_packet_received_at ON whoop_raw_packet(received_at)")
-            execute("""
+            && execute("CREATE INDEX IF NOT EXISTS whoop_raw_packet_received_at ON whoop_raw_packet(received_at)")
+            && execute("""
                 CREATE TABLE IF NOT EXISTS heart_rate_sample (
                     id TEXT PRIMARY KEY,
                     source_packet_id TEXT NOT NULL,
@@ -345,8 +356,8 @@ final class WhoopStore: @unchecked Sendable {
                     FOREIGN KEY(source_packet_id) REFERENCES whoop_raw_packet(id)
                 )
                 """)
-            execute("CREATE INDEX IF NOT EXISTS heart_rate_sample_received_at ON heart_rate_sample(received_at)")
-            execute("""
+            && execute("CREATE INDEX IF NOT EXISTS heart_rate_sample_received_at ON heart_rate_sample(received_at)")
+            && execute("""
                 CREATE TABLE IF NOT EXISTS whoop_historical_sample (
                     sample_at REAL PRIMARY KEY,
                     source_packet_id TEXT NOT NULL,
@@ -356,9 +367,16 @@ final class WhoopStore: @unchecked Sendable {
                     FOREIGN KEY(source_packet_id) REFERENCES whoop_raw_packet(id)
                 )
                 """)
-            execute("CREATE INDEX IF NOT EXISTS whoop_historical_sample_sleep_state ON whoop_historical_sample(sleep_state, sample_at)")
-            backfillHistoricalSamplesIfNeeded()
-            execute("""
+            && execute("CREATE INDEX IF NOT EXISTS whoop_historical_sample_sleep_state ON whoop_historical_sample(sleep_state, sample_at)")
+            && execute("""
+                CREATE TABLE IF NOT EXISTS whoop_packet_replay (
+                    signature BLOB PRIMARY KEY,
+                    first_packet_id TEXT NOT NULL,
+                    duplicate_count INTEGER NOT NULL DEFAULT 0,
+                    last_received_at REAL NOT NULL
+                )
+                """)
+            && execute("""
                 CREATE TABLE IF NOT EXISTS daily_health_metric (
                     date_key TEXT PRIMARY KEY,
                     sleep_score REAL,
@@ -373,10 +391,13 @@ final class WhoopStore: @unchecked Sendable {
                     imported_at REAL NOT NULL
                 )
                 """)
-            importBundledHistory()
-        } catch {
+        guard opened else {
+            if let database { sqlite3_close(database) }
             database = nil
+            return
         }
+        backfillHistoricalSamplesIfNeeded()
+        importBundledHistory()
     }
 
     private func importBundledHistory() {
@@ -384,12 +405,12 @@ final class WhoopStore: @unchecked Sendable {
               let url = Bundle.main.url(forResource: "whoop-history", withExtension: "json"),
               let data = try? Data(contentsOf: url),
               let records = try? JSONDecoder().decode([DailyHealthRecord].self, from: data) else { return }
-        execute("BEGIN IMMEDIATE")
+        guard execute("BEGIN IMMEDIATE") else { return }
         for record in records where !upsertDailyHealthRecord(record, database: database) {
             execute("ROLLBACK")
             return
         }
-        execute("COMMIT")
+        guard execute("COMMIT") else { execute("ROLLBACK"); return }
     }
 
     private func upsertDailyHealthRecord(_ record: DailyHealthRecord, database: OpaquePointer) -> Bool {
@@ -431,9 +452,10 @@ final class WhoopStore: @unchecked Sendable {
         return sqlite3_step(statement) == SQLITE_DONE
     }
 
-    private func execute(_ sql: String) {
-        guard let database else { return }
-        sqlite3_exec(database, sql, nil, nil, nil)
+    @discardableResult
+    private func execute(_ sql: String) -> Bool {
+        guard let database else { return false }
+        return sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK
     }
 
     private func insert(
@@ -447,7 +469,26 @@ final class WhoopStore: @unchecked Sendable {
         guard let database else { return false }
         let packetID = UUID().uuidString
         let receivedAt = Date().timeIntervalSince1970
-        execute("BEGIN IMMEDIATE")
+        let signature = Self.packetSignature(
+            characteristicUUID: characteristicUUID,
+            payload: packet
+        )
+        guard execute("BEGIN IMMEDIATE") else { return false }
+        switch registerPacketSignature(
+            database: database,
+            signature: signature,
+            packetID: packetID,
+            receivedAt: receivedAt
+        ) {
+        case .duplicate:
+            guard execute("COMMIT") else { execute("ROLLBACK"); return false }
+            return true
+        case .new:
+            break
+        case .failed:
+            execute("ROLLBACK")
+            return false
+        }
         guard insertPacket(
             database: database,
             id: packetID,
@@ -470,8 +511,60 @@ final class WhoopStore: @unchecked Sendable {
             execute("ROLLBACK")
             return false
         }
-        execute("COMMIT")
+        guard execute("COMMIT") else { execute("ROLLBACK"); return false }
         return true
+    }
+
+    private enum PacketSignatureRegistration {
+        case new
+        case duplicate
+        case failed
+    }
+
+    /// Exact BLE transport retries contain no new evidence. Keep the first raw
+    /// frame losslessly and aggregate later identical deliveries so a stuck
+    /// history acknowledgement cannot grow the database by hundreds of MB.
+    private func registerPacketSignature(
+        database: OpaquePointer,
+        signature: Data,
+        packetID: String,
+        receivedAt: TimeInterval
+    ) -> PacketSignatureRegistration {
+        let updateSQL = """
+            UPDATE whoop_packet_replay
+            SET duplicate_count = duplicate_count + 1, last_received_at = ?
+            WHERE signature = ?
+            """
+        var update: OpaquePointer?
+        guard sqlite3_prepare_v2(database, updateSQL, -1, &update, nil) == SQLITE_OK,
+              let update else { return .failed }
+        sqlite3_bind_double(update, 1, receivedAt)
+        bind(signature, to: 2, in: update)
+        let updateResult = sqlite3_step(update)
+        sqlite3_finalize(update)
+        guard updateResult == SQLITE_DONE else { return .failed }
+        if sqlite3_changes(database) > 0 { return .duplicate }
+
+        let insertSQL = """
+            INSERT INTO whoop_packet_replay
+            (signature, first_packet_id, duplicate_count, last_received_at)
+            VALUES (?, ?, 0, ?)
+            """
+        var insert: OpaquePointer?
+        guard sqlite3_prepare_v2(database, insertSQL, -1, &insert, nil) == SQLITE_OK,
+              let insert else { return .failed }
+        defer { sqlite3_finalize(insert) }
+        bind(signature, to: 1, in: insert)
+        bind(packetID, to: 2, in: insert)
+        sqlite3_bind_double(insert, 3, receivedAt)
+        return sqlite3_step(insert) == SQLITE_DONE ? .new : .failed
+    }
+
+    static func packetSignature(characteristicUUID: String, payload: Data) -> Data {
+        var input = Data(characteristicUUID.uppercased().utf8)
+        input.append(0)
+        input.append(payload)
+        return Data(SHA256.hash(data: input))
     }
 
     private func insertPacket(
@@ -578,18 +671,28 @@ final class WhoopStore: @unchecked Sendable {
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
               let statement else { return }
         defer { sqlite3_finalize(statement) }
-        execute("BEGIN IMMEDIATE")
+        guard execute("BEGIN IMMEDIATE") else { return }
         var succeeded = true
-        while sqlite3_step(statement) == SQLITE_ROW {
+        var stepResult = sqlite3_step(statement)
+        while stepResult == SQLITE_ROW {
             guard let packetID = textColumn(statement, 0),
                   let payload = dataColumn(statement, 1),
-                  let historical = WhoopDecodedHistorical.decode(payload) else { continue }
+                  let historical = WhoopDecodedHistorical.decode(payload) else {
+                stepResult = sqlite3_step(statement)
+                continue
+            }
             if !insertHistorical(database: database, packetID: packetID, sample: historical) {
                 succeeded = false
                 break
             }
+            stepResult = sqlite3_step(statement)
         }
-        execute(succeeded ? "COMMIT" : "ROLLBACK")
+        succeeded = succeeded && stepResult == SQLITE_DONE
+        if succeeded {
+            guard execute("COMMIT") else { execute("ROLLBACK"); return }
+        } else {
+            execute("ROLLBACK")
+        }
     }
 
     struct HistoricalRow {
@@ -1387,6 +1490,12 @@ final class WhoopStore: @unchecked Sendable {
             bind(value, to: index, in: statement)
         } else {
             sqlite3_bind_null(statement, index)
+        }
+    }
+
+    private func bind(_ value: Data, to index: Int32, in statement: OpaquePointer) {
+        _ = value.withUnsafeBytes {
+            sqlite3_bind_blob(statement, index, $0.baseAddress, Int32($0.count), Self.transient)
         }
     }
 

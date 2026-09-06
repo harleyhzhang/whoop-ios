@@ -23,6 +23,7 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
 
     private enum Key {
         static let lastMorningSleepID = "WhoopNotifications.lastMorningSleepID"
+        static let lastMorningDateKey = "WhoopNotifications.lastMorningDateKey"
         static let lastBatteryLevel = "WhoopNotifications.lastBatteryLevel"
         static let sentLow20 = "WhoopNotifications.sentLow20"
         static let sentLow10 = "WhoopNotifications.sentLow10"
@@ -51,6 +52,7 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
         guard record.source.hasPrefix(WhoopStore.localSourcePrefix),
               Calendar.current.isDateInToday(record.date),
               let sleepID = record.sleepID,
+              defaults.string(forKey: Key.lastMorningDateKey) != record.dateKey,
               defaults.string(forKey: Key.lastMorningSleepID) != sleepID else { return }
 
         let score = record.sleepScore.map { "\(Int($0.rounded()))%" } ?? "—"
@@ -59,8 +61,9 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
         let rhr = record.restingHeartRateBPM.map { "\(Int($0.rounded())) BPM" } ?? "—"
 
         defaults.set(sleepID, forKey: Key.lastMorningSleepID)
+        defaults.set(record.dateKey, forKey: Key.lastMorningDateKey)
         deliver(
-            identifier: "whoop.morning.\(sleepID)",
+            identifier: "whoop.morning.\(record.dateKey)",
             title: "Sleep ready",
             body: "\(score) · \(duration) · HRV \(hrv) · RHR \(rhr)"
         )

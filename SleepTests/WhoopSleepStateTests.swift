@@ -82,6 +82,37 @@ final class WhoopSleepStateTests: XCTestCase {
         ))
     }
 
+    func testHeartRateFreshnessRejectsOldCachedReading() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        XCTAssertTrue(WhoopHandshakeProbe.heartRateIsFresh(
+            receivedAt: now.addingTimeInterval(-30),
+            now: now
+        ))
+        XCTAssertFalse(WhoopHandshakeProbe.heartRateIsFresh(
+            receivedAt: now.addingTimeInterval(-91),
+            now: now
+        ))
+        XCTAssertFalse(WhoopHandshakeProbe.heartRateIsFresh(
+            receivedAt: nil,
+            now: now
+        ))
+    }
+
+    func testPacketReplaySignatureIncludesCharacteristicAndPayload() {
+        let payload = Data([0xAA, 0x01, 0x02])
+        let first = WhoopStore.packetSignature(characteristicUUID: "FD4B0003", payload: payload)
+        let repeated = WhoopStore.packetSignature(characteristicUUID: "fd4b0003", payload: payload)
+        let differentCharacteristic = WhoopStore.packetSignature(characteristicUUID: "FD4B0004", payload: payload)
+        let differentPayload = WhoopStore.packetSignature(
+            characteristicUUID: "FD4B0003",
+            payload: Data([0xAA, 0x01, 0x03])
+        )
+
+        XCTAssertEqual(first, repeated)
+        XCTAssertNotEqual(first, differentCharacteristic)
+        XCTAssertNotEqual(first, differentPayload)
+    }
+
     private func row(at timestamp: TimeInterval, state: Int) -> WhoopStore.HistoricalRow {
         WhoopStore.HistoricalRow(
             timestamp: timestamp,

@@ -47,6 +47,7 @@ final class HealthHistoryModel: ObservableObject {
     @Published private(set) var errorMessage: String?
 
     private let store: WhoopStore
+    private var reloadGeneration = 0
 
     init(store: WhoopStore = .shared) {
         self.store = store
@@ -72,16 +73,19 @@ final class HealthHistoryModel: ObservableObject {
     }
 
     func reload() {
+        reloadGeneration += 1
+        let generation = reloadGeneration
         isLoading = true
         store.loadDailyHealthRecords { [weak self] result in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, generation == self.reloadGeneration else { return }
                 switch result {
                 case .success(let records):
                     self.records = records
                     self.errorMessage = nil
                 case .failure(let error):
-                    self.records = []
+                    // Keep the last known-good dashboard visible through a
+                    // transient read failure instead of blanking every chart.
                     self.errorMessage = error.localizedDescription
                 }
                 self.isLoading = false

@@ -182,6 +182,28 @@ The app should eventually cover the complete personal loop:
   are still coalesced during their immediate notification burst, but the app
   retries their acknowledgement after two seconds instead of permanently
   suppressing it after the first BLE write.
+- Exact BLE transport replays are now compacted at ingestion. The first raw
+  frame remains losslessly stored, while later byte-identical deliveries on the
+  same characteristic increment a replay ledger instead of duplicating the raw
+  and decoded rows. This directly addresses the real six-day database, where
+  304 MB and roughly 850,000 packets included 80–91% exact repeats for several
+  historical frame classes. A physical-phone migration retained the existing
+  data and immediately aggregated 34 retries during a short live validation.
+- High-rate packet traffic no longer invalidates the entire SwiftUI dashboard
+  or appends a diagnostic line for every frame. Packet, R–R, and persistence
+  counters are presented at bounded intervals while chunk acknowledgements and
+  durable writes continue at full fidelity. Live heart rate has its own
+  freshness clock, so an old cached BPM cannot look current merely because
+  historical data is arriving.
+- Dashboard reads are generation-ordered: an older asynchronous reload cannot
+  overwrite a newly processed night, and a transient SQLite read error keeps
+  the last known-good charts visible. The unnecessary full-history reload every
+  minute is gone; while Process waits for HISTORY_COMPLETE, the current day
+  remains in its pending state with an explicit `Finishing sleep…` indicator.
+- SQLite schema setup, transactions, commits, and query completion are now
+  checked instead of silently accepting partial reads or failed writes. Morning
+  summaries are deduplicated by local date as well as sleep ID, so a grow-only
+  repair cannot notify twice for the same morning.
 - The 2026-09-01 real-history build was installed in place and visibly launched
   on the paired iPhone; the dashboard rendered the imported history correctly.
 - The generated seed remains in Harley's private data tree rather than the
