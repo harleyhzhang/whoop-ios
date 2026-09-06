@@ -11,6 +11,14 @@ final class WhoopSleepStateTests: XCTestCase {
         XCTAssertEqual(WhoopReconnectPolicy.delaySeconds(forAttempt: 100), 60)
     }
 
+    func testReplayIndexIsLimitedToReplayPronePacketClasses() {
+        XCTAssertFalse(WhoopHandshakeProbe.shouldDeduplicateTransportRetries(frameType: nil))
+        XCTAssertFalse(WhoopHandshakeProbe.shouldDeduplicateTransportRetries(frameType: 40))
+        XCTAssertTrue(WhoopHandshakeProbe.shouldDeduplicateTransportRetries(frameType: 47))
+        XCTAssertTrue(WhoopHandshakeProbe.shouldDeduplicateTransportRetries(frameType: 49))
+        XCTAssertTrue(WhoopHandshakeProbe.shouldDeduplicateTransportRetries(frameType: 50))
+    }
+
     func testInterimUpStateDoesNotSplitOneNight() {
         var firstRun: [WhoopStore.HistoricalRow] = []
         for timestamp in stride(from: 0.0, through: 7 * 60 * 60, by: 20.0) {
@@ -106,6 +114,21 @@ final class WhoopSleepStateTests: XCTestCase {
             packets,
             minimumDifferencesPerWindow: 1
         ))
+    }
+
+    func testRealtimeRMSSDPerformanceAcrossEightHourStream() {
+        let packets = (0..<(8 * 60 * 60)).map { second in
+            WhoopStore.RealtimeRRPacket(
+                timestamp: TimeInterval(second),
+                intervals: [UInt16(second.isMultiple(of: 2) ? 900 : 1_000)].map(Double.init)
+            )
+        }
+        let options = XCTMeasureOptions()
+        options.iterationCount = 3
+
+        measure(metrics: [XCTClockMetric()], options: options) {
+            XCTAssertNotNil(WhoopStore.rmssdFromRealtimePackets(packets))
+        }
     }
 
     func testPrimaryMetricsMustArriveTogether() {
@@ -220,6 +243,47 @@ final class WhoopSleepStateTests: XCTestCase {
         XCTAssertNil(WhoopDecodedPPG.decode(frame))
     }
 
+    func testStandardHeartRateDecoderConverts1024HzRRUnits() {
+        let decoded = WhoopDecodedRealtime.decodeStandardHeartRate(
+            Data([0x10, 60, 0x00, 0x04, 0x00, 0x02])
+        )
+
+        XCTAssertEqual(decoded?.heartRate, 60)
+        XCTAssertEqual(decoded?.rrIntervals, [1_000, 500])
+        XCTAssertEqual(decoded?.source, "standard_2a37")
+    }
+
+    func testStandardHeartRateDecoderHandlesUInt16AndEnergyField() {
+        let decoded = WhoopDecodedRealtime.decodeStandardHeartRate(
+            Data([0x19, 0x04, 0x01, 0x34, 0x12, 0x00, 0x04])
+        )
+
+        XCTAssertEqual(decoded?.heartRate, 260)
+        XCTAssertEqual(decoded?.rrIntervals, [1_000])
+    }
+
+    func testWhoop5RealtimeDecoderRequiresCRCAndPreservesTimestamp() {
+        var bytes = framedPacket(length: 24, type: 40, version: 1)
+        let timestamp: UInt32 = 1_800_000_000
+        bytes[10] = UInt8(truncatingIfNeeded: timestamp)
+        bytes[11] = UInt8(truncatingIfNeeded: timestamp >> 8)
+        bytes[12] = UInt8(truncatingIfNeeded: timestamp >> 16)
+        bytes[13] = UInt8(truncatingIfNeeded: timestamp >> 24)
+        bytes[16] = 61
+        bytes[17] = 1
+        bytes[18] = 0x84
+        bytes[19] = 0x03
+        finishChecksums(&bytes)
+
+        let decoded = WhoopDecodedRealtime.decodeWhoop5Realtime(Data(bytes))
+        XCTAssertEqual(decoded?.deviceTimestamp, timestamp)
+        XCTAssertEqual(decoded?.heartRate, 61)
+        XCTAssertEqual(decoded?.rrIntervals, [900])
+
+        bytes[18] ^= 0x01
+        XCTAssertNil(WhoopDecodedRealtime.decodeWhoop5Realtime(Data(bytes)))
+    }
+
     func testEmptyLegacyDatabaseMigratesIdempotentlyToCurrentSchema() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -238,7 +302,7 @@ final class WhoopSleepStateTests: XCTestCase {
         var database: OpaquePointer?
         XCTAssertEqual(sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READONLY, nil), SQLITE_OK)
         defer { if let database { sqlite3_close(database) } }
-        XCTAssertEqual(scalarInt(database, sql: "PRAGMA user_version"), 3)
+        XCTAssertEqual(scalarInt(database, sql: "PRAGMA user_version"), 4)
         XCTAssertEqual(scalarInt(
             database,
             sql: "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('whoop_decode_result','whoop_ppg_packet','whoop_store_metadata')"
@@ -314,6 +378,38 @@ final class WhoopSleepStateTests: XCTestCase {
         XCTAssertTrue(completionResult.success)
 
         XCTAssertFalse(store.completedOffloadCoversLatestHistoryForTesting())
+    }
+
+    func testSameHistoricalTimestampFromDifferentStrapsDoesNotCollide() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("sleep.sqlite3")
+        let store = WhoopStore(databaseURL: url, runBackgroundDecoding: false)
+        let packet = version18Frame(timestamp: 1_800_000_000, sleepState: 2)
+
+        let first = try await append(
+            packet,
+            store: store,
+            peripheral: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            sessionID: nil
+        )
+        let second = try await append(
+            packet,
+            store: store,
+            peripheral: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            sessionID: nil
+        )
+        XCTAssertTrue(first.success)
+        XCTAssertTrue(second.success)
+
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READONLY, nil), SQLITE_OK)
+        defer { if let database { sqlite3_close(database) } }
+        XCTAssertEqual(
+            scalarInt(database, sql: "SELECT COUNT(*) FROM whoop_historical_sample"),
+            2
+        )
     }
 
     private func row(at timestamp: TimeInterval, state: Int) -> WhoopStore.HistoricalRow {

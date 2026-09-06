@@ -48,6 +48,72 @@ struct WhoopDecodedRealtime: Sendable {
     let heartRate: Int
     let rrIntervals: [UInt16]
     let source: String
+
+    static func decodeStandardHeartRate(_ data: Data) -> WhoopDecodedRealtime? {
+        let bytes = [UInt8](data)
+        guard bytes.count >= 2 else { return nil }
+        let flags = bytes[0]
+        let isUInt16 = flags & 0x01 != 0
+        var index: Int
+        let heartRate: Int
+        if isUInt16 {
+            guard bytes.count >= 3 else { return nil }
+            heartRate = Int(UInt16(bytes[1]) | (UInt16(bytes[2]) << 8))
+            index = 3
+        } else {
+            heartRate = Int(bytes[1])
+            index = 2
+        }
+        guard (1...300).contains(heartRate) else { return nil }
+        if flags & 0x08 != 0 {
+            guard index + 1 < bytes.count else { return nil }
+            index += 2
+        }
+        var intervals: [UInt16] = []
+        if flags & 0x10 != 0 {
+            while index + 1 < bytes.count {
+                let ticks = UInt16(bytes[index]) | (UInt16(bytes[index + 1]) << 8)
+                let milliseconds = (Double(ticks) / 1024 * 1_000).rounded()
+                if milliseconds > 0, milliseconds <= Double(UInt16.max) {
+                    intervals.append(UInt16(milliseconds))
+                }
+                index += 2
+            }
+        }
+        return WhoopDecodedRealtime(
+            deviceTimestamp: nil,
+            heartRate: heartRate,
+            rrIntervals: intervals,
+            source: "standard_2a37"
+        )
+    }
+
+    static func decodeWhoop5Realtime(_ data: Data) -> WhoopDecodedRealtime? {
+        let bytes = [UInt8](data)
+        guard bytes.count >= 22,
+              bytes[8] == 40,
+              WhoopFrameIntegrity.isValid(data) else { return nil }
+        let count = min(Int(bytes[17]), (bytes.count - 22) / 2)
+        var intervals: [UInt16] = []
+        intervals.reserveCapacity(count)
+        for index in 0..<count {
+            let offset = 18 + index * 2
+            let value = UInt16(bytes[offset]) | (UInt16(bytes[offset + 1]) << 8)
+            if value > 0 { intervals.append(value) }
+        }
+        let timestamp = UInt32(bytes[10])
+            | (UInt32(bytes[11]) << 8)
+            | (UInt32(bytes[12]) << 16)
+            | (UInt32(bytes[13]) << 24)
+        let heartRate = Int(bytes[16])
+        guard heartRate > 0 else { return nil }
+        return WhoopDecodedRealtime(
+            deviceTimestamp: timestamp,
+            heartRate: heartRate,
+            rrIntervals: intervals,
+            source: "whoop5_type40"
+        )
+    }
 }
 
 struct WhoopDecodedHistorical: Sendable {
@@ -233,7 +299,7 @@ final class WhoopStore: @unchecked Sendable {
     private var database: OpaquePointer?
     private var nextDeliverySequence: Int64 = 1
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
-    private static let schemaVersion = 3
+    private static let schemaVersion = 4
     private static let decoderVersion = 2
 
     init(databaseURL: URL? = nil, runBackgroundDecoding: Bool = true) {
@@ -464,9 +530,15 @@ final class WhoopStore: @unchecked Sendable {
             database = nil
             return
         }
+        try? FileManager.default.setAttributes(
+            [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+            ofItemAtPath: url.path
+        )
         let opened = execute("PRAGMA journal_mode=WAL")
             && execute("PRAGMA foreign_keys=ON")
             && execute("PRAGMA busy_timeout=5000")
+            && execute("PRAGMA wal_autocheckpoint=1000")
+            && execute("PRAGMA journal_size_limit=8388608")
             && migrateSchema()
         guard opened else {
             if let database { sqlite3_close(database) }
@@ -478,6 +550,7 @@ final class WhoopStore: @unchecked Sendable {
             sql: "SELECT COALESCE(MAX(delivery_sequence), 0) FROM whoop_raw_packet"
         )) ?? 0) + 1
         abandonInterruptedOffloads()
+        _ = execute("PRAGMA optimize")
         backfillHistoricalSamplesIfNeeded()
         if databaseURLOverride == nil { importBundledHistory() }
     }
@@ -638,6 +711,40 @@ final class WhoopStore: @unchecked Sendable {
                     failure_reason = 'app relaunched before completion'
                 WHERE status = 'in_progress'
                 """)
+        case 4:
+            return execute("""
+                CREATE TABLE whoop_historical_sample_v4 (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    sample_at REAL NOT NULL,
+                    source_packet_id TEXT NOT NULL UNIQUE,
+                    peripheral_id TEXT NOT NULL,
+                    protocol_version INTEGER NOT NULL,
+                    ordinal INTEGER NOT NULL DEFAULT 0,
+                    heart_rate INTEGER NOT NULL CHECK(heart_rate BETWEEN 0 AND 255),
+                    rr_intervals_json TEXT NOT NULL,
+                    sleep_state INTEGER NOT NULL CHECK(sleep_state BETWEEN 0 AND 3),
+                    decoder_version INTEGER NOT NULL,
+                    UNIQUE(peripheral_id, protocol_version, sample_at, ordinal),
+                    FOREIGN KEY(source_packet_id) REFERENCES whoop_raw_packet(id)
+                )
+                """)
+            && execute("""
+                INSERT INTO whoop_historical_sample_v4
+                (sample_at, source_packet_id, peripheral_id, protocol_version,
+                 ordinal, heart_rate, rr_intervals_json, sleep_state, decoder_version)
+                SELECT h.sample_at, h.source_packet_id,
+                       COALESCE(p.peripheral_id, 'legacy-unknown'),
+                       COALESCE(p.protocol_version, 18), 0,
+                       h.heart_rate, h.rr_intervals_json, h.sleep_state, 1
+                FROM whoop_historical_sample h
+                LEFT JOIN whoop_raw_packet p ON p.id = h.source_packet_id
+                """)
+            && execute("DROP TABLE whoop_historical_sample")
+            && execute("ALTER TABLE whoop_historical_sample_v4 RENAME TO whoop_historical_sample")
+            && execute("CREATE INDEX whoop_historical_sample_sleep_state ON whoop_historical_sample(peripheral_id, sleep_state, sample_at)")
+            && execute("CREATE INDEX whoop_historical_sample_sample_at ON whoop_historical_sample(peripheral_id, sample_at)")
+            && execute("CREATE INDEX IF NOT EXISTS heart_rate_sample_source_time ON heart_rate_sample(source, device_timestamp, received_at)")
+            && execute("CREATE INDEX IF NOT EXISTS heart_rate_sample_source_received ON heart_rate_sample(source, received_at)")
         default:
             return false
         }
@@ -747,18 +854,17 @@ final class WhoopStore: @unchecked Sendable {
         let receivedAt = deliveredAt.timeIntervalSince1970
         let deliverySequence = nextDeliverySequence
         nextDeliverySequence += 1
-        let signature = Self.packetSignature(
-            peripheralID: peripheralID,
-            characteristicUUID: characteristicUUID,
-            payload: packet
-        )
         guard execute("BEGIN IMMEDIATE") else {
             return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
         }
         let registration: PacketSignatureRegistration = deduplicateTransportRetries
             ? registerPacketSignature(
                 database: database,
-                signature: signature,
+                signature: Self.packetSignature(
+                    peripheralID: peripheralID,
+                    characteristicUUID: characteristicUUID,
+                    payload: packet
+                ),
                 packetID: packetID,
                 receivedAt: receivedAt
             )
@@ -1243,13 +1349,17 @@ final class WhoopStore: @unchecked Sendable {
     ) -> Bool {
         let sql = """
             INSERT INTO whoop_historical_sample
-            (sample_at, source_packet_id, heart_rate, rr_intervals_json, sleep_state)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(sample_at) DO UPDATE SET
+            (sample_at, source_packet_id, peripheral_id, protocol_version, ordinal,
+             heart_rate, rr_intervals_json, sleep_state, decoder_version)
+            SELECT ?, ?, p.peripheral_id, COALESCE(p.protocol_version, 18), 0,
+                   ?, ?, ?, ?
+            FROM whoop_raw_packet p WHERE p.id = ?
+            ON CONFLICT(peripheral_id, protocol_version, sample_at, ordinal) DO UPDATE SET
                 source_packet_id = excluded.source_packet_id,
                 heart_rate = excluded.heart_rate,
                 rr_intervals_json = excluded.rr_intervals_json,
-                sleep_state = excluded.sleep_state
+                sleep_state = excluded.sleep_state,
+                decoder_version = excluded.decoder_version
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
@@ -1261,6 +1371,8 @@ final class WhoopStore: @unchecked Sendable {
         let rrJSON = "[" + sample.rrIntervals.map(String.init).joined(separator: ",") + "]"
         bind(rrJSON, to: 4, in: statement)
         sqlite3_bind_int(statement, 5, Int32(sample.sleepState))
+        sqlite3_bind_int(statement, 6, Int32(Self.decoderVersion))
+        bind(packetID, to: 7, in: statement)
         return sqlite3_step(statement) == SQLITE_DONE
     }
 
@@ -1456,6 +1568,10 @@ final class WhoopStore: @unchecked Sendable {
             SELECT sample_at, heart_rate, rr_intervals_json, sleep_state
             FROM whoop_historical_sample
             WHERE sample_at >= ?
+              AND peripheral_id = (
+                  SELECT peripheral_id FROM whoop_historical_sample
+                  ORDER BY sample_at DESC LIMIT 1
+              )
             ORDER BY sample_at ASC
             """
         var statement: OpaquePointer?
@@ -1950,18 +2066,17 @@ final class WhoopStore: @unchecked Sendable {
         guard let start = rows.first?.timestamp, let end = rows.last?.timestamp else { return nil }
         let expectedPerWindow = 5 * 60 / max(cadence, 1)
         let required = max(3, Int((expectedPerWindow * 0.4).rounded()))
-        var means: [Double] = []
-        var windowStart = start
-        while windowStart <= end {
-            let values = rows.filter {
-                $0.timestamp >= windowStart && $0.timestamp < windowStart + 5 * 60 && $0.heartRate > 0
-            }.map { Double($0.heartRate) }
-            if values.count >= required {
-                means.append(values.reduce(0, +) / Double(values.count))
-            }
-            windowStart += 5 * 60
+        var buckets: [Int: (sum: Double, count: Int)] = [:]
+        for row in rows where row.heartRate > 0 && row.timestamp >= start && row.timestamp <= end {
+            let bucket = Int((row.timestamp - start) / (5 * 60))
+            let current = buckets[bucket] ?? (0, 0)
+            buckets[bucket] = (current.sum + Double(row.heartRate), current.count + 1)
         }
-        return means.min().map { $0.rounded() }
+        return buckets.values
+            .filter { $0.count >= required }
+            .map { $0.sum / Double($0.count) }
+            .min()
+            .map { $0.rounded() }
     }
 
     /// RMSSD requires differences between adjacent heartbeats. Historical v18
@@ -2004,21 +2119,22 @@ final class WhoopStore: @unchecked Sendable {
         through end: TimeInterval,
         source: String
     ) -> [RealtimeRRPacket] {
+        let timeColumn = source == "standard_2a37" ? "received_at" : "device_timestamp"
         let sql = """
-            SELECT COALESCE(device_timestamp, received_at), rr_intervals_json
+            SELECT \(timeColumn), rr_intervals_json
             FROM heart_rate_sample
-            WHERE COALESCE(device_timestamp, received_at) BETWEEN ? AND ?
-              AND source = ?
+            WHERE source = ?
+              AND \(timeColumn) BETWEEN ? AND ?
               AND rr_intervals_json != '[]'
-            ORDER BY COALESCE(device_timestamp, received_at), received_at
+            ORDER BY \(timeColumn), received_at
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
               let statement else { return [] }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_double(statement, 1, start)
-        sqlite3_bind_double(statement, 2, end)
-        bind(source, to: 3, in: statement)
+        bind(source, to: 1, in: statement)
+        sqlite3_bind_double(statement, 2, start)
+        sqlite3_bind_double(statement, 3, end)
         var packets: [RealtimeRRPacket] = []
         while sqlite3_step(statement) == SQLITE_ROW {
             let text = textColumn(statement, 1) ?? "[]"
@@ -2062,7 +2178,10 @@ final class WhoopStore: @unchecked Sendable {
         minimumDifferencesPerWindow: Int = 20
     ) -> Double? {
         guard !packets.isEmpty else { return nil }
-        let ordered = packets.sorted { lhs, rhs in
+        let alreadyOrdered = zip(packets, packets.dropFirst()).allSatisfy {
+            $0.timestamp <= $1.timestamp
+        }
+        let ordered = alreadyOrdered ? packets : packets.sorted { lhs, rhs in
             lhs.timestamp == rhs.timestamp
                 ? lhs.intervals.count < rhs.intervals.count
                 : lhs.timestamp < rhs.timestamp
@@ -2170,7 +2289,7 @@ final class WhoopStore: @unchecked Sendable {
     static let dateKeyFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.timeZone = .current
+        formatter.timeZone = .autoupdatingCurrent
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter

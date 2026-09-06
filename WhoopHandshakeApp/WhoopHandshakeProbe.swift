@@ -53,6 +53,11 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         return age >= 0 && age <= maxAge
     }
 
+    nonisolated static func shouldDeduplicateTransportRetries(frameType: UInt8?) -> Bool {
+        guard let frameType else { return false }
+        return [36, 38, 47, 49, 50, 56].contains(frameType)
+    }
+
     var diagnosticReport: String {
         (["WHOOP 5 handshake diagnostic", "Generated: \(Self.reportDateFormatter.string(from: .now))", ""] + diagnosticEvents)
             .joined(separator: "\n")
@@ -152,7 +157,9 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
 
     private func restoreCachedTelemetry() {
         let defaults = UserDefaults.standard
-        if defaults.object(forKey: cachedBatteryLevelKey) != nil {
+        if defaults.object(forKey: cachedBatteryLevelKey) != nil,
+           let observedAt = defaults.object(forKey: cachedBatteryLevelDateKey) as? Date,
+           Date().timeIntervalSince(observedAt) <= 24 * 60 * 60 {
             batteryLevel = min(max(defaults.integer(forKey: cachedBatteryLevelKey), 0), 100)
         }
         if defaults.object(forKey: cachedHeartRateKey) != nil {
@@ -751,78 +758,26 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
 
     @discardableResult
     private func parseHeartRate(_ data: Data) -> WhoopDecodedRealtime? {
-        let bytes = [UInt8](data)
-        guard bytes.count >= 2 else { return nil }
-        let flags = bytes[0]
-        let isUInt16 = flags & 0x01 != 0
-        var index = 1
-        let bpm: Int
-        if isUInt16, bytes.count >= 3 {
-            bpm = Int(UInt16(bytes[1]) | (UInt16(bytes[2]) << 8))
-            index = 3
-        } else {
-            bpm = Int(bytes[1])
-            index = 2
-        }
-        let shouldPresent = cacheHeartRate(bpm)
-        if flags & 0x08 != 0 { index += 2 }
-        guard flags & 0x10 != 0 else {
-            if shouldPresent { rrSummary = "No R–R values" }
-            return WhoopDecodedRealtime(
-                deviceTimestamp: nil,
-                heartRate: bpm,
-                rrIntervals: [],
-                source: "standard_2a37"
-            )
-        }
-        var values: [Double] = []
-        while index + 1 < bytes.count {
-            let raw = UInt16(bytes[index]) | (UInt16(bytes[index + 1]) << 8)
-            values.append(Double(raw) / 1024 * 1000)
-            index += 2
-        }
+        guard let measurement = WhoopDecodedRealtime.decodeStandardHeartRate(data) else { return nil }
+        let shouldPresent = cacheHeartRate(measurement.heartRate)
         if shouldPresent {
-            rrSummary = values.map { String(format: "%.0f ms", $0) }.joined(separator: ", ")
+            rrSummary = measurement.rrIntervals.isEmpty
+                ? "No R–R values"
+                : measurement.rrIntervals.map { "\($0) ms" }.joined(separator: ", ")
         }
-        return WhoopDecodedRealtime(
-            deviceTimestamp: nil,
-            heartRate: bpm,
-            rrIntervals: values.map { UInt16(clamping: Int($0.rounded())) },
-            source: "standard_2a37"
-        )
+        return measurement
     }
 
     @discardableResult
     private func parseWhoop5Packet(_ data: Data) -> WhoopDecodedRealtime? {
-        let bytes = [UInt8](data)
-        guard bytes.count > 8, WhoopFrameIntegrity.isValid(data) else { return nil }
-        let type = bytes[8]
-
-        // WHOOP 5 type-40 REALTIME_DATA: timestamp@10, heart rate@16,
-        // R–R count@17, then little-endian millisecond intervals@18+.
-        guard type == 0x28, bytes.count >= 18 else { return nil }
-        let shouldPresent = cacheHeartRate(Int(bytes[16]))
-        let count = min(Int(bytes[17]), (bytes.count - 18) / 2)
-        var values: [UInt16] = []
-        for index in 0..<count {
-            let offset = 18 + index * 2
-            values.append(UInt16(bytes[offset]) | (UInt16(bytes[offset + 1]) << 8))
-        }
+        guard let measurement = WhoopDecodedRealtime.decodeWhoop5Realtime(data) else { return nil }
+        let shouldPresent = cacheHeartRate(measurement.heartRate)
         if shouldPresent {
-            rrSummary = values.isEmpty
+            rrSummary = measurement.rrIntervals.isEmpty
                 ? "No R–R values"
-                : values.map { "\($0) ms" }.joined(separator: ", ")
+                : measurement.rrIntervals.map { "\($0) ms" }.joined(separator: ", ")
         }
-        let timestamp = UInt32(bytes[10])
-            | (UInt32(bytes[11]) << 8)
-            | (UInt32(bytes[12]) << 16)
-            | (UInt32(bytes[13]) << 24)
-        return WhoopDecodedRealtime(
-            deviceTimestamp: timestamp,
-            heartRate: Int(bytes[16]),
-            rrIntervals: values,
-            source: "whoop5_type40"
-        )
+        return measurement
     }
 
     private func parseWhoop5Historical(_ data: Data) -> WhoopDecodedHistorical? {
@@ -1064,6 +1019,9 @@ extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
                     realtime: realtime,
                     historical: historical,
                     offloadSessionID: historicalSessionID,
+                    deduplicateTransportRetries: Self.shouldDeduplicateTransportRetries(
+                        frameType: frameType
+                    ),
                     deliveredAt: deliveredAt
                 ) { [weak self] result in
                     let needsMainActor = !result.success
