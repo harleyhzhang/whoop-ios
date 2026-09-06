@@ -164,10 +164,18 @@ The app should eventually cover the complete personal loop:
   and RHR are derived first and committed only when all four are present, so a
   partial night can never replace the previous one in the UI. Pressing Process
   waives only the wake-timing gates; it never waives evidence or metric
-  completeness. A failed process restores the control with a short reason and
-  pulls history from the strap. Internal `up` intervals shorter than ninety
+  completeness, and a tap made during a historical offload now remains queued
+  until the durable HISTORY_COMPLETE marker arrives. A failed process restores
+  the control with a short reason. Internal `up` intervals shorter than ninety
   minutes remain part of one detected night, preventing a mid-sleep state from
-  splitting and prematurely storing the first portion.
+  splitting and prematurely storing the first portion. A later coherent
+  reconstruction can grow an already-local row when it proves the night was
+  materially longer, but partial evidence can never shrink a stored night.
+- The grow-only repair is grounded in the 2026-09-06 failure capture: Process
+  stored 230.4 minutes at 12:05 while the strap was actively offloading, then
+  the completed local history showed 512 minutes for the same night. The manual
+  path now rejects that in-flight prefix and the fuller candidate automatically
+  repairs the premature row.
 - Historical offload is self-healing. A missing final metadata packet no longer
   leaves the in-memory sync latch active forever: a watchdog resets and retries
   an offload after 90 seconds without history progress. Repeated chunk endings

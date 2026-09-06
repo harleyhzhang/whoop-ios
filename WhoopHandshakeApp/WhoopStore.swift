@@ -138,6 +138,7 @@ enum WhoopSleepProcessError: Error, Sendable {
     case stillAsleep
     case noSleepDetected
     case insufficientEvidence
+    case historyStillLoading
     case metricsStillLoading
     case writeFailed
 
@@ -148,6 +149,7 @@ enum WhoopSleepProcessError: Error, Sendable {
         case .stillAsleep: return "Still asleep"
         case .noSleepDetected: return "No sleep detected"
         case .insufficientEvidence: return "Not enough data to score"
+        case .historyStillLoading: return "Still receiving sleep history"
         case .metricsStillLoading: return "Still receiving sleep data"
         case .writeFailed: return "Could not save"
         }
@@ -854,7 +856,7 @@ final class WhoopStore: @unchecked Sendable {
                 where coherentHistory
                     && candidate.meetsEvidenceGates
                     && candidate.meetsWakeGates {
-                guard shouldDerive(dateKey: candidate.dateKey, database: database) else { continue }
+                guard shouldDerive(candidate: candidate, database: database) else { continue }
                 let record = derivedRecord(for: candidate, now: now)
                 guard record.hasCompletePrimarySleepMetrics else { continue }
                 if upsertLocalDailyHealthRecord(record, database: database) {
@@ -863,7 +865,7 @@ final class WhoopStore: @unchecked Sendable {
             }
 
             let pending: WhoopPendingSleep?
-            if shouldDerive(dateKey: latest.dateKey, database: database) {
+            if shouldDerive(candidate: latest, database: database) {
                 pending = latest.pendingSleep
             } else {
                 pending = nil
@@ -901,6 +903,13 @@ final class WhoopStore: @unchecked Sendable {
             case .awake(_, let candidates):
                 guard let candidate = candidates.last else {
                     completion(.failure(.noSleepDetected))
+                    return
+                }
+                // Process may waive the wake timer, but it must never publish
+                // while a history chunk is still arriving. That was able to
+                // turn an 8h32m night into a complete-looking 3h50m row.
+                guard completedOffloadCoversLatestHistory(database: database) else {
+                    completion(.failure(.historyStillLoading))
                     return
                 }
                 guard candidate.meetsEvidenceGates else {
@@ -999,7 +1008,6 @@ final class WhoopStore: @unchecked Sendable {
             let since = latest.timestamp - last.timestamp
             let dateKey = Self.dateKeyFormatter.string(from: Date(timeIntervalSince1970: last.timestamp))
             let stored = storedSleepID(forDateKey: dateKey, database: database)
-            let storedComplete = !shouldDerive(dateKey: dateKey, database: database)
             let durationGate = duration >= 3 * 60 * 60
             let coverageGate = coverage >= 0.50
             let wakeGate = wake >= 30 * 60
@@ -1016,6 +1024,7 @@ final class WhoopStore: @unchecked Sendable {
                 sessionCoverage: coverage,
                 wakeSeconds: wake
             )
+            let storedComplete = !shouldDerive(candidate: candidate, database: database)
             let metricsComplete = derivedRecord(for: candidate, now: now).hasCompletePrimarySleepMetrics
 
             let verdict: String
@@ -1115,11 +1124,12 @@ final class WhoopStore: @unchecked Sendable {
         )
     }
 
-    /// Whether a night still needs deriving. A locally derived row with a metric
-    /// missing is re-derived, so a fix to one of the derivations repairs the
-    /// nights it already wrote instead of leaving them permanently incomplete.
-    /// An archived WHOOP row is authoritative and never overwritten.
-    private func shouldDerive(dateKey: String, database: OpaquePointer) -> Bool {
+    /// Whether a night still needs deriving. In addition to incomplete or
+    /// older-version local rows, a later coherent offload may repair a row when
+    /// it proves the same date contains materially more sleep. This is strictly
+    /// grow-only so a partial reconstruction can never shrink a good record.
+    /// An archived WHOOP row remains authoritative and is never overwritten.
+    private func shouldDerive(candidate: SleepCandidate, database: OpaquePointer) -> Bool {
         let sql = """
             SELECT source, sleep_score, sleep_duration_minutes,
                    hrv_rmssd_milliseconds, resting_heart_rate_bpm
@@ -1129,12 +1139,28 @@ final class WhoopStore: @unchecked Sendable {
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
               let statement else { return false }
         defer { sqlite3_finalize(statement) }
-        bind(dateKey, to: 1, in: statement)
+        bind(candidate.dateKey, to: 1, in: statement)
         guard sqlite3_step(statement) == SQLITE_ROW else { return true }
         guard let source = textColumn(statement, 0),
               source.hasPrefix(Self.localSourcePrefix) else { return false }
         if source != Self.localSource { return true }
-        return (1...4).contains { sqlite3_column_type(statement, Int32($0)) == SQLITE_NULL }
+        if (1...4).contains(where: { sqlite3_column_type(statement, Int32($0)) == SQLITE_NULL }) {
+            return true
+        }
+        let existingDuration = sqlite3_column_double(statement, 2)
+        return Self.shouldReplaceLocalSleep(
+            existingDurationMinutes: existingDuration,
+            candidateDurationMinutes: candidate.durationMinutes
+        )
+    }
+
+    /// A one-minute tolerance avoids rewriting a settled record for harmless
+    /// cadence-edge jitter while still repairing any meaningful missing tail.
+    static func shouldReplaceLocalSleep(
+        existingDurationMinutes: Double,
+        candidateDurationMinutes: Double
+    ) -> Bool {
+        return candidateDurationMinutes > existingDurationMinutes + 1
     }
 
     /// A HISTORY_COMPLETE packet is inserted after every sample in its offload

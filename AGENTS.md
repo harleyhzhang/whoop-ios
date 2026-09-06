@@ -17,4 +17,6 @@
 - Do not add an app-side manual sync control for the hosted replica or for
   memory. Memory reads are initiated from the Mac side. The dashboard's Process
   control is not a sync button: it finalizes a night already collected on the
-  phone, waiving only the wake-timing gates and never the evidence gates.
+  phone, waiving only the wake-timing gates and never the evidence gates. If a
+  strap-history offload is in flight, Process must wait for its durable
+  HISTORY_COMPLETE marker; it must never finalize the currently received prefix.

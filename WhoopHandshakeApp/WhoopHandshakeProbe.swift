@@ -59,6 +59,10 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     /// Suppresses the pending row between an optimistic tap and the refresh that
     /// observes the stored night, so it cannot flicker back in mid-animation.
     private var optimisticallyProcessedSleepID: String?
+    /// A Process tap waiting for the in-flight historical offload to become a
+    /// coherent whole. It is retried exactly when HISTORY_COMPLETE is durable.
+    private var pendingProcessRequest: WhoopPendingSleep?
+    private var processFinalizationInFlight = false
     private var processFailureResetTask: Task<Void, Never>?
     private let store = WhoopStore.shared
     private let knownPeripheralKey = "WhoopHandshakeProbe.knownPeripheralIdentifier"
@@ -186,32 +190,61 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         pendingSleep = pending
     }
 
-    /// Finishes the detected night immediately from data already on the phone.
-    /// The row is dismissed before any work starts, because local finalization is
-    /// a SQLite read plus one upsert; the strap is only consulted if that fails.
+    /// Finishes the detected night from coherent data already collected on the
+    /// phone. If a history offload is in flight, the tap remains pending until
+    /// its completion marker is durable rather than banking the partial prefix.
     func processPendingSleep() {
         guard !isProcessingSleep, let pending = pendingSleep else { return }
         isProcessingSleep = true
         sleepProcessFailure = nil
         processFailureResetTask?.cancel()
         optimisticallyProcessedSleepID = pending.sleepID
+        pendingProcessRequest = pending
         pendingSleep = nil
         AppHaptics.softImpact()
 
+        // An in-flight offload is definitionally incomplete even during the
+        // short interval before its first historical sample is persisted.
+        guard !historicalSyncActive else { return }
+        finalizeProcessRequest()
+    }
+
+    private func finalizeProcessRequest() {
+        guard !processFinalizationInFlight,
+              let pending = pendingProcessRequest else { return }
+        processFinalizationInFlight = true
         store.finalizePendingSleep { [weak self] result in
             Task { @MainActor in
                 guard let self else { return }
+                self.processFinalizationInFlight = false
                 switch result {
                 case .success(let record):
+                    self.pendingProcessRequest = nil
                     self.lastFinalizedSleepID = record.sleepID
+                    self.optimisticallyProcessedSleepID = record.sleepID
+                    self.pendingSleep = nil
                     self.isProcessingSleep = false
                     AppHaptics.success()
                     NotificationCenter.default.post(name: .whoopDailyHealthUpdated, object: record)
+                    self.refreshSleepSnapshot(force: true)
+
+                case .failure(.historyStillLoading):
+                    // Keep the tap pending. The existing collector/offload will
+                    // call us again only after its completion packet is stored.
+                    guard self.isConnected else {
+                        self.pendingProcessRequest = nil
+                        self.isProcessingSleep = false
+                        self.optimisticallyProcessedSleepID = nil
+                        self.pendingSleep = pending
+                        self.sleepProcessFailure = "Reconnect WHOOP to finish"
+                        AppHaptics.warning()
+                        self.scheduleProcessFailureReset()
+                        return
+                    }
+                    self.refreshHistoricalData()
 
                 case .failure(let error):
-                    // Nothing usable is banked yet, so pull history from the strap
-                    // and let the next analysis decide instead of guessing here.
-                    self.refreshHistoricalData()
+                    self.pendingProcessRequest = nil
                     self.isProcessingSleep = false
                     self.optimisticallyProcessedSleepID = nil
                     self.pendingSleep = pending
@@ -893,10 +926,14 @@ extension WhoopHandshakeProbe: CBPeripheralDelegate {
                             // is forbidden at chunk boundaries because that can
                             // publish duration before the rest of the night,
                             // HRV, and RHR have arrived.
-                            self.refreshSleepSnapshot(
-                                force: true,
-                                allowAutomaticFinalization: true
-                            )
+                            if self.pendingProcessRequest != nil {
+                                self.finalizeProcessRequest()
+                            } else {
+                                self.refreshSleepSnapshot(
+                                    force: true,
+                                    allowAutomaticFinalization: true
+                                )
+                            }
                             self.scheduleHistoricalSync()
                         }
                     }

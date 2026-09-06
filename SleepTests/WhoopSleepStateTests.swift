@@ -61,6 +61,27 @@ final class WhoopSleepStateTests: XCTestCase {
         XCTAssertTrue(complete.hasCompletePrimarySleepMetrics)
     }
 
+    func testFullerCoherentOffloadRepairsPrematureLocalNight() {
+        XCTAssertTrue(WhoopStore.shouldReplaceLocalSleep(
+            existingDurationMinutes: 230.4,
+            candidateDurationMinutes: 512
+        ))
+    }
+
+    func testPartialOffloadCannotShrinkStoredNight() {
+        XCTAssertFalse(WhoopStore.shouldReplaceLocalSleep(
+            existingDurationMinutes: 512,
+            candidateDurationMinutes: 230.4
+        ))
+    }
+
+    func testCadenceJitterDoesNotRewriteSettledNight() {
+        XCTAssertFalse(WhoopStore.shouldReplaceLocalSleep(
+            existingDurationMinutes: 512,
+            candidateDurationMinutes: 512.5
+        ))
+    }
+
     private func row(at timestamp: TimeInterval, state: Int) -> WhoopStore.HistoricalRow {
         WhoopStore.HistoricalRow(
             timestamp: timestamp,
