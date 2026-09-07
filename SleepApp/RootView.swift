@@ -4,14 +4,17 @@ import UIKit
 
 struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("selectedHealthRange") private var selectedRange: HealthRange = .month
     @State private var selectedDate: Date?
     @State private var activeMetric: MetricKind?
+    @State private var chartMorphFromRange: HealthRange?
+    @State private var chartMorphProgress: CGFloat = 1
+    @State private var chartMorphGeneration = 0
     @State private var currentDate = Date()
     @State private var debugMockPendingSleepDismissed = false
     @StateObject private var whoopCollector = WhoopHandshakeProbe()
     @StateObject private var history = HealthHistoryModel()
-    @Namespace private var rangeSelectionNamespace
 
     private var referenceDate: Date {
         sleepMetricsArePending ? currentDate : (currentSleepRecord?.date ?? currentDate)
@@ -73,6 +76,16 @@ struct RootView: View {
         #endif
 
         return whoopCollector.batteryLevel
+    }
+
+    private var whoopCharging: Bool {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["WHOOP_MOCK_CHARGING"] == "1" {
+            return true
+        }
+        #endif
+
+        return whoopCollector.isCharging
     }
 
     private var whoopConnected: Bool {
@@ -164,10 +177,29 @@ struct RootView: View {
             .scrollIndicators(.hidden)
         }
         .preferredColorScheme(.dark)
-        .onChange(of: selectedRange) { _, _ in
+        .onChange(of: selectedRange) { oldRange, _ in
             AppHaptics.selection()
             selectedDate = nil
             activeMetric = nil
+
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                chartMorphFromRange = reduceMotion ? nil : oldRange
+                chartMorphProgress = reduceMotion ? 1 : 0
+                chartMorphGeneration &+= 1
+            }
+        }
+        .task(id: chartMorphGeneration) {
+            guard !reduceMotion, chartMorphProgress == 0 else { return }
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            withAnimation(.smooth(duration: 0.42, extraBounce: 0)) {
+                chartMorphProgress = 1
+            }
+            try? await Task.sleep(for: .seconds(0.42))
+            guard !Task.isCancelled else { return }
+            chartMorphFromRange = nil
         }
         .onChange(of: availableRanges) { _, ranges in
             // History can shorten as well as grow. Fall back to the longest
@@ -245,13 +277,16 @@ struct RootView: View {
                         .offset(x: -1, y: -1)
                 }
 
-                WhoopBatteryPercentIcon(level: whoopBatteryLevel)
+                WhoopBatteryPercentIcon(
+                    level: whoopBatteryLevel,
+                    isCharging: whoopCharging
+                )
                     .opacity(whoopConnected ? 1 : 0.45)
             }
             .frame(minHeight: 36)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(
-                "WHOOP \(whoopConnected ? "connected" : "disconnected"), battery \(whoopBatteryLevel.map { "\($0) percent" } ?? "unavailable")"
+                "WHOOP \(whoopConnected ? "connected" : "disconnected"), battery \(whoopBatteryLevel.map { "\($0) percent" } ?? "unavailable")\(whoopCharging ? ", charging" : "")"
             )
         }
     }
@@ -351,70 +386,17 @@ struct RootView: View {
         .padding(.top, 12)
     }
 
-    private var rangeSelectorButtons: some View {
-        HStack(spacing: 2) {
-            ForEach(availableRanges) { range in
-                Button {
-                    withAnimation(.smooth(duration: 0.34, extraBounce: 0.14)) {
-                        selectedRange = range
-                    }
-                } label: {
-                    Text(range.rawValue)
-                        .font(.callout.weight(.medium))
-                        .foregroundStyle(.primary)
-                        .padding(.horizontal, 13)
-                        .frame(height: 32)
-                        .background {
-                            if selectedRange == range {
-                                // One highlight shared across every option rather
-                                // than a background inserted per button, so the
-                                // glass travels to the new option instead of
-                                // vanishing from one and appearing on the next.
-                                rangeSelectionHighlight
-                                    .matchedGeometryEffect(
-                                        id: "rangeSelectionHighlight",
-                                        in: rangeSelectionNamespace
-                                    )
-                            }
-                        }
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(range.accessibilityName)
-                .accessibilityAddTraits(selectedRange == range ? .isSelected : [])
-            }
-        }
-        .padding(3)
-        .fixedSize(horizontal: true, vertical: false)
-    }
-
-    @ViewBuilder
     private var rangeSelector: some View {
-        if #available(iOS 26.0, *) {
-            // The container is what lets the travelling highlight blend with the
-            // track's own glass while it moves, rather than sliding over it.
-            GlassEffectContainer(spacing: 0) {
-                rangeSelectorButtons
-                    .glassEffect(.regular, in: Capsule(style: .continuous))
+        Picker("Trend range", selection: $selectedRange) {
+            ForEach(availableRanges) { range in
+                Text(range.compactTitle)
+                    .tag(range)
+                    .accessibilityLabel(range.accessibilityName)
             }
-        } else {
-            rangeSelectorButtons
-                .background(.ultraThinMaterial, in: Capsule(style: .continuous))
         }
-    }
-
-    @ViewBuilder
-    private var rangeSelectionHighlight: some View {
-        if #available(iOS 26.0, *) {
-            Capsule(style: .continuous)
-                .fill(Color.clear)
-                .glassEffect(
-                    .regular.tint(Color.white.opacity(0.16)).interactive(),
-                    in: Capsule(style: .continuous)
-                )
-        } else {
-            Capsule(style: .continuous)
-                .fill(Color.white.opacity(0.28))
-        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private var summaryGrid: some View {
@@ -459,7 +441,6 @@ struct RootView: View {
             }
         }
         .padding(.vertical, 2)
-        .animation(.smooth(duration: 0.42), value: currentSleepRecord)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
             "Sleep \(summarySleepScore), duration \(summarySleepDuration), heart rate variability \(summaryHRV) milliseconds, resting heart rate \(summaryRHR) beats per minute, live heart rate \(liveHeartRateValue) beats per minute"
@@ -485,11 +466,7 @@ struct RootView: View {
             }
 
             HStack(alignment: .firstTextBaseline, spacing: 2) {
-                Text(value)
-                    .font(.system(size: 30, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .contentTransition(.numericText())
-                    .foregroundStyle(.primary)
+                AnimatedMetricValue(value: value)
                 if !unit.isEmpty {
                     Text(unit)
                         .font(.system(size: 18, weight: .semibold, design: .rounded))
@@ -556,11 +533,11 @@ struct RootView: View {
                         .foregroundStyle(.secondary)
 
                     HStack(alignment: .firstTextBaseline, spacing: 2) {
-                        Text(value)
-                            .font(.system(size: 24, weight: .semibold, design: .rounded))
-                            .monospacedDigit()
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
+                        AnimatedMetricValue(
+                            value: value,
+                            fontSize: 24,
+                            animateChanges: cardSelection == nil
+                        )
 
                         if value != "—", !unit.isEmpty {
                             Text(unit)
@@ -573,16 +550,6 @@ struct RootView: View {
                 .padding(.bottom, 22)
 
                 metricChart(metric: metric, series: series, color: color, title: title)
-                    // Replacing the plot wholesale lets it dissolve in place.
-                    // Reusing it made Swift Charts interpolate every mark across
-                    // a completely different x domain, which read as the chart
-                    // sliding off screen. The explicit animation also keeps the
-                    // selector's spring from driving that interpolation.
-                    .id(selectedRange)
-                    .transition(
-                        .opacity.combined(with: .scale(scale: 0.985, anchor: .center))
-                    )
-                    .animation(.easeInOut(duration: 0.28), value: selectedRange)
             }
         }
         .padding(.horizontal, 14)
@@ -610,31 +577,21 @@ struct RootView: View {
 
     private func populatedMetricChart(metric: MetricKind, series: MetricSeries, color: Color, title: String) -> some View {
         let plottedPoints = series.plotted
+        let morphPoints = morphingPoints(for: metric, target: series)
         let domain = chartDomain(for: series.daily, metric: metric)
         let chartSelection = activeMetric == metric ? selectedDate : nil
         let showsAverageLevels = selectedRange.usesMonthlyAxis && chartSelection == nil
         let highlightedPoint = selectedPoint(in: plottedPoints, near: chartSelection) ?? plottedPoints.last!
+        let highlightedPosition = normalizedPosition(of: highlightedPoint, in: plottedPoints)
         let firstDate = series.daily.first!.date
         let middleDate = series.daily[series.daily.count / 2].date
         let monthTicks = monthlyAxisDates(in: series.daily)
-        let lastDate = series.daily.last!.date
-        let chartStartDate: Date
-        let chartEndDate: Date
-        if series.daily.count == 1 {
-            chartStartDate = Calendar.current.date(byAdding: .hour, value: -12, to: firstDate) ?? firstDate
-            chartEndDate = Calendar.current.date(byAdding: .hour, value: 12, to: lastDate) ?? lastDate
-        } else {
-            chartStartDate = firstDate
-            chartEndDate = selectedRange.usesMonthlyAxis
-                ? Calendar.current.date(byAdding: .day, value: 3, to: lastDate) ?? lastDate
-                : lastDate
-        }
         let averageLevels = adaptiveAverageLevels(from: series.daily, for: selectedRange)
         return VStack(spacing: 0) {
             Chart {
-                ForEach(plottedPoints) { point in
+                ForEach(morphPoints) { point in
                     AreaMark(
-                        x: .value("Date", point.date),
+                        x: .value("Position", point.position),
                         yStart: .value("Minimum", domain.lowerBound),
                         yEnd: .value(title, point.value)
                     )
@@ -651,7 +608,7 @@ struct RootView: View {
                     )
 
                     LineMark(
-                        x: .value("Date", point.date),
+                        x: .value("Position", point.position),
                         y: .value(title, point.value)
                     )
                     .interpolationMethod(.monotone)
@@ -660,8 +617,18 @@ struct RootView: View {
                 }
 
                 if showsAverageLevels {
+                    // Cut the trend out beneath the translucent endpoint before
+                    // drawing it. Otherwise the line and point alpha-composite
+                    // independently and the point's center looks darker.
                     PointMark(
-                        x: .value("Date", highlightedPoint.date),
+                        x: .value("Position", highlightedPosition),
+                        y: .value(title, highlightedPoint.value)
+                    )
+                    .symbolSize(58)
+                    .foregroundStyle(Color(uiColor: .secondarySystemGroupedBackground))
+
+                    PointMark(
+                        x: .value("Position", highlightedPosition),
                         y: .value(title, highlightedPoint.value)
                     )
                     .symbolSize(48)
@@ -669,8 +636,14 @@ struct RootView: View {
 
                     ForEach(averageLevels) { level in
                         RuleMark(
-                            xStart: .value("Average window start", level.startDate),
-                            xEnd: .value("Average window end", level.endDate),
+                            xStart: .value(
+                                "Average window start",
+                                normalizedPosition(of: level.startDate, in: series.daily)
+                            ),
+                            xEnd: .value(
+                                "Average window end",
+                                normalizedPosition(of: level.endDate, in: series.daily)
+                            ),
                             y: .value("Window average", level.value)
                         )
                         .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .butt))
@@ -689,15 +662,11 @@ struct RootView: View {
                     RectangleMark(
                         xStart: .value(
                             "Dimmed future start",
-                            highlightedPoint.date.addingTimeInterval(1)
+                            min(highlightedPosition + 0.002, 1)
                         ),
                         xEnd: .value(
                             "Dimmed future end",
-                            // Past the domain so the round line cap overhanging
-                            // the final point is covered too. Marks are clipped
-                            // to the plot area, so overshooting is safe and the
-                            // right edge no longer shows an undimmed nub.
-                            chartEndDate.addingTimeInterval(60 * 60 * 24 * 4)
+                            1.02
                         ),
                         yStart: .value("Dimmed future minimum", domain.lowerBound),
                         yEnd: .value("Dimmed future maximum", domain.upperBound)
@@ -706,21 +675,21 @@ struct RootView: View {
                         Color(uiColor: .secondarySystemGroupedBackground).opacity(0.58)
                     )
 
-                    RuleMark(x: .value("Selected date", highlightedPoint.date))
+                    RuleMark(x: .value("Selected position", highlightedPosition))
                         .lineStyle(StrokeStyle(lineWidth: 1))
                         .foregroundStyle(Color.secondary.opacity(0.5))
                 }
 
                 if !showsAverageLevels {
                     PointMark(
-                        x: .value("Date", highlightedPoint.date),
+                        x: .value("Position", highlightedPosition),
                         y: .value(title, highlightedPoint.value)
                     )
                     .symbolSize(104)
                     .foregroundStyle(Color(uiColor: .secondarySystemGroupedBackground))
 
                     PointMark(
-                        x: .value("Date", highlightedPoint.date),
+                        x: .value("Position", highlightedPosition),
                         y: .value(title, highlightedPoint.value)
                     )
                     .symbolSize(48)
@@ -728,8 +697,13 @@ struct RootView: View {
                 }
             }
             .chartYScale(domain: domain)
-            .chartXScale(domain: chartStartDate...chartEndDate)
-            .chartXSelection(value: selectionBinding(for: metric, selectableSeries: plottedPoints))
+            // Every range uses the same fixed horizontal coordinates. Only the
+            // sampled y-values animate, so the curve morphs vertically without
+            // sliding or stretching sideways.
+            .chartXScale(domain: 0.0...1.0)
+            .chartXSelection(
+                value: normalizedSelectionBinding(for: metric, selectableSeries: plottedPoints)
+            )
             .chartYAxis {
                 AxisMarks(position: .trailing, values: yAxisValues(for: domain)) { value in
                     AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
@@ -757,8 +731,7 @@ struct RootView: View {
             rangeAxisFooter(
                 monthDates: monthTicks,
                 firstDate: firstDate,
-                middleDate: middleDate,
-                lastDate: lastDate
+                middleDate: middleDate
             )
         }
         .frame(height: 145, alignment: .top)
@@ -768,24 +741,23 @@ struct RootView: View {
     private func rangeAxisFooter(
         monthDates: [Date],
         firstDate: Date,
-        middleDate: Date,
-        lastDate: Date
+        middleDate: Date
     ) -> some View {
         if selectedRange.usesMonthlyAxis {
             monthlyAxisFooter(dates: monthDates)
         } else {
-            chartAxisFooter(firstDate: firstDate, middleDate: middleDate, lastDate: lastDate)
+            chartAxisFooter(firstDate: firstDate, middleDate: middleDate)
         }
     }
 
     @ViewBuilder
-    private func chartAxisFooter(firstDate: Date, middleDate: Date, lastDate: Date) -> some View {
+    private func chartAxisFooter(firstDate: Date, middleDate: Date) -> some View {
         HStack {
             Text(axisLabel(for: firstDate))
             Spacer()
             Text(axisLabel(for: middleDate))
             Spacer()
-            Text(Calendar.current.isDateInToday(lastDate) ? "Today" : "Latest")
+            Text("Today")
         }
         .font(.caption2)
         .foregroundStyle(.secondary)
@@ -922,11 +894,24 @@ struct RootView: View {
         .foregroundStyle(.secondary)
     }
 
-    private func selectionBinding(for metric: MetricKind, selectableSeries: [MetricPoint]) -> Binding<Date?> {
+    private func normalizedSelectionBinding(
+        for metric: MetricKind,
+        selectableSeries: [MetricPoint]
+    ) -> Binding<Double?> {
         Binding(
-            get: { activeMetric == metric ? selectedDate : nil },
-            set: { date in
-                if let date, let point = selectedPoint(in: selectableSeries, near: date) {
+            get: {
+                guard activeMetric == metric, let selectedDate else { return nil }
+                return normalizedPosition(of: selectedDate, in: selectableSeries)
+            },
+            set: { position in
+                if let position,
+                   let firstDate = selectableSeries.first?.date,
+                   let lastDate = selectableSeries.last?.date {
+                    let clampedPosition = min(max(position, 0), 1)
+                    let date = firstDate.addingTimeInterval(
+                        lastDate.timeIntervalSince(firstDate) * clampedPosition
+                    )
+                    guard let point = selectedPoint(in: selectableSeries, near: date) else { return }
                     if activeMetric != metric || selectedDate != point.date {
                         AppHaptics.selection()
                     }
@@ -938,6 +923,68 @@ struct RootView: View {
                 }
             }
         )
+    }
+
+    private func normalizedPosition(of point: MetricPoint, in points: [MetricPoint]) -> Double {
+        normalizedPosition(of: point.date, in: points)
+    }
+
+    private func normalizedPosition(of date: Date, in points: [MetricPoint]) -> Double {
+        guard let firstDate = points.first?.date, let lastDate = points.last?.date else { return 0.5 }
+        let duration = lastDate.timeIntervalSince(firstDate)
+        guard duration > 0 else { return 0.5 }
+        return min(max(date.timeIntervalSince(firstDate) / duration, 0), 1)
+    }
+
+    private func morphingPoints(for metric: MetricKind, target: MetricSeries) -> [MorphingMetricPoint] {
+        let sampleCount = 48
+        let targetValues = resampledValues(from: target.plotted, count: sampleCount)
+        guard !targetValues.isEmpty else { return [] }
+
+        let sourceValues: [Double]
+        if let chartMorphFromRange {
+            let sourceSeries = metricSeries(for: metric, range: chartMorphFromRange)
+            let sampledSource = resampledValues(from: sourceSeries.plotted, count: sampleCount)
+            sourceValues = sampledSource.count == targetValues.count ? sampledSource : targetValues
+        } else {
+            sourceValues = targetValues
+        }
+
+        let progress = Double(chartMorphProgress)
+        return targetValues.indices.map { index in
+            MorphingMetricPoint(
+                id: index,
+                position: Double(index) / Double(max(targetValues.count - 1, 1)),
+                value: sourceValues[index] + ((targetValues[index] - sourceValues[index]) * progress)
+            )
+        }
+    }
+
+    private func resampledValues(from points: [MetricPoint], count: Int) -> [Double] {
+        guard count > 0, let first = points.first else { return [] }
+        guard points.count > 1, let last = points.last else {
+            return Array(repeating: first.value, count: count)
+        }
+
+        let span = last.date.timeIntervalSince(first.date)
+        guard span > 0 else { return Array(repeating: first.value, count: count) }
+
+        var upperIndex = 1
+        return (0..<count).map { index in
+            let position = Double(index) / Double(max(count - 1, 1))
+            let targetDate = first.date.addingTimeInterval(span * position)
+
+            while upperIndex < points.count - 1, points[upperIndex].date < targetDate {
+                upperIndex += 1
+            }
+
+            let lower = points[upperIndex - 1]
+            let upper = points[upperIndex]
+            let interval = upper.date.timeIntervalSince(lower.date)
+            guard interval > 0 else { return upper.value }
+            let localProgress = targetDate.timeIntervalSince(lower.date) / interval
+            return lower.value + ((upper.value - lower.value) * localProgress)
+        }
     }
 
     private func selectedPoint(in series: [MetricPoint], near date: Date?) -> MetricPoint? {
@@ -983,10 +1030,14 @@ struct RootView: View {
         }
     }
 
-    private func metricSeries(for metric: MetricKind) -> MetricSeries {
+    private func metricSeries(
+        for metric: MetricKind,
+        range requestedRange: HealthRange? = nil
+    ) -> MetricSeries {
+        let range = requestedRange ?? selectedRange
         let calendar = Calendar.current
         let records: [DailyHealthRecord]
-        if let dayCount = selectedRange.dayCount,
+        if let dayCount = range.dayCount,
            let cutoff = calendar.date(byAdding: .day, value: -(dayCount - 1), to: referenceDate) {
             records = history.records.filter { $0.date >= calendar.startOfDay(for: cutoff) }
         } else {
@@ -999,7 +1050,7 @@ struct RootView: View {
 
         return MetricSeries(
             daily: daily,
-            plotted: aggregatedPoints(from: daily, for: selectedRange)
+            plotted: aggregatedPoints(from: daily, for: range)
         )
     }
 
@@ -1106,12 +1157,14 @@ private struct SleepDetectedCardHeightTransition: ViewModifier, Animatable {
 
 private struct WhoopBatteryPercentIcon: View {
     let level: Int?
+    let isCharging: Bool
 
     private var clampedLevel: Int {
         min(max(level ?? 0, 0), 100)
     }
 
     private var fillColor: Color {
+        if isCharging { return .green }
         if clampedLevel <= 20 { return .red }
         if clampedLevel <= 35 { return .yellow }
         return .primary
@@ -1126,7 +1179,8 @@ private struct WhoopBatteryPercentIcon: View {
     }
 
     private var trackColor: Color {
-        Color.primary.opacity(0.58)
+        if isCharging { return Color.white.opacity(0.24) }
+        return Color.primary.opacity(0.58)
     }
 
     private static let shellWidth: CGFloat = 29
@@ -1144,6 +1198,22 @@ private struct WhoopBatteryPercentIcon: View {
         .frame(width: Self.shellWidth, height: Self.shellHeight)
     }
 
+    private var chargingLabel: some View {
+        HStack(spacing: 1) {
+            HStack(spacing: -0.7) {
+                ForEach(Array(percentageText.enumerated()), id: \.offset) { _, digit in
+                    Text(String(digit))
+                }
+            }
+            .font(.system(size: 12, weight: .bold, design: .rounded))
+
+            Image(systemName: "bolt.fill")
+                .font(.system(size: 7, weight: .bold))
+        }
+        .foregroundStyle(.white)
+        .frame(width: Self.shellWidth, height: Self.shellHeight)
+    }
+
     var body: some View {
         HStack(spacing: 1.6) {
             ZStack(alignment: .leading) {
@@ -1154,7 +1224,11 @@ private struct WhoopBatteryPercentIcon: View {
                     .fill(fillColor)
                     .frame(width: Self.shellWidth * fillFraction)
 
-                percentageLabel(color: .black)
+                if isCharging {
+                    chargingLabel
+                } else {
+                    percentageLabel(color: .black)
+                }
             }
             .frame(width: Self.shellWidth, height: Self.shellHeight)
             .clipShape(RoundedRectangle(cornerRadius: Self.shellRadius, style: .continuous))
@@ -1167,9 +1241,132 @@ private struct WhoopBatteryPercentIcon: View {
                 style: .continuous
             )
                 .fill(trackColor)
-            .frame(width: 2.4, height: 6.6)
+                .frame(width: 2.4, height: 6.6)
         }
         .accessibilityHidden(true)
+    }
+}
+
+private struct AnimatedMetricValue: View {
+    private static let duration = 0.24
+    private static let stagger = 0.014
+    private static let maximumStagger = 0.042
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    let value: String
+    let fontSize: CGFloat
+    let animateChanges: Bool
+
+    @State private var previousValue: String
+    @State private var displayedValue: String
+    @State private var animationProgress: CGFloat = 1
+    @State private var animationGeneration = 0
+
+    init(value: String, fontSize: CGFloat = 30, animateChanges: Bool = true) {
+        self.value = value
+        self.fontSize = fontSize
+        self.animateChanges = animateChanges
+        _previousValue = State(initialValue: value)
+        _displayedValue = State(initialValue: value)
+    }
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            Text(previousValue)
+                .modifier(PreviousMetricValueFade(progress: animationProgress))
+
+            HStack(spacing: 0) {
+                ForEach(Array(displayedValue.enumerated()), id: \.offset) { index, character in
+                    Text(String(character))
+                        .modifier(
+                            MetricDigitPop(
+                                progress: animationProgress,
+                                delay: min(Double(index) * Self.stagger, Self.maximumStagger),
+                                duration: Self.duration,
+                                totalDuration: Self.duration + Self.maximumStagger
+                            )
+                        )
+                }
+            }
+        }
+        .font(.system(size: fontSize, weight: .semibold, design: .rounded))
+        .monospacedDigit()
+        .foregroundStyle(.primary)
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(displayedValue)
+        .onChange(of: value) { _, newValue in
+            guard newValue != displayedValue else { return }
+
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                previousValue = reduceMotion || !animateChanges ? newValue : displayedValue
+                displayedValue = newValue
+                animationProgress = reduceMotion || !animateChanges ? 1 : 0
+                animationGeneration &+= 1
+            }
+        }
+        .task(id: animationGeneration) {
+            guard !reduceMotion, animationProgress == 0 else { return }
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            withAnimation(.linear(duration: Self.duration + Self.maximumStagger)) {
+                animationProgress = 1
+            }
+            try? await Task.sleep(for: .seconds(Self.duration + Self.maximumStagger))
+            guard !Task.isCancelled else { return }
+            previousValue = displayedValue
+        }
+    }
+}
+
+private struct MetricDigitPop: AnimatableModifier {
+    var progress: CGFloat
+    let delay: Double
+    let duration: Double
+    let totalDuration: Double
+
+    nonisolated var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        let elapsed = progress * CGFloat(totalDuration)
+        let localProgress = min(
+            max((elapsed - CGFloat(delay)) / CGFloat(duration), 0),
+            1
+        )
+        let easedProgress = easeOutBack(localProgress)
+
+        content
+            .opacity(localProgress)
+            .blur(radius: (1 - localProgress) * 1.2)
+            .scaleEffect(0.97 + (0.03 * easedProgress))
+            .offset(y: (1 - easedProgress) * 5)
+    }
+
+    private func easeOutBack(_ progress: CGFloat) -> CGFloat {
+        let overshoot: CGFloat = 0.72
+        let shifted = progress - 1
+        return 1 + ((overshoot + 1) * shifted * shifted * shifted)
+            + (overshoot * shifted * shifted)
+    }
+}
+
+private struct PreviousMetricValueFade: AnimatableModifier {
+    var progress: CGFloat
+
+    nonisolated var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        let remaining = CGFloat(1) - min(progress, CGFloat(1))
+        content.opacity(Double(remaining))
     }
 }
 
@@ -1178,6 +1375,12 @@ private struct MetricPoint: Identifiable {
     let value: Double
 
     var id: Date { date }
+}
+
+private struct MorphingMetricPoint: Identifiable {
+    let id: Int
+    let position: Double
+    let value: Double
 }
 
 private struct AverageLevel: Identifiable {
@@ -1207,6 +1410,15 @@ private enum HealthRange: String, CaseIterable, Identifiable {
     case all = "All"
 
     var id: String { rawValue }
+
+    var compactTitle: String {
+        switch self {
+        case .week: "1W"
+        case .month: "1M"
+        case .year: "1Y"
+        case .all: "All"
+        }
+    }
 
     var menuTitle: String {
         switch self {

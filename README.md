@@ -1,5 +1,7 @@
 # WHOOP iOS
 
+[![iOS CI](https://github.com/harleyhzhang/whoop-ios/actions/workflows/ios-ci.yml/badge.svg)](https://github.com/harleyhzhang/whoop-ios/actions/workflows/ios-ci.yml)
+
 WHOOP iOS is an unofficial, native, offline-first personal iPhone client. It is
 intended to operate a personally owned WHOOP 5 directly,
 preserve the underlying data, and calculate transparent sleep and recovery
@@ -63,23 +65,24 @@ The app should eventually cover the complete personal loop:
   under gray metric titles. Icons retain fixed metric colors; no phone-motion
   metrics or Motion & Fitness permission are part of this surface.
 - Chart density is range-aware without altering the stored daily history or
-  the exact current value: 1W and 1M use daily points, 3M uses three-day
-  medians, 1Y uses weekly medians, and All widens adaptive median buckets from
-  weekly toward monthly to stay near 40–60 plotted points.
-- One-week and one-month charts retain compact start/midpoint/latest labels.
-  Three-month, one-year, and all-history charts label every represented month
-  without vertical month gridlines or tick marks; three months shows
-  abbreviated months. Longer ranges show at most four evenly distributed,
-  abbreviated month-and-year labels in equal-width, plot-aligned footer cells,
-  so the chart stays readable and no longer reserves an empty strip below them.
+  exact current value: 1W and 1M use daily points, 1Y uses weekly medians, and
+  All widens adaptive median buckets from weekly toward monthly to stay near
+  40–60 plotted points.
+- The native segmented selector uses compact `1W`, `1M`, `1Y`, and `All`
+  labels while retaining full VoiceOver names. Fixed ranges appear only when
+  the stored history is long enough to support them. One-week and one-month
+  charts retain compact start/midpoint/Today labels; one-year and all-history
+  charts show at most four evenly distributed abbreviated month-and-year labels
+  without vertical month gridlines or wasted footer space.
 - The Trends selector persists the most recently used range and restores its
   selected highlight and charts when the app next opens.
-- For 3M, 1Y, and All, charts overlay independent contrasting average levels.
-  The history is divided backward from the latest day into adaptive equal-time
-  windows—three levels for 3M and at most five for 1Y/All. Each unconnected
+- For 1Y and All, charts overlay independent contrasting average levels. The
+  history is divided backward from the latest day into adaptive equal-time
+  windows, with at most five levels. Each unconnected
   horizontal segment shows its formatted mean above the line. The underlying
   colored trend remains visible at reduced opacity; pressing or scrubbing hides
-  the levels and restores the normal trend.
+  the levels and restores the normal trend. A card-colored knockout beneath the
+  faded endpoint prevents its alpha from stacking with the translucent curve.
 - Aggregated trends keep their historical median buckets but anchor the final
   bucket to the exact latest observation, so the endpoint, dot, and current
   card value agree. Chart selection snaps to rendered points, and an explicit
@@ -89,6 +92,12 @@ The app should eventually cover the complete personal loop:
   recomputes the trend: it overlays a translucent future region after the
   selected point, then adds the rule and dot, leaving line geometry, scales,
   and layout unchanged while scrubbing.
+- Range changes keep the horizontal sample positions fixed and animate only the
+  y-values, so each curve morphs vertically into its new shape instead of
+  disappearing, sliding, or stretching sideways. The headline and current-card
+  numbers use a brief restrained digit pop while retaining the previous value
+  underneath; Reduce Motion remains immediate and direct chart scrubbing does
+  not replay the animation.
 - Haptics follow a restrained interaction vocabulary: selection ticks occur
   only when the range or exact selected night changes; lightweight impacts
   accompany diagnostic navigation and rescanning; handshake initiation is
@@ -103,6 +112,10 @@ The app should eventually cover the complete personal loop:
   hysteresis to prevent threshold jitter, plus one completion alert when a
   subsequent reading reaches 100%. All three paths were exercised with
   debug-only simulator triggers that do not persist synthetic health data.
+- A fresh checksum-valid WHOOP 5 wrist-off event schedules one local reminder
+  after 30 minutes. A wrist-on event cancels the pending or delivered reminder
+  and re-arms the next episode. Stale/replayed frames, corrupt frames, missing
+  heart-rate data, and Bluetooth disconnects cannot trigger it.
 - Every sleep derivation is expressed in elapsed time against the strap's own
   observed cadence. The WHOOP 5 historical record is not one hertz: it stores
   roughly one distinct sample every six seconds, and a given night can be

@@ -1,0 +1,72 @@
+name: iOS CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build and test
+    runs-on: macos-26
+    timeout-minutes: 20
+    env:
+      DERIVED_DATA: ${{ runner.temp }}/SleepDerivedData
+      TEST_RESULTS: ${{ runner.temp }}/SleepTests.xcresult
+      WHOOP_HISTORY_SEED_PATH: ${{ runner.temp }}/missing-whoop-history.json
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Report toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphonesimulator --show-sdk-version
+
+      - name: Reject private runtime data
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-files | grep -E '(^|/)(sleep\.sqlite3|whoop-history\.json)$'; then
+            echo "Private WHOOP runtime data must not be committed."
+            exit 1
+          fi
+
+      - name: Run unit tests
+        run: |
+          xcodebuild test -quiet \
+            -project Sleep.xcodeproj \
+            -scheme Sleep \
+            -configuration Debug \
+            -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=latest' \
+            -derivedDataPath "$DERIVED_DATA" \
+            -resultBundlePath "$TEST_RESULTS" \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Build Release
+        run: |
+          xcodebuild build -quiet \
+            -project Sleep.xcodeproj \
+            -scheme Sleep \
+            -configuration Release \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$DERIVED_DATA" \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Upload failing test result
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SleepTests-${{ github.run_id }}
+          path: ${{ env.TEST_RESULTS }}
+          if-no-files-found: ignore
+          retention-days: 7

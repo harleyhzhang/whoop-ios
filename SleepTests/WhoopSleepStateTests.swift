@@ -19,6 +19,68 @@ final class WhoopSleepStateTests: XCTestCase {
         XCTAssertTrue(WhoopHandshakeProbe.shouldDeduplicateTransportRetries(frameType: 50))
     }
 
+    func testBatteryLevelStatusReportsChargingOrExternalPower() {
+        XCTAssertEqual(
+            WhoopHandshakeProbe.batteryLevelStatusCharging(Data([0x02, 0x23, 0x00, 68])),
+            true
+        )
+        XCTAssertEqual(
+            WhoopHandshakeProbe.batteryLevelStatusCharging(Data([0x02, 0x63, 0x00, 100])),
+            true
+        )
+        XCTAssertEqual(
+            WhoopHandshakeProbe.batteryLevelStatusCharging(Data([0x02, 0x41, 0x00, 67])),
+            false
+        )
+        XCTAssertNil(WhoopHandshakeProbe.batteryLevelStatusCharging(Data([0x02, 0x01, 0x00])))
+    }
+
+    func testLegacyBatteryPowerStateReportsCharging() {
+        XCTAssertEqual(WhoopHandshakeProbe.legacyBatteryPowerStateCharging(Data([0x30])), true)
+        XCTAssertEqual(WhoopHandshakeProbe.legacyBatteryPowerStateCharging(Data([0x20])), false)
+        XCTAssertNil(WhoopHandshakeProbe.legacyBatteryPowerStateCharging(Data([0x00])))
+    }
+
+    func testFreshWristEventsReportOnAndOffState() {
+        let timestamp: UInt32 = 1_800_000_000
+        let receivedAt = Date(timeIntervalSince1970: TimeInterval(timestamp + 20))
+
+        XCTAssertEqual(
+            WhoopHandshakeProbe.freshWhoop5WristState(
+                wristEventFrame(event: 9, timestamp: timestamp),
+                receivedAt: receivedAt
+            ),
+            true
+        )
+        XCTAssertEqual(
+            WhoopHandshakeProbe.freshWhoop5WristState(
+                wristEventFrame(event: 10, timestamp: timestamp),
+                receivedAt: receivedAt
+            ),
+            false
+        )
+    }
+
+    func testStaleOrCorruptWristEventsCannotScheduleWearState() {
+        let timestamp: UInt32 = 1_800_000_000
+        let event = wristEventFrame(event: 10, timestamp: timestamp)
+        XCTAssertNil(
+            WhoopHandshakeProbe.freshWhoop5WristState(
+                event,
+                receivedAt: Date(timeIntervalSince1970: TimeInterval(timestamp + 46))
+            )
+        )
+
+        var corruptEvent = event
+        corruptEvent[10] ^= 0x01
+        XCTAssertNil(
+            WhoopHandshakeProbe.freshWhoop5WristState(
+                corruptEvent,
+                receivedAt: Date(timeIntervalSince1970: TimeInterval(timestamp))
+            )
+        )
+    }
+
     func testInterimUpStateDoesNotSplitOneNight() {
         var firstRun: [WhoopStore.HistoricalRow] = []
         for timestamp in stride(from: 0.0, through: 7 * 60 * 60, by: 20.0) {
@@ -485,6 +547,17 @@ final class WhoopSleepStateTests: XCTestCase {
     private func metadataFrame(type: UInt8) -> Data {
         var bytes = framedPacket(length: 16, type: 49, version: 1)
         bytes[10] = type
+        finishChecksums(&bytes)
+        return Data(bytes)
+    }
+
+    private func wristEventFrame(event: UInt8, timestamp: UInt32) -> Data {
+        var bytes = framedPacket(length: 20, type: 48, version: 1)
+        bytes[10] = event
+        bytes[12] = UInt8(truncatingIfNeeded: timestamp)
+        bytes[13] = UInt8(truncatingIfNeeded: timestamp >> 8)
+        bytes[14] = UInt8(truncatingIfNeeded: timestamp >> 16)
+        bytes[15] = UInt8(truncatingIfNeeded: timestamp >> 24)
         finishChecksums(&bytes)
         return Data(bytes)
     }

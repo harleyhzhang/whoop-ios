@@ -22,6 +22,10 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
     private let defaults = UserDefaults.standard
     private var isConfigured = false
     private var pendingIdentifiers: Set<String> = []
+    private var wristStateGeneration = 0
+
+    private static let notWornIdentifier = "whoop.not-worn.30-minutes"
+    private static let notWornDelay: TimeInterval = 30 * 60
 
     private enum Key {
         static let lastMorningSleepID = "WhoopNotifications.lastMorningSleepID"
@@ -30,6 +34,8 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
         static let sentLow20 = "WhoopNotifications.sentLow20"
         static let sentLow10 = "WhoopNotifications.sentLow10"
         static let fullChargeNotified = "WhoopNotifications.fullChargeNotified"
+        static let notWornSince = "WhoopNotifications.notWornSince"
+        static let notWornReminderScheduled = "WhoopNotifications.notWornReminderScheduled"
     }
 
     private override init() {
@@ -131,6 +137,45 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
         defaults.set(fullChargeNotified, forKey: Key.fullChargeNotified)
     }
 
+    func observeWristState(isWorn: Bool, observedAt: Date = .now) {
+        wristStateGeneration &+= 1
+        let generation = wristStateGeneration
+
+        if isWorn {
+            defaults.removeObject(forKey: Key.notWornSince)
+            defaults.set(false, forKey: Key.notWornReminderScheduled)
+            center.removePendingNotificationRequests(withIdentifiers: [Self.notWornIdentifier])
+            center.removeDeliveredNotifications(withIdentifiers: [Self.notWornIdentifier])
+            return
+        }
+
+        guard !defaults.bool(forKey: Key.notWornReminderScheduled),
+              !pendingIdentifiers.contains(Self.notWornIdentifier) else { return }
+
+        let startedAt = defaults.object(forKey: Key.notWornSince) as? Date ?? observedAt
+        defaults.set(startedAt, forKey: Key.notWornSince)
+        let elapsed = max(0, Date().timeIntervalSince(startedAt))
+        let remainingDelay = max(1, Self.notWornDelay - elapsed)
+
+        deliver(
+            identifier: Self.notWornIdentifier,
+            title: "Your WHOOP is off your wrist",
+            body: "It’s been off for 30 minutes. Put it back on to keep collecting data.",
+            after: remainingDelay
+        ) { [weak self] succeeded in
+            guard let self else { return }
+            guard self.wristStateGeneration == generation else {
+                self.center.removePendingNotificationRequests(
+                    withIdentifiers: [Self.notWornIdentifier]
+                )
+                return
+            }
+            if succeeded {
+                self.defaults.set(true, forKey: Key.notWornReminderScheduled)
+            }
+        }
+    }
+
     private func scheduleBatteryNotification(
         identifier: String,
         title: String,
@@ -152,6 +197,7 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
         identifier: String,
         title: String,
         body: String,
+        after delay: TimeInterval = 1,
         completion: @escaping @MainActor (Bool) -> Void = { _ in }
     ) {
         pendingIdentifiers.insert(identifier)
@@ -160,7 +206,7 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
         content.body = body
         content.sound = .default
         content.threadIdentifier = "whoop.local"
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(1, delay), repeats: false)
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -219,6 +265,12 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
                 identifier: eventIdentifier("whoop.debug.charged"),
                 title: "WHOOP fully charged",
                 body: "Battery reached 100%."
+            )
+        case "notWorn":
+            deliver(
+                identifier: eventIdentifier("whoop.debug.not-worn"),
+                title: "Your WHOOP is off your wrist",
+                body: "It’s been off for 30 minutes. Put it back on to keep collecting data."
             )
         default:
             break
