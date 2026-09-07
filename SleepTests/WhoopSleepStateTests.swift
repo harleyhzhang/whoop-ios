@@ -403,11 +403,119 @@ final class WhoopSleepStateTests: XCTestCase {
         var database: OpaquePointer?
         XCTAssertEqual(sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READONLY, nil), SQLITE_OK)
         defer { if let database { sqlite3_close(database) } }
-        XCTAssertEqual(scalarInt(database, sql: "PRAGMA user_version"), 4)
+        XCTAssertEqual(scalarInt(database, sql: "PRAGMA user_version"), 6)
         XCTAssertEqual(scalarInt(
             database,
             sql: "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('whoop_decode_result','whoop_ppg_packet','whoop_store_metadata')"
         ), 3)
+        XCTAssertEqual(scalarInt(
+            database,
+            sql: "SELECT COUNT(*) FROM pragma_table_info('daily_health_metric') WHERE name IN ('sleep_start_at','sleep_end_at','sleep_start_minute','sleep_end_minute','sleep_need_minutes','sleep_consistency_percentage','sleep_efficiency_percentage','sleep_sufficiency_percentage')"
+        ), 8)
+        XCTAssertEqual(scalarInt(
+            database,
+            sql: "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('whoop_api_source_record','whoop_api_numeric_metric')"
+        ), 2)
+    }
+
+    func testSleepScoreFeaturesCaptureDurationEfficiencyAndRecentTiming() {
+        let history = [
+            SleepScoreNight(
+                dateKey: "2026-09-05", durationMinutes: 450,
+                efficiencyPercentage: 92, startMinute: 1_380, endMinute: 390
+            ),
+            SleepScoreNight(
+                dateKey: "2026-09-06", durationMinutes: 480,
+                efficiencyPercentage: 95, startMinute: 1_410, endMinute: 420
+            )
+        ]
+        let current = SleepScoreNight(
+            dateKey: "2026-09-07", durationMinutes: 510,
+            efficiencyPercentage: 97, startMinute: 1_425, endMinute: 435
+        )
+
+        let features = SleepScoreFeatureBuilder.features(current: current, history: history)
+
+        XCTAssertEqual(features.count, 50)
+        XCTAssertEqual(features[0], 510)
+        XCTAssertEqual(features[1], 97)
+        XCTAssertEqual(features[6], 480)
+        XCTAssertEqual(features[7], 95)
+        XCTAssertGreaterThan(features.last ?? 0, 95)
+    }
+
+    func testFallbackSleepScoreIsBounded() {
+        XCTAssertEqual(
+            WhoopStore.fallbackSleepScore(
+                durationMinutes: 1_000,
+                efficiencyPercentage: 100,
+                timingAgreementPercentage: 100
+            ),
+            99
+        )
+        XCTAssertEqual(
+            WhoopStore.fallbackSleepScore(
+                durationMinutes: 0,
+                efficiencyPercentage: 0,
+                timingAgreementPercentage: 0
+            ),
+            0
+        )
+    }
+
+    func testSerializedSleepScoreModelPredictsForestSVREnsemble() throws {
+        let features = Array(repeating: 0.0, count: SleepScoreFeatureBuilder.featureCount)
+        let payload: [String: Any] = [
+            "version": "synthetic",
+            "featureVersion": SleepScoreFeatureBuilder.version,
+            "directWeight": 0.1,
+            "extraTreesWeight": 0.75,
+            "trees": [[
+                "childrenLeft": [-1], "childrenRight": [-1],
+                "features": [-2], "thresholds": [-2.0], "values": [80.0]
+            ]],
+            "svr": [
+                "means": features, "scales": Array(repeating: 1.0, count: features.count),
+                "supportVectors": [features], "dualCoefficients": [0.0],
+                "intercept": 100.0, "gamma": 0.1
+            ],
+            "needModel": [
+                "initialPrediction": 500.0, "learningRate": 0.1, "trees": []
+            ],
+            "consistencyModel": [
+                "initialPrediction": 80.0, "learningRate": 0.1, "trees": []
+            ],
+            "pillarSVR": [
+                "means": [0.0, 0.0, 0.0], "scales": [1.0, 1.0, 1.0],
+                "supportVectors": [[0.0, 0.0, 0.0]], "dualCoefficients": [0.0],
+                "intercept": 100.0, "gamma": 0.1
+            ]
+        ]
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        let model = try JSONDecoder().decode(SleepScoreModelBundle.self, from: data)
+
+        XCTAssertEqual(try XCTUnwrap(model.predict(features)), 98.5, accuracy: 0.0001)
+    }
+
+    func testPrivateSleepScoreModelDecodesWhenAvailable() throws {
+        guard let path = Bundle.main.url(
+            forResource: "whoop-score-model", withExtension: "json"
+        ) else { return }
+        let model = try JSONDecoder().decode(
+            SleepScoreModelBundle.self,
+            from: Data(contentsOf: path)
+        )
+        let current = SleepScoreNight(
+            dateKey: "2026-09-07", durationMinutes: 480,
+            efficiencyPercentage: 95, startMinute: 1_410, endMinute: 420
+        )
+        let prediction = model.predict(
+            SleepScoreFeatureBuilder.features(current: current, history: [])
+        )
+
+        XCTAssertEqual(model.version, "whoop5_local_v5_score_staged_1")
+        XCTAssertNotNil(prediction)
+        XCTAssertTrue((0...99).contains(prediction ?? -1))
     }
 
     func testOffloadCompletionRequiresDurableCRCValidCompletionAfterHistory() async throws {

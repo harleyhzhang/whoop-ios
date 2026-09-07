@@ -708,6 +708,13 @@ struct RootView: View {
                 }
             }
             .chartYScale(domain: domain)
+            // A range switch changes the y-domain immediately while the old
+            // curve's values are still morphing toward the new range. Keep
+            // those transient values inside the plot rectangle instead of
+            // letting them spike through the card above or axis below.
+            .chartPlotStyle { plot in
+                plot.clipped()
+            }
             // Every range uses the same fixed horizontal coordinates. Only the
             // sampled y-values animate, so the curve morphs vertically without
             // sliding or stretching sideways.

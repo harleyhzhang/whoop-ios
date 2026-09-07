@@ -55,9 +55,13 @@ The app should eventually cover the complete personal loop:
   database. The initial private seed contains 306 scored nights from 2025-10-16
   through 2026-09-01. Sleep uses WHOOP's archived sleep-performance percentage;
   duration is the sum of light, REM, and slow-wave sleep; HRV is RMSSD; and RHR
-  is the archived resting-heart-rate value. The dashboard shows missing data
-  instead of extrapolating and keeps archive provenance out of the daily-use
-  header.
+  is the archived resting-heart-rate value. The import also retains sleep start,
+  end, dynamic need, sufficiency, consistency, and efficiency as underlying
+  score evidence. Every complete sleep and recovery source object is retained as
+  JSON, and every numeric or Boolean leaf is independently indexed by field path
+  so a future model can query metrics this version does not yet understand. The
+  dashboard shows missing data instead of extrapolating and keeps archive
+  provenance out of the daily-use header.
 - The top summary uses an untitled, borderless layout inspired by Apple
   Fitness: Sleep and Duration share the first row, while HRV, RHR, and Heart
   Rate share a compact three-column second row. It has no divider lines, uses
@@ -146,17 +150,23 @@ The app should eventually cover the complete personal loop:
   WHOOP's distribution. The consistent direction suggests the local windows
   favour the calmest part of the night more than WHOOP's do; this is a known
   methodological difference, not a demonstrated defect.
-- Sleep need is a calibrated constant rather than a function of recent sleep.
-  The previous model took the 75th percentile of the last 28 nights' durations,
-  which derived how much sleep is needed from how much sleep happened, so a run
-  of short nights lowered the bar. With a 480 minute floor it also scored any
-  night past eight hours at 100%. Dividing each archived night's duration by the
-  sleep performance WHOOP published for it recovers the need WHOOP used: a
-  median of 517 minutes over 306 nights. A constant 519 minute need reproduces
-  WHOOP's median score of 82 exactly and its mean within a point, and the score
-  is capped at 99 because WHOOP never awarded 100 in 306 nights. Sleep debt,
-  strain, and naps are deliberately not modelled, so a night after heavy strain
-  scores higher here than WHOOP would score it.
+- Sleep Score is fitted against all 306 archived WHOOP-scored nights. The old
+  `duration / 519 minutes` formula had 5.73-point mean absolute error and caused
+  the misleading run of 99s. WHOOP's exported sufficiency, consistency, and
+  efficiency pillars reproduce its score with 0.83-point forward-held-out error,
+  confirming those pillars carry almost the whole calculation. Because WHOOP
+  will not supply its dynamic need or proprietary Sleep Stress after access
+  ends, the production private model uses only signals this app can continue to
+  calculate: duration, efficiency, circular sleep/wake timing, timing agreement,
+  and seven nights of history. Gradient-boosted models first reconstruct WHOOP's
+  dynamic need and consistency, then an RBF-SVR applies the learned pillar
+  relationship. A 10% direct Extra Trees/SVR estimate stabilizes that staged
+  result. This reaches 1.68-point forward-held-out error (RMSE 2.43, R² 0.920).
+  HRV, RHR, stages, respiration, and ad-hoc stress proxies were tested and
+  rejected because they worsened unseen-night error. The reproducible trainer lives at
+  `Tools/backtest_sleep_score.py`; fitted parameters stay in Harley's private
+  data tree because support vectors and tree thresholds derive from real health
+  history.
 - Derived rows carry a versioned source. A change to any derivation re-derives
   the nights the previous version wrote instead of leaving stale values in the
   history; archived WHOOP rows are authoritative and are never overwritten.
@@ -164,6 +174,9 @@ The app should eventually cover the complete personal loop:
   the translucent future region shows through it, and that region extends past
   the domain so the round line cap overhanging the final point is dimmed with
   the rest of the line instead of staying at full strength on the right edge.
+  The plot rectangle also clips the transient old-range values during a y-only
+  range morph, preventing month-to-week scale changes from drawing spikes above
+  or below the card.
 - Sleep finalization is an explicit state machine. Before a new sleep begins,
   the dashboard continues showing the latest completed night. As soon as the
   band detects sleep, the compact card says only `Sleep detected`—never a
@@ -225,8 +238,9 @@ The app should eventually cover the complete personal loop:
 - The generated seed remains in Harley's private data tree rather than the
   source tree. Local builds optionally copy the file selected by
   `WHOOP_HISTORY_SEED_PATH` (or the private local default) into the app bundle
-  for first-launch import; the app contains no API client secret or refresh
-  token. Clean clones build without the private seed and display missing data.
+  for first-launch import. The private fitted model follows the same rule via
+  `WHOOP_SCORE_MODEL_PATH`; clean clones use a bounded coefficient-only fallback.
+  The app contains no API client secret or refresh token.
 - Sustained worn live capture, foreground/background persistence, historical
   offload, conservative local sleep finalization, and local notifications work.
   Longer unattended overnight calibration, disconnect recovery, stage models,

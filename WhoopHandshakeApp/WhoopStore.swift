@@ -299,7 +299,7 @@ final class WhoopStore: @unchecked Sendable {
     private var database: OpaquePointer?
     private var nextDeliverySequence: Int64 = 1
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
-    private static let schemaVersion = 4
+    private static let schemaVersion = 6
     private static let decoderVersion = 2
 
     init(databaseURL: URL? = nil, runBackgroundDecoding: Bool = true) {
@@ -413,7 +413,10 @@ final class WhoopStore: @unchecked Sendable {
             let sql = """
                 SELECT date_key, sleep_score, sleep_duration_minutes,
                        hrv_rmssd_milliseconds, resting_heart_rate_bpm,
-                       sleep_id, cycle_id, source, source_archive, source_updated_at
+                       sleep_id, cycle_id, source, source_archive, source_updated_at,
+                       sleep_start_at, sleep_end_at, sleep_start_minute, sleep_end_minute,
+                       sleep_need_minutes, sleep_consistency_percentage,
+                       sleep_efficiency_percentage, sleep_sufficiency_percentage
                 FROM daily_health_metric
                 WHERE source NOT LIKE 'whoop5_local_%'
                    OR (sleep_score IS NOT NULL
@@ -449,7 +452,15 @@ final class WhoopStore: @unchecked Sendable {
                     cycleID: int64Column(statement, 6),
                     source: source,
                     sourceArchive: textColumn(statement, 8),
-                    sourceUpdatedAt: sourceUpdatedAt
+                    sourceUpdatedAt: sourceUpdatedAt,
+                    sleepStartAt: textColumn(statement, 10),
+                    sleepEndAt: textColumn(statement, 11),
+                    sleepStartMinute: doubleColumn(statement, 12),
+                    sleepEndMinute: doubleColumn(statement, 13),
+                    sleepNeedMinutes: doubleColumn(statement, 14),
+                    sleepConsistencyPercentage: doubleColumn(statement, 15),
+                    sleepEfficiencyPercentage: doubleColumn(statement, 16),
+                    sleepSufficiencyPercentage: doubleColumn(statement, 17)
                 ))
                 stepResult = sqlite3_step(statement)
             }
@@ -552,7 +563,10 @@ final class WhoopStore: @unchecked Sendable {
         abandonInterruptedOffloads()
         _ = execute("PRAGMA optimize")
         backfillHistoricalSamplesIfNeeded()
-        if databaseURLOverride == nil { importBundledHistory() }
+        if databaseURLOverride == nil {
+            importBundledHistory()
+            backfillLocalSleepScoresIfNeeded()
+        }
     }
 
     private func migrateSchema() -> Bool {
@@ -745,6 +759,53 @@ final class WhoopStore: @unchecked Sendable {
             && execute("CREATE INDEX whoop_historical_sample_sample_at ON whoop_historical_sample(peripheral_id, sample_at)")
             && execute("CREATE INDEX IF NOT EXISTS heart_rate_sample_source_time ON heart_rate_sample(source, device_timestamp, received_at)")
             && execute("CREATE INDEX IF NOT EXISTS heart_rate_sample_source_received ON heart_rate_sample(source, received_at)")
+        case 5:
+            return addColumnIfNeeded(
+                table: "daily_health_metric", column: "sleep_start_at", declaration: "TEXT"
+            )
+            && addColumnIfNeeded(
+                table: "daily_health_metric", column: "sleep_end_at", declaration: "TEXT"
+            )
+            && addColumnIfNeeded(
+                table: "daily_health_metric", column: "sleep_start_minute", declaration: "REAL"
+            )
+            && addColumnIfNeeded(
+                table: "daily_health_metric", column: "sleep_end_minute", declaration: "REAL"
+            )
+            && addColumnIfNeeded(
+                table: "daily_health_metric", column: "sleep_need_minutes", declaration: "REAL"
+            )
+            && addColumnIfNeeded(
+                table: "daily_health_metric", column: "sleep_consistency_percentage", declaration: "REAL"
+            )
+            && addColumnIfNeeded(
+                table: "daily_health_metric", column: "sleep_efficiency_percentage", declaration: "REAL"
+            )
+            && addColumnIfNeeded(
+                table: "daily_health_metric", column: "sleep_sufficiency_percentage", declaration: "REAL"
+            )
+        case 6:
+            return execute("""
+                CREATE TABLE IF NOT EXISTS whoop_api_source_record (
+                    date_key TEXT PRIMARY KEY,
+                    sleep_payload_json TEXT NOT NULL,
+                    recovery_payload_json TEXT,
+                    source_archive TEXT,
+                    imported_at REAL NOT NULL,
+                    FOREIGN KEY(date_key) REFERENCES daily_health_metric(date_key)
+                )
+                """)
+            && execute("""
+                CREATE TABLE IF NOT EXISTS whoop_api_numeric_metric (
+                    date_key TEXT NOT NULL,
+                    source_kind TEXT NOT NULL CHECK(source_kind IN ('sleep','recovery')),
+                    field_path TEXT NOT NULL,
+                    value REAL NOT NULL,
+                    PRIMARY KEY(date_key, source_kind, field_path),
+                    FOREIGN KEY(date_key) REFERENCES whoop_api_source_record(date_key)
+                )
+                """)
+            && execute("CREATE INDEX IF NOT EXISTS whoop_api_numeric_metric_path ON whoop_api_numeric_metric(source_kind, field_path, date_key)")
         default:
             return false
         }
@@ -796,8 +857,11 @@ final class WhoopStore: @unchecked Sendable {
             INSERT INTO daily_health_metric
             (date_key, sleep_score, sleep_duration_minutes, hrv_rmssd_milliseconds,
              resting_heart_rate_bpm, sleep_id, cycle_id, source, source_archive,
-             source_updated_at, imported_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             source_updated_at, imported_at, sleep_start_at, sleep_end_at,
+             sleep_start_minute, sleep_end_minute, sleep_need_minutes,
+             sleep_consistency_percentage, sleep_efficiency_percentage,
+             sleep_sufficiency_percentage)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(date_key) DO UPDATE SET
                 sleep_score = excluded.sleep_score,
                 sleep_duration_minutes = excluded.sleep_duration_minutes,
@@ -808,7 +872,15 @@ final class WhoopStore: @unchecked Sendable {
                 source = excluded.source,
                 source_archive = excluded.source_archive,
                 source_updated_at = excluded.source_updated_at,
-                imported_at = excluded.imported_at
+                imported_at = excluded.imported_at,
+                sleep_start_at = excluded.sleep_start_at,
+                sleep_end_at = excluded.sleep_end_at,
+                sleep_start_minute = excluded.sleep_start_minute,
+                sleep_end_minute = excluded.sleep_end_minute,
+                sleep_need_minutes = excluded.sleep_need_minutes,
+                sleep_consistency_percentage = excluded.sleep_consistency_percentage,
+                sleep_efficiency_percentage = excluded.sleep_efficiency_percentage,
+                sleep_sufficiency_percentage = excluded.sleep_sufficiency_percentage
             WHERE daily_health_metric.source = 'whoop_api'
               AND excluded.source_updated_at >= daily_health_metric.source_updated_at
             """
@@ -827,7 +899,116 @@ final class WhoopStore: @unchecked Sendable {
         bind(record.sourceArchive, to: 9, in: statement)
         bind(record.sourceUpdatedAt, to: 10, in: statement)
         sqlite3_bind_double(statement, 11, Date().timeIntervalSince1970)
-        return sqlite3_step(statement) == SQLITE_DONE
+        bind(record.sleepStartAt, to: 12, in: statement)
+        bind(record.sleepEndAt, to: 13, in: statement)
+        bind(record.sleepStartMinute, to: 14, in: statement)
+        bind(record.sleepEndMinute, to: 15, in: statement)
+        bind(record.sleepNeedMinutes, to: 16, in: statement)
+        bind(record.sleepConsistencyPercentage, to: 17, in: statement)
+        bind(record.sleepEfficiencyPercentage, to: 18, in: statement)
+        bind(record.sleepSufficiencyPercentage, to: 19, in: statement)
+        guard sqlite3_step(statement) == SQLITE_DONE else { return false }
+        if record.source == "whoop_api", let sleepJSON = record.sourceSleepPayloadJSON {
+            return upsertWhoopAPISource(
+                dateKey: record.dateKey,
+                sleepJSON: sleepJSON,
+                recoveryJSON: record.sourceRecoveryPayloadJSON,
+                sourceArchive: record.sourceArchive,
+                database: database
+            )
+        }
+        return true
+    }
+
+    private func upsertWhoopAPISource(
+        dateKey: String,
+        sleepJSON: String,
+        recoveryJSON: String?,
+        sourceArchive: String?,
+        database: OpaquePointer
+    ) -> Bool {
+        let sourceSQL = """
+            INSERT INTO whoop_api_source_record
+            (date_key, sleep_payload_json, recovery_payload_json, source_archive, imported_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(date_key) DO UPDATE SET
+                sleep_payload_json = excluded.sleep_payload_json,
+                recovery_payload_json = excluded.recovery_payload_json,
+                source_archive = excluded.source_archive,
+                imported_at = excluded.imported_at
+            """
+        var sourceStatement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sourceSQL, -1, &sourceStatement, nil) == SQLITE_OK,
+              let sourceStatement else { return false }
+        bind(dateKey, to: 1, in: sourceStatement)
+        bind(sleepJSON, to: 2, in: sourceStatement)
+        bind(recoveryJSON, to: 3, in: sourceStatement)
+        bind(sourceArchive, to: 4, in: sourceStatement)
+        sqlite3_bind_double(sourceStatement, 5, Date().timeIntervalSince1970)
+        let sourceSucceeded = sqlite3_step(sourceStatement) == SQLITE_DONE
+        sqlite3_finalize(sourceStatement)
+        guard sourceSucceeded else { return false }
+
+        var deleteStatement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            database,
+            "DELETE FROM whoop_api_numeric_metric WHERE date_key = ?",
+            -1,
+            &deleteStatement,
+            nil
+        ) == SQLITE_OK, let deleteStatement else { return false }
+        bind(dateKey, to: 1, in: deleteStatement)
+        let deleteSucceeded = sqlite3_step(deleteStatement) == SQLITE_DONE
+        sqlite3_finalize(deleteStatement)
+        guard deleteSucceeded else { return false }
+
+        let metricSQL = """
+            INSERT INTO whoop_api_numeric_metric
+            (date_key, source_kind, field_path, value) VALUES (?, ?, ?, ?)
+            """
+        var metricStatement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            database, metricSQL, -1, &metricStatement, nil
+        ) == SQLITE_OK, let metricStatement else { return false }
+        defer { sqlite3_finalize(metricStatement) }
+
+        for (kind, payload) in [("sleep", sleepJSON), ("recovery", recoveryJSON)] {
+            guard let payload,
+                  let data = payload.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) else { continue }
+            var metrics: [(String, Double)] = []
+            Self.flattenNumericJSON(object, path: "", into: &metrics)
+            for (path, value) in metrics where !path.isEmpty {
+                bind(dateKey, to: 1, in: metricStatement)
+                bind(kind, to: 2, in: metricStatement)
+                bind(path, to: 3, in: metricStatement)
+                sqlite3_bind_double(metricStatement, 4, value)
+                let succeeded = sqlite3_step(metricStatement) == SQLITE_DONE
+                guard succeeded else { return false }
+                sqlite3_reset(metricStatement)
+                sqlite3_clear_bindings(metricStatement)
+            }
+        }
+        return true
+    }
+
+    private static func flattenNumericJSON(
+        _ value: Any,
+        path: String,
+        into output: inout [(String, Double)]
+    ) {
+        if let dictionary = value as? [String: Any] {
+            for key in dictionary.keys.sorted() {
+                let childPath = path.isEmpty ? key : "\(path).\(key)"
+                flattenNumericJSON(dictionary[key]!, path: childPath, into: &output)
+            }
+        } else if let array = value as? [Any] {
+            for (index, child) in array.enumerated() {
+                flattenNumericJSON(child, path: "\(path)[\(index)]", into: &output)
+            }
+        } else if let number = value as? NSNumber {
+            output.append((path, number.doubleValue))
+        }
     }
 
     @discardableResult
@@ -1593,6 +1774,73 @@ final class WhoopStore: @unchecked Sendable {
         return rows
     }
 
+    /// Replays retained raw sleep-state evidence once for each score model
+    /// version. Without this, an app update would fix future nights but leave
+    /// the handful of locally scored pre-update nights on the old duration-only
+    /// formula forever merely because they fell outside the 48-hour live window.
+    private func backfillLocalSleepScoresIfNeeded() {
+        guard let database,
+              metadataValue(database: database, key: "local-sleep-score-backfill") != Self.localSource
+        else { return }
+        let sql = """
+            SELECT sample_at, heart_rate, rr_intervals_json, sleep_state
+            FROM whoop_historical_sample
+            WHERE peripheral_id = (
+                SELECT peripheral_id FROM whoop_historical_sample
+                ORDER BY sample_at DESC LIMIT 1
+            )
+            ORDER BY sample_at ASC
+            """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return }
+        var rows: [HistoricalRow] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let rrText = textColumn(statement, 2) ?? "[]"
+            rows.append(HistoricalRow(
+                timestamp: sqlite3_column_double(statement, 0),
+                heartRate: Int(sqlite3_column_int(statement, 1)),
+                rrIntervals: (try? JSONDecoder().decode(
+                    [Double].self, from: Data(rrText.utf8)
+                )) ?? [],
+                sleepState: Int(sqlite3_column_int(statement, 3))
+            ))
+        }
+        sqlite3_finalize(statement)
+        guard let latest = rows.last, execute("BEGIN IMMEDIATE") else { return }
+        let groups = Self.groupedAsleepRows(rows.filter { $0.sleepState == 2 })
+        for group in groups {
+            guard let first = group.first, let last = group.last else { continue }
+            let session = rows.filter { $0.timestamp >= first.timestamp && $0.timestamp <= last.timestamp }
+            let cadence = Self.cadenceSeconds(of: session)
+            let candidate = SleepCandidate(
+                sessionRows: session,
+                asleepRows: group,
+                firstSleep: first,
+                lastSleep: last,
+                latest: latest,
+                cadenceSeconds: cadence,
+                sleepSeconds: Self.elapsedSeconds(across: group, cadence: cadence),
+                sessionCoverage: Self.observedFraction(of: session, cadence: cadence),
+                wakeSeconds: 0
+            )
+            guard candidate.meetsEvidenceGates,
+                  shouldDerive(candidate: candidate, database: database) else { continue }
+            guard updateLocalSleepScore(
+                derivedRecord(for: candidate, now: .now), database: database
+            ) else {
+                execute("ROLLBACK")
+                return
+            }
+        }
+        guard setMetadataValue(
+            database: database, key: "local-sleep-score-backfill", value: Self.localSource
+        ), execute("COMMIT") else {
+            execute("ROLLBACK")
+            return
+        }
+    }
+
     private func analyze(now: Date) -> SleepAnalysis {
         guard database != nil else { return .noData }
         let rows = recentHistoricalRows(now: now)
@@ -1945,10 +2193,30 @@ final class WhoopStore: @unchecked Sendable {
         let durationMinutes = candidate.durationMinutes
         let restingHR = restingHeartRate(rows: candidate.asleepRows, cadence: candidate.cadenceSeconds)
         let hrv = nightlyRMSSD(for: candidate)
-        let sleepScore = min(
-            Self.maximumSleepScore,
-            durationMinutes / Self.baselineSleepNeedMinutes * 100
+        let elapsedMinutes = max(
+            durationMinutes,
+            (candidate.lastSleep.timestamp - candidate.firstSleep.timestamp + candidate.cadenceSeconds) / 60
         )
+        let efficiency = min(100, durationMinutes / elapsedMinutes * 100)
+        let current = SleepScoreNight(
+            dateKey: candidate.dateKey,
+            durationMinutes: durationMinutes,
+            efficiencyPercentage: efficiency,
+            startMinute: Self.minuteOfDay(candidate.startedAt),
+            endMinute: Self.minuteOfDay(candidate.endedAt)
+        )
+        let features = SleepScoreFeatureBuilder.features(
+            current: current,
+            history: scoreHistory(before: candidate.dateKey)
+        )
+        let timingAgreement = features.last ?? 100
+        let sleepScore = Self.bundledSleepScoreModel?.predict(features)
+            ?? Self.fallbackSleepScore(
+                durationMinutes: durationMinutes,
+                efficiencyPercentage: efficiency,
+                timingAgreementPercentage: timingAgreement
+            )
+        let iso = ISO8601DateFormatter()
         return DailyHealthRecord(
             dateKey: candidate.dateKey,
             sleepScore: sleepScore,
@@ -1959,8 +2227,49 @@ final class WhoopStore: @unchecked Sendable {
             cycleID: nil,
             source: Self.localSource,
             sourceArchive: nil,
-            sourceUpdatedAt: ISO8601DateFormatter().string(from: now)
+            sourceUpdatedAt: iso.string(from: now),
+            sleepStartAt: iso.string(from: candidate.startedAt),
+            sleepEndAt: iso.string(from: candidate.endedAt),
+            sleepStartMinute: current.startMinute,
+            sleepEndMinute: current.endMinute,
+            sleepNeedMinutes: nil,
+            sleepConsistencyPercentage: timingAgreement,
+            sleepEfficiencyPercentage: efficiency,
+            sleepSufficiencyPercentage: nil
         )
+    }
+
+    private func scoreHistory(before dateKey: String) -> [SleepScoreNight] {
+        guard let database else { return [] }
+        let sql = """
+            SELECT date_key, sleep_duration_minutes, sleep_efficiency_percentage,
+                   sleep_start_minute, sleep_end_minute
+            FROM daily_health_metric
+            WHERE date_key < ?
+              AND sleep_duration_minutes IS NOT NULL
+              AND sleep_efficiency_percentage IS NOT NULL
+              AND sleep_start_minute IS NOT NULL
+              AND sleep_end_minute IS NOT NULL
+            ORDER BY date_key DESC
+            LIMIT 10
+            """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return [] }
+        defer { sqlite3_finalize(statement) }
+        bind(dateKey, to: 1, in: statement)
+        var nights: [SleepScoreNight] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let key = textColumn(statement, 0) else { continue }
+            nights.append(SleepScoreNight(
+                dateKey: key,
+                durationMinutes: sqlite3_column_double(statement, 1),
+                efficiencyPercentage: sqlite3_column_double(statement, 2),
+                startMinute: sqlite3_column_double(statement, 3),
+                endMinute: sqlite3_column_double(statement, 4)
+            ))
+        }
+        return nights
     }
 
     /// Whether a night still needs deriving. Older local model versions are
@@ -2233,33 +2542,39 @@ final class WhoopStore: @unchecked Sendable {
             : values[middle]
     }
 
-    /// Baseline sleep need, calibrated against WHOOP's own archived scores.
-    ///
-    /// The previous model took the 75th percentile of the last 28 nights'
-    /// durations, which is circular: it derived how much sleep is needed from
-    /// how much sleep actually happened, so a run of short nights lowered the
-    /// bar and flattered the next score. Clamped to a 480 minute floor, it also
-    /// scored any night past eight hours at 100%.
-    ///
-    /// Dividing each archived night's duration by the sleep performance WHOOP
-    /// published for it recovers the need WHOOP itself used: a median of 517
-    /// minutes across 306 nights. A constant 519 minute need reproduces WHOOP's
-    /// median score of 82 exactly and its mean within about one point.
-    ///
-    /// This is a baseline only. WHOOP also raises need for sleep debt, strain,
-    /// and naps, none of which are modelled here, so a night after heavy strain
-    /// will score higher than WHOOP would score it.
-    static let baselineSleepNeedMinutes: Double = 519
-
-    /// WHOOP never awarded 100% in 306 archived nights; its highest was 99.
-    static let maximumSleepScore: Double = 99
-
     /// Versioned so a change to any derivation re-derives the nights written by
     /// the previous version instead of leaving stale values in the history.
     /// Anything with the `whoop5_local` prefix is ours; anything else is an
     /// archived WHOOP row and is authoritative.
-    static let localSource = "whoop5_local_v4"
+    private static let bundledSleepScoreModel = SleepScoreModelBundle.load()
+    static let localSource = bundledSleepScoreModel?.version ?? "whoop5_local_v5_fallback"
     static let localSourcePrefix = "whoop5_local"
+
+    /// A deterministic, coefficient-only safety net for development builds
+    /// without Harley's private model bundle. The production private bundle is
+    /// an Extra Trees + RBF-SVR ensemble and replaces this automatically.
+    static func fallbackSleepScore(
+        durationMinutes: Double,
+        efficiencyPercentage: Double,
+        timingAgreementPercentage: Double
+    ) -> Double {
+        min(99, max(0,
+            -101.418011
+                + 0.10204614 * durationMinutes
+                + 0.43013477 * efficiencyPercentage
+                + 1.06691453 * timingAgreementPercentage
+        ))
+    }
+
+    private static func minuteOfDay(_ date: Date) -> Double {
+        let components = Calendar.autoupdatingCurrent.dateComponents(
+            [.hour, .minute, .second, .nanosecond], from: date
+        )
+        return Double(components.hour ?? 0) * 60
+            + Double(components.minute ?? 0)
+            + Double(components.second ?? 0) / 60
+            + Double(components.nanosecond ?? 0) / 60_000_000_000
+    }
 
     private func upsertLocalDailyHealthRecord(
         _ record: DailyHealthRecord,
@@ -2269,8 +2584,11 @@ final class WhoopStore: @unchecked Sendable {
             INSERT INTO daily_health_metric
             (date_key, sleep_score, sleep_duration_minutes, hrv_rmssd_milliseconds,
              resting_heart_rate_bpm, sleep_id, cycle_id, source, source_archive,
-             source_updated_at, imported_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             source_updated_at, imported_at, sleep_start_at, sleep_end_at,
+             sleep_start_minute, sleep_end_minute, sleep_need_minutes,
+             sleep_consistency_percentage, sleep_efficiency_percentage,
+             sleep_sufficiency_percentage)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(date_key) DO UPDATE SET
                 sleep_score = excluded.sleep_score,
                 sleep_duration_minutes = excluded.sleep_duration_minutes,
@@ -2281,7 +2599,15 @@ final class WhoopStore: @unchecked Sendable {
                 source = excluded.source,
                 source_archive = excluded.source_archive,
                 source_updated_at = excluded.source_updated_at,
-                imported_at = excluded.imported_at
+                imported_at = excluded.imported_at,
+                sleep_start_at = excluded.sleep_start_at,
+                sleep_end_at = excluded.sleep_end_at,
+                sleep_start_minute = excluded.sleep_start_minute,
+                sleep_end_minute = excluded.sleep_end_minute,
+                sleep_need_minutes = excluded.sleep_need_minutes,
+                sleep_consistency_percentage = excluded.sleep_consistency_percentage,
+                sleep_efficiency_percentage = excluded.sleep_efficiency_percentage,
+                sleep_sufficiency_percentage = excluded.sleep_sufficiency_percentage
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
@@ -2298,6 +2624,47 @@ final class WhoopStore: @unchecked Sendable {
         bind(record.sourceArchive, to: 9, in: statement)
         bind(record.sourceUpdatedAt, to: 10, in: statement)
         sqlite3_bind_double(statement, 11, Date().timeIntervalSince1970)
+        bind(record.sleepStartAt, to: 12, in: statement)
+        bind(record.sleepEndAt, to: 13, in: statement)
+        bind(record.sleepStartMinute, to: 14, in: statement)
+        bind(record.sleepEndMinute, to: 15, in: statement)
+        bind(record.sleepNeedMinutes, to: 16, in: statement)
+        bind(record.sleepConsistencyPercentage, to: 17, in: statement)
+        bind(record.sleepEfficiencyPercentage, to: 18, in: statement)
+        bind(record.sleepSufficiencyPercentage, to: 19, in: statement)
+        return sqlite3_step(statement) == SQLITE_DONE
+    }
+
+    /// Score-model backfills must not erase a previously valid HRV or RHR if
+    /// the old realtime R-R window is no longer available to recompute it.
+    private func updateLocalSleepScore(
+        _ record: DailyHealthRecord,
+        database: OpaquePointer
+    ) -> Bool {
+        let sql = """
+            UPDATE daily_health_metric
+            SET sleep_score = ?, source = ?, source_updated_at = ?, imported_at = ?,
+                sleep_start_at = ?, sleep_end_at = ?, sleep_start_minute = ?,
+                sleep_end_minute = ?, sleep_consistency_percentage = ?,
+                sleep_efficiency_percentage = ?, sleep_need_minutes = NULL,
+                sleep_sufficiency_percentage = NULL
+            WHERE date_key = ? AND source LIKE 'whoop5_local%'
+            """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return false }
+        defer { sqlite3_finalize(statement) }
+        bind(record.sleepScore, to: 1, in: statement)
+        bind(record.source, to: 2, in: statement)
+        bind(record.sourceUpdatedAt, to: 3, in: statement)
+        sqlite3_bind_double(statement, 4, Date().timeIntervalSince1970)
+        bind(record.sleepStartAt, to: 5, in: statement)
+        bind(record.sleepEndAt, to: 6, in: statement)
+        bind(record.sleepStartMinute, to: 7, in: statement)
+        bind(record.sleepEndMinute, to: 8, in: statement)
+        bind(record.sleepConsistencyPercentage, to: 9, in: statement)
+        bind(record.sleepEfficiencyPercentage, to: 10, in: statement)
+        bind(record.dateKey, to: 11, in: statement)
         return sqlite3_step(statement) == SQLITE_DONE
     }
 
