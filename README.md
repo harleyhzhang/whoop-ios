@@ -221,12 +221,26 @@ The app should eventually cover the complete personal loop:
   304 MB and roughly 850,000 packets included 80–91% exact repeats for several
   historical frame classes. A physical-phone migration retained the existing
   data and immediately aggregated 34 retries during a short live validation.
+- New evidence rows use compact sequence-derived IDs instead of repeated UUID
+  text, and the hot ingestion path reuses prepared SQLite statements. Existing
+  raw evidence is untouched, but future database and index growth is materially
+  lower. Database opening, migration, and private-history materialization run
+  off the main actor, so a large phone database no longer stalls launch.
+- The app records an append-only local time-zone/UTC-offset timeline. Raw sensor
+  timestamps remain absolute, while future timing-consistency models can
+  reproduce the civil-time context of a sleep after travel instead of applying
+  whatever time zone the phone happens to use later.
 - High-rate packet traffic no longer invalidates the entire SwiftUI dashboard
   or appends a diagnostic line for every frame. Packet, R–R, and persistence
   counters are presented at bounded intervals while chunk acknowledgements and
   durable writes continue at full fidelity. Live heart rate has its own
   freshness clock, so an old cached BPM cannot look current merely because
   historical data is arriving.
+- Range-filtering, date parsing, and long-range median buckets are cached by
+  metric, range, reference day, and history revision. A chart morph now spends
+  its frames interpolating the curve rather than rebuilding all four datasets.
+  The Bluetooth collector is app-scoped, preventing multiple windows from
+  creating competing central managers.
 - Dashboard reads are generation-ordered: an older asynchronous reload cannot
   overwrite a newly processed night, and a transient SQLite read error keeps
   the last known-good charts visible. The unnecessary full-history reload every
@@ -243,7 +257,10 @@ The app should eventually cover the complete personal loop:
   `WHOOP_HISTORY_SEED_PATH` (or the private local default) into the app bundle
   for first-launch import. The private fitted model follows the same rule via
   `WHOOP_SCORE_MODEL_PATH`; clean clones use a bounded coefficient-only fallback.
-  The app contains no API client secret or refresh token.
+  Physical Release builds now fail closed if either private artifact is absent,
+  remove stale artifacts from reused build directories, and CI rejects either
+  private filename if it is ever staged. The app contains no API client secret
+  or refresh token.
 - Sustained worn live capture, foreground/background persistence, historical
   offload, conservative local sleep finalization, and local notifications work.
   Longer unattended overnight calibration, disconnect recovery, stage models,

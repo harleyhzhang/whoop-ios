@@ -3,13 +3,15 @@ import UserNotifications
 
 @main
 struct SleepApp: App {
+    @StateObject private var whoopCollector = WhoopHandshakeProbe()
+
     init() {
         WhoopNotificationManager.shared.configure()
     }
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            RootView(whoopCollector: whoopCollector)
         }
     }
 }

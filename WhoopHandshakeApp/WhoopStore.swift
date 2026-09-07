@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import OSLog
 import SQLite3
 
 enum WhoopFrameIntegrity {
@@ -295,24 +296,62 @@ final class WhoopStore: @unchecked Sendable {
     static let shared = WhoopStore()
 
     private let queue = DispatchQueue(label: "com.clintonst.sleep.whoop-store", qos: .utility)
+    private let queueSpecificKey = DispatchSpecificKey<Void>()
     private let databaseURLOverride: URL?
     private var database: OpaquePointer?
+    /// The store is serialized onto `queue`, so hot statements can be reused
+    /// safely. Preparing every statement for every BLE notification was a
+    /// measurable source of CPU and allocator churn during history offloads.
+    private var cachedStatements: [String: OpaquePointer] = [:]
     private var nextDeliverySequence: Int64 = 1
+    private static let logger = Logger(subsystem: "com.clintonst.sideload.sleep", category: "WhoopStore")
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
-    private static let schemaVersion = 6
+    private static let schemaVersion = 7
     private static let decoderVersion = 2
 
     init(databaseURL: URL? = nil, runBackgroundDecoding: Bool = true) {
         databaseURLOverride = databaseURL
-        queue.sync { openDatabase() }
-        if runBackgroundDecoding {
-            queue.async { [self] in backfillVersion26PPG() }
+        queue.setSpecific(key: queueSpecificKey, value: ())
+        // Opening and migrating a phone-sized database must never block the
+        // main actor during app launch. Subsequent operations enqueue behind
+        // this work and therefore still observe a fully initialized store.
+        if databaseURL != nil {
+            // Injected databases are test fixtures. Keep their setup
+            // deterministic so tests may inspect the file immediately.
+            queue.sync { [self] in
+                openDatabase()
+                if runBackgroundDecoding { backfillVersion26PPG() }
+            }
+        } else {
+            queue.async { [self] in
+                openDatabase()
+                if runBackgroundDecoding {
+                    backfillVersion26PPG()
+                }
+            }
         }
     }
 
     deinit {
-        queue.sync {
-            if let database { sqlite3_close(database) }
+        // An async operation can own the store's final strong reference. In
+        // that case ARC runs deinit on this queue, where sync would trap as a
+        // self-deadlock. Every queued operation retains `self`, so once deinit
+        // begins no other store work can still be pending or concurrent.
+        if DispatchQueue.getSpecific(key: queueSpecificKey) != nil {
+            closeDatabase()
+        } else {
+            queue.sync { closeDatabase() }
+        }
+    }
+
+    private func closeDatabase() {
+        for statement in cachedStatements.values {
+            sqlite3_finalize(statement)
+        }
+        cachedStatements.removeAll()
+        if let database {
+            sqlite3_close(database)
+            self.database = nil
         }
     }
 
@@ -556,11 +595,17 @@ final class WhoopStore: @unchecked Sendable {
             database = nil
             return
         }
-        nextDeliverySequence = ((try? scalarInt(
-            database!,
-            sql: "SELECT COALESCE(MAX(delivery_sequence), 0) FROM whoop_raw_packet"
-        )) ?? 0) + 1
+        nextDeliverySequence = ((try? scalarInt(database!, sql: """
+            SELECT MAX(value) FROM (
+                SELECT COALESCE(MAX(delivery_sequence), 0) AS value FROM whoop_raw_packet
+                UNION ALL
+                SELECT COALESCE(MAX(last_sequence), 0) FROM whoop_offload_session
+                UNION ALL
+                SELECT COALESCE(MAX(completion_sequence), 0) FROM whoop_offload_session
+            )
+            """)) ?? 0) + 1
         abandonInterruptedOffloads()
+        recordTimeZoneObservation()
         _ = execute("PRAGMA optimize")
         backfillHistoricalSamplesIfNeeded()
         if databaseURLOverride == nil {
@@ -806,9 +851,39 @@ final class WhoopStore: @unchecked Sendable {
                 )
                 """)
             && execute("CREATE INDEX IF NOT EXISTS whoop_api_numeric_metric_path ON whoop_api_numeric_metric(source_kind, field_path, date_key)")
+        case 7:
+            // A travel-safe provenance timeline. Raw timestamps remain
+            // absolute; this captures the local civil-time context needed to
+            // reproduce timing consistency after the phone changes zones.
+            return execute("""
+                CREATE TABLE IF NOT EXISTS whoop_time_zone_observation (
+                    observed_at REAL PRIMARY KEY,
+                    time_zone_identifier TEXT NOT NULL,
+                    utc_offset_seconds INTEGER NOT NULL
+                )
+                """)
+            && execute("CREATE INDEX IF NOT EXISTS whoop_time_zone_observation_zone ON whoop_time_zone_observation(time_zone_identifier, observed_at)")
         default:
             return false
         }
+    }
+
+    private func recordTimeZoneObservation(now: Date = .now) {
+        guard let database else { return }
+        let sql = """
+            INSERT OR IGNORE INTO whoop_time_zone_observation
+            (observed_at, time_zone_identifier, utc_offset_seconds)
+            VALUES (?, ?, ?)
+            """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return }
+        defer { sqlite3_finalize(statement) }
+        let zone = TimeZone.autoupdatingCurrent
+        sqlite3_bind_double(statement, 1, now.timeIntervalSince1970)
+        bind(zone.identifier, to: 2, in: statement)
+        sqlite3_bind_int(statement, 3, Int32(zone.secondsFromGMT(for: now)))
+        _ = sqlite3_step(statement)
     }
 
     private func addColumnIfNeeded(
@@ -1014,7 +1089,30 @@ final class WhoopStore: @unchecked Sendable {
     @discardableResult
     private func execute(_ sql: String) -> Bool {
         guard let database else { return false }
-        return sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK
+        let result = sqlite3_exec(database, sql, nil, nil, nil)
+        if result != SQLITE_OK {
+            Self.logger.error("SQLite operation failed (\(result)): \(self.errorMessage(database), privacy: .public)")
+        }
+        return result == SQLITE_OK
+    }
+
+    /// Returns a reset, binding-free prepared statement owned by the store.
+    /// Only use this for hot paths that cannot be re-entered before the caller
+    /// steps the statement; the serial store queue enforces that invariant.
+    private func cachedStatement(database: OpaquePointer, sql: String) -> OpaquePointer? {
+        if let statement = cachedStatements[sql] {
+            sqlite3_reset(statement)
+            sqlite3_clear_bindings(statement)
+            return statement
+        }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else {
+            Self.logger.error("SQLite prepare failed: \(self.errorMessage(database), privacy: .public)")
+            return nil
+        }
+        cachedStatements[sql] = statement
+        return statement
     }
 
     private func insert(
@@ -1031,10 +1129,13 @@ final class WhoopStore: @unchecked Sendable {
         guard let database else {
             return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
         }
-        let packetID = UUID().uuidString
-        let receivedAt = deliveredAt.timeIntervalSince1970
         let deliverySequence = nextDeliverySequence
         nextDeliverySequence += 1
+        // The delivery sequence is already unique and durable. A compact ID
+        // avoids writing/indexing the same 36-byte UUID in every evidence and
+        // derived table while preserving stable foreign-key provenance.
+        let packetID = "p" + String(deliverySequence, radix: 36)
+        let receivedAt = deliveredAt.timeIntervalSince1970
         guard execute("BEGIN IMMEDIATE") else {
             return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
         }
@@ -1147,20 +1248,14 @@ final class WhoopStore: @unchecked Sendable {
             SET duplicate_count = duplicate_count + 1, last_received_at = ?
             WHERE signature = ?
             """
-        var update: OpaquePointer?
-        guard sqlite3_prepare_v2(database, updateSQL, -1, &update, nil) == SQLITE_OK,
-              let update else { return .failed }
+        guard let update = cachedStatement(database: database, sql: updateSQL) else { return .failed }
         sqlite3_bind_double(update, 1, receivedAt)
         bind(signature, to: 2, in: update)
         let updateResult = sqlite3_step(update)
-        sqlite3_finalize(update)
         guard updateResult == SQLITE_DONE else { return .failed }
         if sqlite3_changes(database) > 0 {
             let selectSQL = "SELECT first_packet_id FROM whoop_packet_replay WHERE signature = ?"
-            var select: OpaquePointer?
-            guard sqlite3_prepare_v2(database, selectSQL, -1, &select, nil) == SQLITE_OK,
-                  let select else { return .failed }
-            defer { sqlite3_finalize(select) }
+            guard let select = cachedStatement(database: database, sql: selectSQL) else { return .failed }
             bind(signature, to: 1, in: select)
             guard sqlite3_step(select) == SQLITE_ROW,
                   let packetID = textColumn(select, 0) else { return .failed }
@@ -1172,10 +1267,7 @@ final class WhoopStore: @unchecked Sendable {
             (signature, first_packet_id, duplicate_count, last_received_at)
             VALUES (?, ?, 0, ?)
             """
-        var insert: OpaquePointer?
-        guard sqlite3_prepare_v2(database, insertSQL, -1, &insert, nil) == SQLITE_OK,
-              let insert else { return .failed }
-        defer { sqlite3_finalize(insert) }
+        guard let insert = cachedStatement(database: database, sql: insertSQL) else { return .failed }
         bind(signature, to: 1, in: insert)
         bind(packetID, to: 2, in: insert)
         sqlite3_bind_double(insert, 3, receivedAt)
@@ -1212,10 +1304,7 @@ final class WhoopStore: @unchecked Sendable {
              characteristic_uuid, frame_type, protocol_version, crc_valid, payload)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return false }
-        defer { sqlite3_finalize(statement) }
+        guard let statement = cachedStatement(database: database, sql: sql) else { return false }
         bind(id, to: 1, in: statement)
         sqlite3_bind_double(statement, 2, receivedAt)
         sqlite3_bind_int64(statement, 3, deliverySequence)
@@ -1268,10 +1357,7 @@ final class WhoopStore: @unchecked Sendable {
                 WHERE id = ? AND status = 'in_progress'
                 """
         }
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return false }
-        defer { sqlite3_finalize(statement) }
+        guard let statement = cachedStatement(database: database, sql: sql) else { return false }
         sqlite3_bind_int64(statement, 1, deliverySequence)
         sqlite3_bind_int64(statement, 2, deliverySequence)
         if isCompletion {
@@ -1340,10 +1426,7 @@ final class WhoopStore: @unchecked Sendable {
 
     private func decodeResultExists(database: OpaquePointer, packetID: String) -> Bool {
         let sql = "SELECT 1 FROM whoop_decode_result WHERE source_packet_id = ? AND decoder_version = ?"
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return false }
-        defer { sqlite3_finalize(statement) }
+        guard let statement = cachedStatement(database: database, sql: sql) else { return false }
         bind(packetID, to: 1, in: statement)
         sqlite3_bind_int(statement, 2, Int32(Self.decoderVersion))
         return sqlite3_step(statement) == SQLITE_ROW
@@ -1362,10 +1445,7 @@ final class WhoopStore: @unchecked Sendable {
             (source_packet_id, decoder_version, protocol_version, stream, status, error, decoded_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return false }
-        defer { sqlite3_finalize(statement) }
+        guard let statement = cachedStatement(database: database, sql: sql) else { return false }
         bind(packetID, to: 1, in: statement)
         sqlite3_bind_int(statement, 2, Int32(Self.decoderVersion))
         sqlite3_bind_int(statement, 3, Int32(protocolVersion))
@@ -1391,10 +1471,7 @@ final class WhoopStore: @unchecked Sendable {
             (source_packet_id, sample_at, channel, sample_rate_hz, samples_i16_le)
             VALUES (?, ?, ?, 24, ?)
             """
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return false }
-        defer { sqlite3_finalize(statement) }
+        guard let statement = cachedStatement(database: database, sql: sql) else { return false }
         bind(packetID, to: 1, in: statement)
         sqlite3_bind_double(statement, 2, packet.sampleAt.timeIntervalSince1970)
         sqlite3_bind_int(statement, 3, Int32(packet.channel))
@@ -1504,11 +1581,10 @@ final class WhoopStore: @unchecked Sendable {
             (id, source_packet_id, received_at, device_timestamp, heart_rate, rr_intervals_json, source)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return false }
-        defer { sqlite3_finalize(statement) }
-        bind(UUID().uuidString, to: 1, in: statement)
+        guard let statement = cachedStatement(database: database, sql: sql) else { return false }
+        // One realtime sample is derived from exactly one packet, so the raw
+        // packet ID is also the smallest stable primary key for the sample.
+        bind(packetID, to: 1, in: statement)
         bind(packetID, to: 2, in: statement)
         sqlite3_bind_double(statement, 3, receivedAt)
         if let timestamp = realtime.deviceTimestamp {
@@ -1542,10 +1618,7 @@ final class WhoopStore: @unchecked Sendable {
                 sleep_state = excluded.sleep_state,
                 decoder_version = excluded.decoder_version
             """
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return false }
-        defer { sqlite3_finalize(statement) }
+        guard let statement = cachedStatement(database: database, sql: sql) else { return false }
         sqlite3_bind_double(statement, 1, sample.sampleAt.timeIntervalSince1970)
         bind(packetID, to: 2, in: statement)
         sqlite3_bind_int(statement, 3, Int32(sample.heartRate))
@@ -1598,7 +1671,6 @@ final class WhoopStore: @unchecked Sendable {
     struct HistoricalRow {
         let timestamp: TimeInterval
         let heartRate: Int
-        let rrIntervals: [Double]
         let sleepState: Int
     }
 
@@ -1746,7 +1818,7 @@ final class WhoopStore: @unchecked Sendable {
         guard let database else { return [] }
         let cutoff = now.addingTimeInterval(-48 * 60 * 60).timeIntervalSince1970
         let sql = """
-            SELECT sample_at, heart_rate, rr_intervals_json, sleep_state
+            SELECT sample_at, heart_rate, sleep_state
             FROM whoop_historical_sample
             WHERE sample_at >= ?
               AND peripheral_id = (
@@ -1763,12 +1835,10 @@ final class WhoopStore: @unchecked Sendable {
 
         var rows: [HistoricalRow] = []
         while sqlite3_step(statement) == SQLITE_ROW {
-            let rrText = textColumn(statement, 2) ?? "[]"
             rows.append(HistoricalRow(
                 timestamp: sqlite3_column_double(statement, 0),
                 heartRate: Int(sqlite3_column_int(statement, 1)),
-                rrIntervals: (try? JSONDecoder().decode([Double].self, from: Data(rrText.utf8))) ?? [],
-                sleepState: Int(sqlite3_column_int(statement, 3))
+                sleepState: Int(sqlite3_column_int(statement, 2))
             ))
         }
         return rows
@@ -1783,7 +1853,7 @@ final class WhoopStore: @unchecked Sendable {
               metadataValue(database: database, key: "local-sleep-score-backfill") != Self.localSource
         else { return }
         let sql = """
-            SELECT sample_at, heart_rate, rr_intervals_json, sleep_state
+            SELECT sample_at, heart_rate, sleep_state
             FROM whoop_historical_sample
             WHERE peripheral_id = (
                 SELECT peripheral_id FROM whoop_historical_sample
@@ -1796,14 +1866,10 @@ final class WhoopStore: @unchecked Sendable {
               let statement else { return }
         var rows: [HistoricalRow] = []
         while sqlite3_step(statement) == SQLITE_ROW {
-            let rrText = textColumn(statement, 2) ?? "[]"
             rows.append(HistoricalRow(
                 timestamp: sqlite3_column_double(statement, 0),
                 heartRate: Int(sqlite3_column_int(statement, 1)),
-                rrIntervals: (try? JSONDecoder().decode(
-                    [Double].self, from: Data(rrText.utf8)
-                )) ?? [],
-                sleepState: Int(sqlite3_column_int(statement, 3))
+                sleepState: Int(sqlite3_column_int(statement, 2))
             ))
         }
         sqlite3_finalize(statement)
@@ -2165,7 +2231,9 @@ final class WhoopStore: @unchecked Sendable {
     /// app is discarding frames it already acknowledged and cannot re-request.
     private func historicalDecodeAudit() -> (rawTotal: Int, sampleTotal: Int, outcomes: [String: Int]) {
         guard let database else { return (0, 0, [:]) }
-        let rawTotal = Int((try? scalarInt(database, sql: "SELECT COUNT(*) FROM whoop_raw_packet WHERE frame_type = 47")) ?? 0)
+        // Decoder results have the indexed shape diagnostics need. Counting the
+        // raw table forced a full scan of more than a million retained frames.
+        let rawTotal = Int((try? scalarInt(database, sql: "SELECT COUNT(*) FROM whoop_decode_result WHERE decoder_version = \(Self.decoderVersion)")) ?? 0)
         let sampleTotal = Int((try? scalarInt(database, sql: "SELECT COUNT(*) FROM whoop_historical_sample")) ?? 0)
         var outcomes: [String: Int] = [:]
         let sql = """

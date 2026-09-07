@@ -403,7 +403,7 @@ final class WhoopSleepStateTests: XCTestCase {
         var database: OpaquePointer?
         XCTAssertEqual(sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READONLY, nil), SQLITE_OK)
         defer { if let database { sqlite3_close(database) } }
-        XCTAssertEqual(scalarInt(database, sql: "PRAGMA user_version"), 6)
+        XCTAssertEqual(scalarInt(database, sql: "PRAGMA user_version"), 7)
         XCTAssertEqual(scalarInt(
             database,
             sql: "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('whoop_decode_result','whoop_ppg_packet','whoop_store_metadata')"
@@ -416,6 +416,10 @@ final class WhoopSleepStateTests: XCTestCase {
             database,
             sql: "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('whoop_api_source_record','whoop_api_numeric_metric')"
         ), 2)
+        XCTAssertGreaterThanOrEqual(scalarInt(
+            database,
+            sql: "SELECT COUNT(*) FROM whoop_time_zone_observation"
+        ), 1)
     }
 
     func testSleepScoreFeaturesCaptureDurationEfficiencyAndRecentTiming() {
@@ -623,13 +627,17 @@ final class WhoopSleepStateTests: XCTestCase {
             scalarInt(database, sql: "SELECT COUNT(*) FROM whoop_historical_sample"),
             2
         )
+        XCTAssertLessThanOrEqual(
+            scalarInt(database, sql: "SELECT MAX(length(id)) FROM whoop_raw_packet"),
+            8,
+            "New raw evidence should use compact sequence-derived IDs, not UUID text"
+        )
     }
 
     private func row(at timestamp: TimeInterval, state: Int) -> WhoopStore.HistoricalRow {
         WhoopStore.HistoricalRow(
             timestamp: timestamp,
             heartRate: 55,
-            rrIntervals: [1_000],
             sleepState: state
         )
     }

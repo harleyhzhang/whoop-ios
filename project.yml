@@ -7,8 +7,8 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
-    CURRENT_PROJECT_VERSION: 6
-    MARKETING_VERSION: 0.4.1
+    CURRENT_PROJECT_VERSION: 7
+    MARKETING_VERSION: 0.5.0
 targets:
   Sleep:
     type: application
@@ -26,11 +26,21 @@ targets:
           DESTINATION="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/whoop-history.json"
           if [ -f "${SEED_PATH}" ] && ! /usr/bin/cmp -s "${SEED_PATH}" "${DESTINATION}"; then
             /bin/cp "${SEED_PATH}" "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/whoop-history.json"
+          elif [ ! -f "${SEED_PATH}" ]; then
+            /bin/rm -f "${DESTINATION}"
           fi
           MODEL_PATH="${WHOOP_SCORE_MODEL_PATH:-${HOME}/Documents/personal/data/whoop/app-seeds/whoop-score-model.json}"
           MODEL_DESTINATION="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/whoop-score-model.json"
           if [ -f "${MODEL_PATH}" ] && ! /usr/bin/cmp -s "${MODEL_PATH}" "${MODEL_DESTINATION}"; then
             /bin/cp "${MODEL_PATH}" "${MODEL_DESTINATION}"
+          elif [ ! -f "${MODEL_PATH}" ]; then
+            /bin/rm -f "${MODEL_DESTINATION}"
+          fi
+          if [ "${CONFIGURATION}" = "Release" ] && [ "${PLATFORM_NAME}" = "iphoneos" ]; then
+            if [ ! -f "${DESTINATION}" ] || [ ! -f "${MODEL_DESTINATION}" ]; then
+              echo "error: Personal WHOOP device releases require the private history and score model."
+              exit 1
+            fi
           fi
     info:
       path: SleepApp/Info.plist
