@@ -11,6 +11,30 @@ final class WhoopSleepStateTests: XCTestCase {
         XCTAssertEqual(WhoopReconnectPolicy.delaySeconds(forAttempt: 100), 60)
     }
 
+    func testManualSleepProcessingAlwaysUsesCurrentOrFreshOffload() {
+        XCTAssertEqual(
+            WhoopHandshakeProbe.sleepProcessStart(
+                isConnected: true,
+                historicalSyncActive: true
+            ),
+            .waitForCurrentOffload
+        )
+        XCTAssertEqual(
+            WhoopHandshakeProbe.sleepProcessStart(
+                isConnected: true,
+                historicalSyncActive: false
+            ),
+            .startFreshOffload
+        )
+        XCTAssertEqual(
+            WhoopHandshakeProbe.sleepProcessStart(
+                isConnected: false,
+                historicalSyncActive: false
+            ),
+            .unavailable
+        )
+    }
+
     func testReplayIndexIsLimitedToReplayPronePacketClasses() {
         XCTAssertFalse(WhoopHandshakeProbe.shouldDeduplicateTransportRetries(frameType: nil))
         XCTAssertFalse(WhoopHandshakeProbe.shouldDeduplicateTransportRetries(frameType: 40))
