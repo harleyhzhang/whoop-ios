@@ -186,14 +186,27 @@ struct RootView: View {
             .scrollIndicators(.hidden)
         }
         .preferredColorScheme(.dark)
+        .onChange(of: selectedRange) { oldRange, _ in
+            AppHaptics.selection()
+            selectedDate = nil
+            activeMetric = nil
+
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                chartMorphFromRange = reduceMotion ? nil : oldRange
+                chartMorphProgress = reduceMotion ? 1 : 0
+                chartMorphGeneration &+= 1
+            }
+        }
         .task(id: chartMorphGeneration) {
             guard !reduceMotion, chartMorphProgress == 0 else { return }
             await Task.yield()
             guard !Task.isCancelled else { return }
-            withAnimation(.smooth(duration: 0.64, extraBounce: 0)) {
+            withAnimation(.smooth(duration: 0.52, extraBounce: 0)) {
                 chartMorphProgress = 1
             }
-            try? await Task.sleep(for: .seconds(0.64))
+            try? await Task.sleep(for: .seconds(0.52))
             guard !Task.isCancelled else { return }
             chartMorphFromRange = nil
         }
@@ -202,7 +215,7 @@ struct RootView: View {
             // range that still exists rather than leaving a selection that no
             // longer has a button.
             guard !ranges.isEmpty, !ranges.contains(selectedRange) else { return }
-            selectRange(ranges.last ?? .all, haptic: false)
+            selectedRange = ranges.last ?? .all
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
@@ -385,10 +398,7 @@ struct RootView: View {
     }
 
     private var rangeSelector: some View {
-        Picker("Trend range", selection: Binding(
-            get: { selectedRange },
-            set: { selectRange($0) }
-        )) {
+        Picker("Trend range", selection: $selectedRange) {
             ForEach(availableRanges) { range in
                 Text(range.rawValue)
                     .tag(range)
@@ -398,26 +408,6 @@ struct RootView: View {
         .labelsHidden()
         .pickerStyle(.segmented)
         .fixedSize(horizontal: true, vertical: false)
-    }
-
-    private func selectRange(_ newRange: HealthRange, haptic: Bool = true) {
-        guard newRange != selectedRange else { return }
-        if haptic { AppHaptics.selection() }
-        selectedDate = nil
-        activeMetric = nil
-
-        let oldRange = selectedRange
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            chartMorphFromRange = reduceMotion ? nil : oldRange
-            chartMorphProgress = reduceMotion ? 1 : 0
-            chartMorphGeneration &+= 1
-            // Change the persisted selection in the same animation-free
-            // transaction as the source capture. This prevents one flash of
-            // the finished All-range styling before its transition begins.
-            selectedRange = newRange
-        }
     }
 
     private var summaryGrid: some View {
@@ -599,13 +589,9 @@ struct RootView: View {
     private func populatedMetricChart(metric: MetricKind, series: MetricSeries, color: Color, title: String) -> some View {
         let plottedPoints = series.plotted
         let morphPoints = morphingPoints(for: metric, target: series)
-        let sourceFadePoints = crossfadeSourcePoints(for: metric)
         let domain = morphingDomain(for: metric, target: series)
         let chartSelection = activeMetric == metric ? selectedDate : nil
-        let averageOpacity = chartSelection == nil ? averageLevelOpacity : 0
-        let lineOpacity = interpolated(1, 0.3, progress: averageOpacity)
-        let areaTopOpacity = interpolated(0.26, 0.07, progress: averageOpacity)
-        let areaBottomOpacity = interpolated(0.015, 0.004, progress: averageOpacity)
+        let showsAverageLevels = selectedRange.usesMonthlyAxis && chartSelection == nil
         let highlightedPoint = selectedPoint(in: plottedPoints, near: chartSelection) ?? plottedPoints.last!
         let highlightedPosition = normalizedPosition(of: highlightedPoint, in: plottedPoints)
         let highlightedValue = chartSelection == nil
@@ -614,59 +600,57 @@ struct RootView: View {
         let firstDate = series.daily.first!.date
         let middleDate = series.daily[series.daily.count / 2].date
         let monthTicks = monthlyAxisDates(in: series.daily)
-        let averageRange = averageLevelRange
-        let averageSeries = averageRange == selectedRange
-            ? series
-            : metricSeries(for: metric, range: averageRange)
-        let averageLevels = adaptiveAverageLevels(from: averageSeries.daily, for: averageRange)
+        let averageLevels = adaptiveAverageLevels(from: series.daily, for: selectedRange)
         return VStack(spacing: 0) {
             Chart {
-                if sourceCurveOpacity > 0.001 {
-                    curveMarks(
-                        points: sourceFadePoints,
-                        domain: domain,
-                        color: color,
-                        title: title,
-                        layer: "Source",
-                        lineOpacity: lineOpacity * sourceCurveOpacity,
-                        areaTopOpacity: areaTopOpacity * sourceCurveOpacity,
-                        areaBottomOpacity: areaBottomOpacity * sourceCurveOpacity
+                ForEach(morphPoints) { point in
+                    AreaMark(
+                        x: .value("Position", point.position),
+                        yStart: .value("Minimum", domain.lowerBound),
+                        yEnd: .value(title, point.value)
                     )
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [
+                                color.opacity(showsAverageLevels ? 0.07 : 0.26),
+                                color.opacity(showsAverageLevels ? 0.004 : 0.015)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+
+                    LineMark(
+                        x: .value("Position", point.position),
+                        y: .value(title, point.value)
+                    )
+                    .interpolationMethod(.monotone)
+                    .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+                    .foregroundStyle(color.opacity(showsAverageLevels ? 0.3 : 1))
                 }
 
-                curveMarks(
-                    points: morphPoints,
-                    domain: domain,
-                    color: color,
-                    title: title,
-                    layer: "Target",
-                    lineOpacity: lineOpacity * targetCurveOpacity,
-                    areaTopOpacity: areaTopOpacity * targetCurveOpacity,
-                    areaBottomOpacity: areaBottomOpacity * targetCurveOpacity
-                )
-
-                if averageOpacity > 0.001 {
+                if showsAverageLevels {
                     ForEach(averageLevels) { level in
                         RuleMark(
                             xStart: .value(
                                 "Average window start",
-                                normalizedPosition(of: level.startDate, in: averageSeries.daily)
+                                normalizedPosition(of: level.startDate, in: series.daily)
                             ),
                             xEnd: .value(
                                 "Average window end",
-                                normalizedPosition(of: level.endDate, in: averageSeries.daily)
+                                normalizedPosition(of: level.endDate, in: series.daily)
                             ),
                             y: .value("Window average", level.value)
                         )
                         .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .butt))
                         .foregroundStyle(Color.white)
-                        .opacity(averageOpacity)
                         .annotation(position: .top, spacing: 5) {
                             Text(averageLevelLabel(level.value, for: metric))
                                 .font(.system(size: 10, weight: .semibold, design: .rounded))
                                 .monospacedDigit()
                                 .tracking(-0.35)
-                                .foregroundStyle(Color.white.opacity(averageOpacity))
+                                .foregroundStyle(Color.white)
                         }
                     }
                 }
@@ -701,12 +685,12 @@ struct RootView: View {
                     y: .value(title, highlightedValue)
                 )
                 .symbolSize(48)
-                .foregroundStyle(color.opacity(lineOpacity * targetCurveOpacity))
+                .foregroundStyle(color.opacity(showsAverageLevels ? 0.3 : 1))
             }
             .chartYScale(domain: domain)
-            // Closely related ranges interpolate values and y-domain together.
-            // Daily ↔ bucketed ranges instead change domain only in the quiet
-            // gap between their two independently scaled curve layers.
+            // Values and their y-domain interpolate together. Since both ends
+            // contain their respective series, every in-between frame remains
+            // vertically contained while the scale changes smoothly.
             .chartPlotStyle { plot in
                 plot.clipped()
             }
@@ -748,47 +732,8 @@ struct RootView: View {
                 firstDate: firstDate,
                 middleDate: middleDate
             )
-            .opacity(rangeFooterOpacity)
         }
         .frame(height: 145, alignment: .top)
-    }
-
-    @ChartContentBuilder
-    private func curveMarks(
-        points: [MorphingMetricPoint],
-        domain: ClosedRange<Double>,
-        color: Color,
-        title: String,
-        layer: String,
-        lineOpacity: Double,
-        areaTopOpacity: Double,
-        areaBottomOpacity: Double
-    ) -> some ChartContent {
-        ForEach(points) { point in
-            AreaMark(
-                x: .value("Position", point.position),
-                yStart: .value("Minimum", domain.lowerBound),
-                yEnd: .value(title, point.value),
-                series: .value("Curve layer", layer)
-            )
-            .interpolationMethod(.monotone)
-            .foregroundStyle(
-                LinearGradient(
-                    colors: [color.opacity(areaTopOpacity), color.opacity(areaBottomOpacity)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
-
-            LineMark(
-                x: .value("Position", point.position),
-                y: .value(title, point.value),
-                series: .value("Curve layer", layer)
-            )
-            .interpolationMethod(.monotone)
-            .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
-            .foregroundStyle(color.opacity(lineOpacity))
-        }
     }
 
     @ViewBuilder
@@ -1004,30 +949,12 @@ struct RootView: View {
             sourceValues = targetValues
         }
 
-        // Daily and long-range bucket positions do not represent the same
-        // dates. Interpolating one silhouette into the other makes unrelated
-        // peaks whip across the plot; crossfade those independent curves.
-        let progress = usesRangeCrossfade ? 1 : Double(chartMorphProgress)
+        let progress = Double(chartMorphProgress)
         return targetValues.indices.map { index in
             MorphingMetricPoint(
                 id: index,
                 position: Double(index) / Double(max(targetValues.count - 1, 1)),
                 value: sourceValues[index] + ((targetValues[index] - sourceValues[index]) * progress)
-            )
-        }
-    }
-
-    private func crossfadeSourcePoints(for metric: MetricKind) -> [MorphingMetricPoint] {
-        guard usesRangeCrossfade, let sourceRange = chartMorphFromRange else { return [] }
-        let values = resampledValues(
-            from: metricSeries(for: metric, range: sourceRange).plotted,
-            count: 48
-        )
-        return values.indices.map { index in
-            MorphingMetricPoint(
-                id: index,
-                position: Double(index) / Double(max(values.count - 1, 1)),
-                value: values[index]
             )
         }
     }
@@ -1039,13 +966,7 @@ struct RootView: View {
         let source = metricSeries(for: metric, range: chartMorphFromRange)
         guard !source.daily.isEmpty else { return targetDomain }
         let sourceDomain = chartDomain(for: source.daily, metric: metric)
-        let rawProgress = Double(chartMorphProgress)
-        // For daily ↔ bucketed ranges, change scale only in the quiet middle
-        // after the source has faded and before the target appears. Moving the
-        // scale under either visible curve is what read as a visual glitch.
-        let progress = usesRangeCrossfade
-            ? smoothStep((rawProgress - 0.42) / 0.16)
-            : rawProgress
+        let progress = Double(chartMorphProgress)
 
         let lowerBound = interpolated(
             sourceDomain.lowerBound,
@@ -1062,55 +983,6 @@ struct RootView: View {
 
     private func interpolated(_ source: Double, _ target: Double, progress: Double) -> Double {
         source + ((target - source) * progress)
-    }
-
-    /// Average levels are a secondary explanation of the long-range curve.
-    /// Let the curve establish itself first, then bring the rules and their
-    /// translucency in on a delayed smooth ramp instead of one sharp frame.
-    private var averageLevelOpacity: Double {
-        let targetIsLong = selectedRange.usesMonthlyAxis
-        guard let sourceRange = chartMorphFromRange else { return targetIsLong ? 1 : 0 }
-        let sourceIsLong = sourceRange.usesMonthlyAxis
-        guard sourceIsLong != targetIsLong else { return targetIsLong ? 1 : 0 }
-        let progress = Double(chartMorphProgress)
-        if targetIsLong {
-            return smoothStep((progress - 0.68) / 0.32)
-        }
-        return 1 - smoothStep(progress / 0.32)
-    }
-
-    private var averageLevelRange: HealthRange {
-        if selectedRange.usesMonthlyAxis { return selectedRange }
-        if let source = chartMorphFromRange, source.usesMonthlyAxis { return source }
-        return selectedRange
-    }
-
-    private var usesRangeCrossfade: Bool {
-        guard let source = chartMorphFromRange else { return false }
-        return source.usesMonthlyAxis != selectedRange.usesMonthlyAxis
-    }
-
-    private var sourceCurveOpacity: Double {
-        usesRangeCrossfade
-            ? 1 - smoothStep(Double(chartMorphProgress) / 0.42)
-            : 0
-    }
-
-    private var targetCurveOpacity: Double {
-        usesRangeCrossfade
-            ? smoothStep((Double(chartMorphProgress) - 0.58) / 0.42)
-            : 1
-    }
-
-    private var rangeFooterOpacity: Double {
-        guard let source = chartMorphFromRange,
-              source.usesMonthlyAxis != selectedRange.usesMonthlyAxis else { return 1 }
-        return smoothStep((Double(chartMorphProgress) - 0.72) / 0.28)
-    }
-
-    private func smoothStep(_ rawValue: Double) -> Double {
-        let value = min(max(rawValue, 0), 1)
-        return value * value * (3 - (2 * value))
     }
 
     private func resampledValues(from points: [MetricPoint], count: Int) -> [Double] {
