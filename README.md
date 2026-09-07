@@ -85,12 +85,13 @@ The app should eventually cover the complete personal loop:
   windows, with at most five levels. Each unconnected
   horizontal segment shows its formatted mean above the line. The underlying
   colored trend remains visible at reduced opacity; pressing or scrubbing hides
-  the levels and restores the normal trend. A card-colored knockout beneath the
-  faded endpoint prevents its alpha from stacking with the translucent curve.
+  the levels and restores the normal trend. The endpoint is one same-color dot,
+  with no card-colored knockout, border, or halo separating it from the line.
 - Aggregated trends keep their historical median buckets but anchor the final
   bucket to the exact latest observation, so the endpoint, dot, and current
-  card value agree. Chart selection snaps to rendered points, and an explicit
-  full-range x-domain prevents the plot width from changing while scrubbing.
+  card value agree. Chart selection snaps to rendered points, and a fixed
+  normalized x-domain with slight endpoint padding prevents the plot width from
+  changing while scrubbing or clipping the final dot.
 - Trend lines and area fills use restrained monotone interpolation for slightly
   rounded corners without Catmull–Rom overshoot. Selection never splits or
   recomputes the trend: it overlays a translucent future region after the
@@ -170,13 +171,12 @@ The app should eventually cover the complete personal loop:
 - Derived rows carry a versioned source. A change to any derivation re-derives
   the nights the previous version wrote instead of leaving stale values in the
   history; archived WHOOP rows are authoritative and are never overwritten.
-- The chart selection dot sits on an opaque plate so neither the trend line nor
-  the translucent future region shows through it, and that region extends past
-  the domain so the round line cap overhanging the final point is dimmed with
-  the rest of the line instead of staying at full strength on the right edge.
-  The plot rectangle also clips the transient old-range values during a y-only
-  range morph, preventing month-to-week scale changes from drawing spikes above
-  or below the card.
+- The chart selection dot remains a solid continuation of the trend, and the
+  translucent future region extends past the visible data extent so the round
+  line cap overhanging the final point is dimmed with the rest of the line.
+  Range morphs interpolate y-values and the y-domain in lockstep, then clip the
+  plot rectangle as a final safety boundary. Month-to-week scale changes stay
+  inside the card without an abrupt scale jump or a horizontally sheared dot.
 - Sleep finalization is an explicit state machine. Before a new sleep begins,
   the dashboard continues showing the latest completed night. As soon as the
   band detects sleep, the compact card says only `Sleep detected`—never a
