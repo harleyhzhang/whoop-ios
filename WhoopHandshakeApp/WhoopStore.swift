@@ -296,6 +296,7 @@ final class WhoopStore: @unchecked Sendable {
     static let shared = WhoopStore()
 
     private let queue = DispatchQueue(label: "com.clintonst.sleep.whoop-store", qos: .utility)
+    private let queueSpecificKey = DispatchSpecificKey<Void>()
     private let databaseURLOverride: URL?
     private var database: OpaquePointer?
     /// The store is serialized onto `queue`, so hot statements can be reused
@@ -310,6 +311,7 @@ final class WhoopStore: @unchecked Sendable {
 
     init(databaseURL: URL? = nil, runBackgroundDecoding: Bool = true) {
         databaseURLOverride = databaseURL
+        queue.setSpecific(key: queueSpecificKey, value: ())
         // Opening and migrating a phone-sized database must never block the
         // main actor during app launch. Subsequent operations enqueue behind
         // this work and therefore still observe a fully initialized store.
@@ -331,12 +333,25 @@ final class WhoopStore: @unchecked Sendable {
     }
 
     deinit {
-        queue.sync {
-            for statement in cachedStatements.values {
-                sqlite3_finalize(statement)
-            }
-            cachedStatements.removeAll()
-            if let database { sqlite3_close(database) }
+        // An async operation can own the store's final strong reference. In
+        // that case ARC runs deinit on this queue, where sync would trap as a
+        // self-deadlock. Every queued operation retains `self`, so once deinit
+        // begins no other store work can still be pending or concurrent.
+        if DispatchQueue.getSpecific(key: queueSpecificKey) != nil {
+            closeDatabase()
+        } else {
+            queue.sync { closeDatabase() }
+        }
+    }
+
+    private func closeDatabase() {
+        for statement in cachedStatements.values {
+            sqlite3_finalize(statement)
+        }
+        cachedStatements.removeAll()
+        if let database {
+            sqlite3_close(database)
+            self.database = nil
         }
     }
 
