@@ -226,6 +226,10 @@ The app should eventually cover the complete personal loop:
   raw evidence is untouched, but future database and index growth is materially
   lower. Database opening, migration, and private-history materialization run
   off the main actor, so a large phone database no longer stalls launch.
+- Before upgrading any non-empty schema, the app now uses SQLite's online
+  backup API to create and validate a standalone, WAL-consistent snapshot in
+  `migration-backups`. The migration fails closed if that restorable copy
+  cannot be made; Mac-side container transfer is no longer the safety boundary.
 - The app records an append-only local time-zone/UTC-offset timeline. Raw sensor
   timestamps remain absolute, while future timing-consistency models can
   reproduce the civil-time context of a sleep after travel instead of applying
