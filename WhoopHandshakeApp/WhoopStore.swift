@@ -584,13 +584,14 @@ final class WhoopStore: @unchecked Sendable {
             [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
             ofItemAtPath: url.path
         )
-        let opened = execute("PRAGMA journal_mode=WAL")
+        let configured = execute("PRAGMA journal_mode=WAL")
             && execute("PRAGMA foreign_keys=ON")
             && execute("PRAGMA busy_timeout=5000")
             && execute("PRAGMA wal_autocheckpoint=1000")
             && execute("PRAGMA journal_size_limit=8388608")
-            && migrateSchema()
-        guard opened else {
+        guard configured,
+              createPreMigrationSnapshotIfNeeded(databaseURL: url),
+              migrateSchema() else {
             if let database { sqlite3_close(database) }
             database = nil
             return
@@ -612,6 +613,107 @@ final class WhoopStore: @unchecked Sendable {
             importBundledHistory()
             backfillLocalSleepScoresIfNeeded()
         }
+    }
+
+    /// Creates a standalone, WAL-free snapshot before any non-empty schema
+    /// upgrade. SQLite's online-backup API observes one consistent read
+    /// transaction even while the source database has committed WAL pages.
+    /// Migration fails closed if the snapshot cannot be completed.
+    private func createPreMigrationSnapshotIfNeeded(databaseURL: URL) -> Bool {
+        guard let database,
+              let current = try? scalarInt(database, sql: "PRAGMA user_version"),
+              current > 0,
+              current < Self.schemaVersion else { return true }
+
+        let directory = databaseURL.deletingLastPathComponent()
+            .appendingPathComponent("migration-backups", isDirectory: true)
+        let snapshotURL = directory.appendingPathComponent(
+            "sleep-v\(current)-before-v\(Self.schemaVersion).sqlite3"
+        )
+        let fileManager = FileManager.default
+        if Self.validSQLiteSnapshot(at: snapshotURL, expectedVersion: current) {
+            return true
+        }
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            if fileManager.fileExists(atPath: snapshotURL.path) {
+                try fileManager.removeItem(at: snapshotURL)
+            }
+        } catch {
+            Self.logger.error("Could not prepare migration backup directory: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+
+        let temporaryURL = directory.appendingPathComponent(".migration-backup-in-progress.sqlite3")
+        try? fileManager.removeItem(at: temporaryURL)
+        guard Self.copySQLiteDatabase(source: database, destinationURL: temporaryURL),
+              Self.validSQLiteSnapshot(at: temporaryURL, expectedVersion: current) else {
+            try? fileManager.removeItem(at: temporaryURL)
+            Self.logger.error("Refusing schema migration because its SQLite snapshot failed validation")
+            return false
+        }
+        do {
+            try fileManager.moveItem(at: temporaryURL, to: snapshotURL)
+            try fileManager.setAttributes(
+                [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                ofItemAtPath: snapshotURL.path
+            )
+            return true
+        } catch {
+            try? fileManager.removeItem(at: temporaryURL)
+            Self.logger.error("Could not finalize migration snapshot: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
+    /// Internal for a focused WAL-consistency regression test.
+    static func copySQLiteDatabase(source: OpaquePointer, destinationURL: URL) -> Bool {
+        var destination: OpaquePointer?
+        guard sqlite3_open_v2(
+            destinationURL.path,
+            &destination,
+            SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
+            nil
+        ) == SQLITE_OK, let destination else {
+            if let destination { sqlite3_close(destination) }
+            return false
+        }
+        defer { sqlite3_close(destination) }
+        sqlite3_busy_timeout(destination, 5_000)
+        guard let backup = sqlite3_backup_init(destination, "main", source, "main") else {
+            return false
+        }
+        let step = sqlite3_backup_step(backup, -1)
+        let finish = sqlite3_backup_finish(backup)
+        guard step == SQLITE_DONE, finish == SQLITE_OK else { return false }
+        // The source is WAL-backed, and that persistent journal setting is
+        // copied with page 1. Convert the destination while it is still open
+        // so the artifact can be restored as one standalone file.
+        return sqlite3_exec(destination, "PRAGMA journal_mode=DELETE", nil, nil, nil) == SQLITE_OK
+    }
+
+    private static func validSQLiteSnapshot(at url: URL, expectedVersion: Int64) -> Bool {
+        guard FileManager.default.fileExists(atPath: url.path) else { return false }
+        var snapshot: OpaquePointer?
+        guard sqlite3_open_v2(url.path, &snapshot, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
+              let snapshot else {
+            if let snapshot { sqlite3_close(snapshot) }
+            return false
+        }
+        defer { sqlite3_close(snapshot) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            snapshot,
+            "SELECT (SELECT user_version FROM pragma_user_version), (SELECT quick_check FROM pragma_quick_check)",
+            -1,
+            &statement,
+            nil
+        ) == SQLITE_OK, let statement else { return false }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW,
+              sqlite3_column_int64(statement, 0) == expectedVersion,
+              let check = sqlite3_column_text(statement, 1) else { return false }
+        return String(cString: check) == "ok"
     }
 
     private func migrateSchema() -> Bool {

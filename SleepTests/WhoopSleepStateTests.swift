@@ -422,6 +422,40 @@ final class WhoopSleepStateTests: XCTestCase {
         ), 1)
     }
 
+    func testOnlineBackupIncludesCommittedWALData() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sourceURL = directory.appendingPathComponent("source.sqlite3")
+        let snapshotURL = directory.appendingPathComponent("snapshot.sqlite3")
+
+        var source: OpaquePointer?
+        XCTAssertEqual(
+            sqlite3_open_v2(
+                sourceURL.path,
+                &source,
+                SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE,
+                nil
+            ),
+            SQLITE_OK
+        )
+        guard let source else { return }
+        defer { sqlite3_close(source) }
+        XCTAssertEqual(sqlite3_exec(source, "PRAGMA journal_mode=WAL", nil, nil, nil), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(source, "CREATE TABLE evidence(value TEXT NOT NULL)", nil, nil, nil), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(source, "PRAGMA user_version=6", nil, nil, nil), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(source, "INSERT INTO evidence VALUES ('retained')", nil, nil, nil), SQLITE_OK)
+
+        XCTAssertTrue(WhoopStore.copySQLiteDatabase(source: source, destinationURL: snapshotURL))
+        var snapshot: OpaquePointer?
+        XCTAssertEqual(sqlite3_open_v2(snapshotURL.path, &snapshot, SQLITE_OPEN_READONLY, nil), SQLITE_OK)
+        defer { if let snapshot { sqlite3_close(snapshot) } }
+        XCTAssertEqual(scalarInt(snapshot, sql: "PRAGMA user_version"), 6)
+        XCTAssertEqual(scalarInt(snapshot, sql: "SELECT COUNT(*) FROM evidence"), 1)
+        XCTAssertEqual(scalarText(snapshot, sql: "PRAGMA quick_check"), "ok")
+    }
+
     func testSleepScoreFeaturesCaptureDurationEfficiencyAndRecentTiming() {
         let history = [
             SleepScoreNight(
@@ -769,5 +803,15 @@ final class WhoopSleepStateTests: XCTestCase {
         defer { sqlite3_finalize(statement) }
         guard sqlite3_step(statement) == SQLITE_ROW else { return -1 }
         return sqlite3_column_int64(statement, 0)
+    }
+
+    private func scalarText(_ database: OpaquePointer?, sql: String) -> String? {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return nil }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW,
+              let value = sqlite3_column_text(statement, 0) else { return nil }
+        return String(cString: value)
     }
 }
