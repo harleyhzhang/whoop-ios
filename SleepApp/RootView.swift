@@ -650,11 +650,11 @@ struct RootView: View {
                         RuleMark(
                             xStart: .value(
                                 "Average window start",
-                                normalizedPosition(of: level.startDate, in: series.daily)
+                                normalizedPosition(of: level.startDate, in: averageSeries.daily)
                             ),
                             xEnd: .value(
                                 "Average window end",
-                                normalizedPosition(of: level.endDate, in: series.daily)
+                                normalizedPosition(of: level.endDate, in: averageSeries.daily)
                             ),
                             y: .value("Window average", level.value)
                         )
