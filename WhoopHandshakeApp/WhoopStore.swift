@@ -2210,7 +2210,8 @@ final class WhoopStore: @unchecked Sendable {
             history: scoreHistory(before: candidate.dateKey)
         )
         let timingAgreement = features.last ?? 100
-        let sleepScore = Self.bundledSleepScoreModel?.predict(features)
+        let modelPrediction = Self.bundledSleepScoreModel?.prediction(features)
+        let sleepScore = modelPrediction?.score
             ?? Self.fallbackSleepScore(
                 durationMinutes: durationMinutes,
                 efficiencyPercentage: efficiency,
@@ -2232,10 +2233,11 @@ final class WhoopStore: @unchecked Sendable {
             sleepEndAt: iso.string(from: candidate.endedAt),
             sleepStartMinute: current.startMinute,
             sleepEndMinute: current.endMinute,
-            sleepNeedMinutes: nil,
-            sleepConsistencyPercentage: timingAgreement,
+            sleepNeedMinutes: modelPrediction?.sleepNeedMinutes,
+            sleepConsistencyPercentage: modelPrediction?.consistencyPercentage
+                ?? timingAgreement,
             sleepEfficiencyPercentage: efficiency,
-            sleepSufficiencyPercentage: nil
+            sleepSufficiencyPercentage: modelPrediction?.sufficiencyPercentage
         )
     }
 
@@ -2547,7 +2549,7 @@ final class WhoopStore: @unchecked Sendable {
     /// Anything with the `whoop5_local` prefix is ours; anything else is an
     /// archived WHOOP row and is authoritative.
     private static let bundledSleepScoreModel = SleepScoreModelBundle.load()
-    static let localSource = bundledSleepScoreModel?.version ?? "whoop5_local_v5_fallback"
+    static let localSource = "\(bundledSleepScoreModel?.version ?? "whoop5_local_v5_fallback")_materialized_2"
     static let localSourcePrefix = "whoop5_local"
 
     /// A deterministic, coefficient-only safety net for development builds
@@ -2646,8 +2648,8 @@ final class WhoopStore: @unchecked Sendable {
             SET sleep_score = ?, source = ?, source_updated_at = ?, imported_at = ?,
                 sleep_start_at = ?, sleep_end_at = ?, sleep_start_minute = ?,
                 sleep_end_minute = ?, sleep_consistency_percentage = ?,
-                sleep_efficiency_percentage = ?, sleep_need_minutes = NULL,
-                sleep_sufficiency_percentage = NULL
+                sleep_efficiency_percentage = ?, sleep_need_minutes = ?,
+                sleep_sufficiency_percentage = ?
             WHERE date_key = ? AND source LIKE 'whoop5_local%'
             """
         var statement: OpaquePointer?
@@ -2664,7 +2666,9 @@ final class WhoopStore: @unchecked Sendable {
         bind(record.sleepEndMinute, to: 8, in: statement)
         bind(record.sleepConsistencyPercentage, to: 9, in: statement)
         bind(record.sleepEfficiencyPercentage, to: 10, in: statement)
-        bind(record.dateKey, to: 11, in: statement)
+        bind(record.sleepNeedMinutes, to: 11, in: statement)
+        bind(record.sleepSufficiencyPercentage, to: 12, in: statement)
+        bind(record.dateKey, to: 13, in: statement)
         return sqlite3_step(statement) == SQLITE_DONE
     }
 

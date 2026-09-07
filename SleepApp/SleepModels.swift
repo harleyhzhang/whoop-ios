@@ -192,6 +192,13 @@ enum SleepScoreFeatureBuilder {
 }
 
 struct SleepScoreModelBundle: Decodable, Sendable {
+    struct Prediction: Sendable {
+        let score: Double
+        let sleepNeedMinutes: Double
+        let consistencyPercentage: Double
+        let sufficiencyPercentage: Double
+    }
+
     struct ExtraTree: Decodable, Sendable {
         let childrenLeft: [Int]
         let childrenRight: [Int]
@@ -262,7 +269,7 @@ struct SleepScoreModelBundle: Decodable, Sendable {
     let consistencyModel: GradientBoostedModel
     let pillarSVR: SVRModel
 
-    func predict(_ features: [Double]) -> Double? {
+    func prediction(_ features: [Double]) -> Prediction? {
         guard featureVersion == SleepScoreFeatureBuilder.version,
               features.count == SleepScoreFeatureBuilder.featureCount,
               !trees.isEmpty,
@@ -278,9 +285,18 @@ struct SleepScoreModelBundle: Decodable, Sendable {
         guard let pillarPrediction = pillarSVR.predict([
             sufficiency, consistency, features[1]
         ]) else { return nil }
-        return min(99, max(0,
-            directWeight * directPrediction + (1 - directWeight) * pillarPrediction
-        ))
+        return Prediction(
+            score: min(99, max(0,
+                directWeight * directPrediction + (1 - directWeight) * pillarPrediction
+            )),
+            sleepNeedMinutes: need,
+            consistencyPercentage: min(100, max(0, consistency)),
+            sufficiencyPercentage: sufficiency
+        )
+    }
+
+    func predict(_ features: [Double]) -> Double? {
+        prediction(features)?.score
     }
 
     static func load(from bundle: Bundle = .main) -> SleepScoreModelBundle? {
