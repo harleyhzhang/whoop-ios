@@ -7,8 +7,8 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
-    CURRENT_PROJECT_VERSION: 4
-    MARKETING_VERSION: 0.3.1
+    CURRENT_PROJECT_VERSION: 5
+    MARKETING_VERSION: 0.4.0
 targets:
   Sleep:
     type: application
@@ -26,6 +26,11 @@ targets:
           DESTINATION="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/whoop-history.json"
           if [ -f "${SEED_PATH}" ] && ! /usr/bin/cmp -s "${SEED_PATH}" "${DESTINATION}"; then
             /bin/cp "${SEED_PATH}" "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/whoop-history.json"
+          fi
+          MODEL_PATH="${WHOOP_SCORE_MODEL_PATH:-${HOME}/Documents/personal/data/whoop/app-seeds/whoop-score-model.json}"
+          MODEL_DESTINATION="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/whoop-score-model.json"
+          if [ -f "${MODEL_PATH}" ] && ! /usr/bin/cmp -s "${MODEL_PATH}" "${MODEL_DESTINATION}"; then
+            /bin/cp "${MODEL_PATH}" "${MODEL_DESTINATION}"
           fi
     info:
       path: SleepApp/Info.plist

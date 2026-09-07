@@ -203,10 +203,10 @@ struct RootView: View {
             guard !reduceMotion, chartMorphProgress == 0 else { return }
             await Task.yield()
             guard !Task.isCancelled else { return }
-            withAnimation(.smooth(duration: 0.42, extraBounce: 0)) {
+            withAnimation(.smooth(duration: 0.52, extraBounce: 0)) {
                 chartMorphProgress = 1
             }
-            try? await Task.sleep(for: .seconds(0.42))
+            try? await Task.sleep(for: .seconds(0.52))
             guard !Task.isCancelled else { return }
             chartMorphFromRange = nil
         }
@@ -589,11 +589,14 @@ struct RootView: View {
     private func populatedMetricChart(metric: MetricKind, series: MetricSeries, color: Color, title: String) -> some View {
         let plottedPoints = series.plotted
         let morphPoints = morphingPoints(for: metric, target: series)
-        let domain = chartDomain(for: series.daily, metric: metric)
+        let domain = morphingDomain(for: metric, target: series)
         let chartSelection = activeMetric == metric ? selectedDate : nil
         let showsAverageLevels = selectedRange.usesMonthlyAxis && chartSelection == nil
         let highlightedPoint = selectedPoint(in: plottedPoints, near: chartSelection) ?? plottedPoints.last!
         let highlightedPosition = normalizedPosition(of: highlightedPoint, in: plottedPoints)
+        let highlightedValue = chartSelection == nil
+            ? (morphPoints.last?.value ?? highlightedPoint.value)
+            : highlightedPoint.value
         let firstDate = series.daily.first!.date
         let middleDate = series.daily[series.daily.count / 2].date
         let monthTicks = monthlyAxisDates(in: series.daily)
@@ -628,23 +631,6 @@ struct RootView: View {
                 }
 
                 if showsAverageLevels {
-                    // Cut the trend out beneath the translucent endpoint before
-                    // drawing it. Otherwise the line and point alpha-composite
-                    // independently and the point's center looks darker.
-                    PointMark(
-                        x: .value("Position", highlightedPosition),
-                        y: .value(title, highlightedPoint.value)
-                    )
-                    .symbolSize(58)
-                    .foregroundStyle(Color(uiColor: .secondarySystemGroupedBackground))
-
-                    PointMark(
-                        x: .value("Position", highlightedPosition),
-                        y: .value(title, highlightedPoint.value)
-                    )
-                    .symbolSize(48)
-                    .foregroundStyle(color.opacity(0.3))
-
                     ForEach(averageLevels) { level in
                         RuleMark(
                             xStart: .value(
@@ -691,27 +677,29 @@ struct RootView: View {
                         .foregroundStyle(Color.secondary.opacity(0.5))
                 }
 
-                if !showsAverageLevels {
-                    PointMark(
-                        x: .value("Position", highlightedPosition),
-                        y: .value(title, highlightedPoint.value)
-                    )
-                    .symbolSize(104)
-                    .foregroundStyle(Color(uiColor: .secondarySystemGroupedBackground))
-
-                    PointMark(
-                        x: .value("Position", highlightedPosition),
-                        y: .value(title, highlightedPoint.value)
-                    )
-                    .symbolSize(48)
-                    .foregroundStyle(color)
-                }
+                // Keep the endpoint visually continuous with the trend. A
+                // single same-color mark avoids the dark cutout/halo that made
+                // the old stacked symbols look separated from the line.
+                PointMark(
+                    x: .value("Position", highlightedPosition),
+                    y: .value(title, highlightedValue)
+                )
+                .symbolSize(48)
+                .foregroundStyle(color.opacity(showsAverageLevels ? 0.3 : 1))
             }
             .chartYScale(domain: domain)
+            // Values and their y-domain interpolate together. Since both ends
+            // contain their respective series, every in-between frame remains
+            // vertically contained while the scale changes smoothly.
+            .chartPlotStyle { plot in
+                plot.clipped()
+            }
             // Every range uses the same fixed horizontal coordinates. Only the
             // sampled y-values animate, so the curve morphs vertically without
             // sliding or stretching sideways.
-            .chartXScale(domain: 0.0...1.0)
+            // Leave a small plot inset at both ends so clipping transient
+            // vertical overflow never shears the endpoint symbol horizontally.
+            .chartXScale(domain: -0.02...1.02)
             .chartXSelection(
                 value: normalizedSelectionBinding(for: metric, selectableSeries: plottedPoints)
             )
@@ -969,6 +957,32 @@ struct RootView: View {
                 value: sourceValues[index] + ((targetValues[index] - sourceValues[index]) * progress)
             )
         }
+    }
+
+    private func morphingDomain(for metric: MetricKind, target: MetricSeries) -> ClosedRange<Double> {
+        let targetDomain = chartDomain(for: target.daily, metric: metric)
+        guard let chartMorphFromRange else { return targetDomain }
+
+        let source = metricSeries(for: metric, range: chartMorphFromRange)
+        guard !source.daily.isEmpty else { return targetDomain }
+        let sourceDomain = chartDomain(for: source.daily, metric: metric)
+        let progress = Double(chartMorphProgress)
+
+        let lowerBound = interpolated(
+            sourceDomain.lowerBound,
+            targetDomain.lowerBound,
+            progress: progress
+        )
+        let upperBound = interpolated(
+            sourceDomain.upperBound,
+            targetDomain.upperBound,
+            progress: progress
+        )
+        return lowerBound...upperBound
+    }
+
+    private func interpolated(_ source: Double, _ target: Double, progress: Double) -> Double {
+        source + ((target - source) * progress)
     }
 
     private func resampledValues(from points: [MetricPoint], count: Int) -> [Double] {

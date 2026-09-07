@@ -17,6 +17,67 @@ struct DailyHealthRecord: Codable, Hashable, Identifiable, Sendable {
     let sourceArchive: String?
     let sourceUpdatedAt: String
 
+    /// Retained score inputs. WHOOP API rows preserve the values WHOOP
+    /// published; locally derived rows preserve the measurements used by the
+    /// versioned replacement model. They intentionally remain optional so an
+    /// older private seed can still be decoded during an in-place update.
+    let sleepStartAt: String?
+    let sleepEndAt: String?
+    let sleepStartMinute: Double?
+    let sleepEndMinute: Double?
+    let sleepNeedMinutes: Double?
+    let sleepConsistencyPercentage: Double?
+    let sleepEfficiencyPercentage: Double?
+    let sleepSufficiencyPercentage: Double?
+    /// Complete source rows, retained outside the display projection so future
+    /// models can recover fields this version does not yet materialize.
+    let sourceSleepPayloadJSON: String?
+    let sourceRecoveryPayloadJSON: String?
+
+    init(
+        dateKey: String,
+        sleepScore: Double?,
+        sleepDurationMinutes: Double?,
+        hrvRMSSDMilliseconds: Double?,
+        restingHeartRateBPM: Double?,
+        sleepID: String?,
+        cycleID: Int64?,
+        source: String,
+        sourceArchive: String?,
+        sourceUpdatedAt: String,
+        sleepStartAt: String? = nil,
+        sleepEndAt: String? = nil,
+        sleepStartMinute: Double? = nil,
+        sleepEndMinute: Double? = nil,
+        sleepNeedMinutes: Double? = nil,
+        sleepConsistencyPercentage: Double? = nil,
+        sleepEfficiencyPercentage: Double? = nil,
+        sleepSufficiencyPercentage: Double? = nil,
+        sourceSleepPayloadJSON: String? = nil,
+        sourceRecoveryPayloadJSON: String? = nil
+    ) {
+        self.dateKey = dateKey
+        self.sleepScore = sleepScore
+        self.sleepDurationMinutes = sleepDurationMinutes
+        self.hrvRMSSDMilliseconds = hrvRMSSDMilliseconds
+        self.restingHeartRateBPM = restingHeartRateBPM
+        self.sleepID = sleepID
+        self.cycleID = cycleID
+        self.source = source
+        self.sourceArchive = sourceArchive
+        self.sourceUpdatedAt = sourceUpdatedAt
+        self.sleepStartAt = sleepStartAt
+        self.sleepEndAt = sleepEndAt
+        self.sleepStartMinute = sleepStartMinute
+        self.sleepEndMinute = sleepEndMinute
+        self.sleepNeedMinutes = sleepNeedMinutes
+        self.sleepConsistencyPercentage = sleepConsistencyPercentage
+        self.sleepEfficiencyPercentage = sleepEfficiencyPercentage
+        self.sleepSufficiencyPercentage = sleepSufficiencyPercentage
+        self.sourceSleepPayloadJSON = sourceSleepPayloadJSON
+        self.sourceRecoveryPayloadJSON = sourceRecoveryPayloadJSON
+    }
+
     var id: String { dateKey }
 
     var hasCompletePrimarySleepMetrics: Bool {
@@ -37,6 +98,195 @@ struct DailyHealthRecord: Codable, Hashable, Identifiable, Sendable {
         components.day = pieces[2]
         components.hour = 12
         return components.date ?? .distantPast
+    }
+}
+
+struct SleepScoreNight: Sendable, Equatable {
+    let dateKey: String
+    let durationMinutes: Double
+    let efficiencyPercentage: Double
+    let startMinute: Double
+    let endMinute: Double
+}
+
+enum SleepScoreFeatureBuilder {
+    static let version = "whoop_local_features_v1"
+    static let featureCount = 50
+
+    static func features(current: SleepScoreNight, history: [SleepScoreNight]) -> [Double] {
+        let recent = history
+            .filter { $0.dateKey < current.dateKey }
+            .sorted { $0.dateKey > $1.dateKey }
+
+        var values = [
+            current.durationMinutes,
+            current.efficiencyPercentage,
+            sin(2 * .pi * current.startMinute / 1_440),
+            cos(2 * .pi * current.startMinute / 1_440),
+            sin(2 * .pi * current.endMinute / 1_440),
+            cos(2 * .pi * current.endMinute / 1_440)
+        ]
+        var previous: [SleepScoreNight] = []
+        for lag in 1...7 {
+            let candidate = recent.indices.contains(lag - 1) ? recent[lag - 1] : nil
+            let gap = candidate.flatMap { dayGap(from: $0.dateKey, to: current.dateKey) }
+            let usable = candidate != nil && gap != nil && gap! <= lag + 3
+            let night = usable ? candidate! : current
+            previous.append(night)
+            values.append(contentsOf: [
+                night.durationMinutes,
+                night.efficiencyPercentage,
+                circularMinuteDistance(current.startMinute, night.startMinute),
+                circularMinuteDistance(current.endMinute, night.endMinute),
+                usable ? Double(gap!) : 0
+            ])
+        }
+
+        let firstFour = Array(previous.prefix(4))
+        let durations = firstFour.map(\.durationMinutes)
+        let efficiencies = firstFour.map(\.efficiencyPercentage)
+        values.append(contentsOf: [
+            mean(durations), standardDeviation(durations),
+            mean(efficiencies), standardDeviation(efficiencies)
+        ])
+
+        let agreements = firstFour.map { prior in
+            max(0, 100 * (1 - (
+                circularMinuteDistance(current.startMinute, prior.startMinute)
+                    + circularMinuteDistance(current.endMinute, prior.endMinute)
+            ) / 1_440))
+        }
+        values.append(contentsOf: agreements)
+        values.append(zip(agreements, [0.52, 0.27, 0.14, 0.07]).map(*).reduce(0, +))
+        precondition(values.count == featureCount)
+        return values
+    }
+
+    private static func circularMinuteDistance(_ lhs: Double, _ rhs: Double) -> Double {
+        let difference = abs(lhs - rhs).truncatingRemainder(dividingBy: 1_440)
+        return min(difference, 1_440 - difference)
+    }
+
+    private static func mean(_ values: [Double]) -> Double {
+        values.reduce(0, +) / Double(max(1, values.count))
+    }
+
+    private static func standardDeviation(_ values: [Double]) -> Double {
+        let average = mean(values)
+        return sqrt(values.map { pow($0 - average, 2) }.reduce(0, +) / Double(max(1, values.count)))
+    }
+
+    private static func dayGap(from start: String, to end: String) -> Int? {
+        let calendar = Calendar(identifier: .gregorian)
+        guard let startDate = date(from: start), let endDate = date(from: end) else { return nil }
+        return calendar.dateComponents([.day], from: startDate, to: endDate).day
+    }
+
+    private static func date(from key: String) -> Date? {
+        let components = key.split(separator: "-").compactMap { Int($0) }
+        guard components.count == 3 else { return nil }
+        return Calendar(identifier: .gregorian).date(from: DateComponents(
+            year: components[0], month: components[1], day: components[2], hour: 12
+        ))
+    }
+}
+
+struct SleepScoreModelBundle: Decodable, Sendable {
+    struct ExtraTree: Decodable, Sendable {
+        let childrenLeft: [Int]
+        let childrenRight: [Int]
+        let features: [Int]
+        let thresholds: [Double]
+        let values: [Double]
+
+        func predict(_ input: [Double]) -> Double? {
+            var node = 0
+            while childrenLeft.indices.contains(node) {
+                let left = childrenLeft[node]
+                if left == -1 { return values.indices.contains(node) ? values[node] : nil }
+                guard features.indices.contains(node), thresholds.indices.contains(node),
+                      input.indices.contains(features[node]), childrenRight.indices.contains(node) else {
+                    return nil
+                }
+                node = input[features[node]] <= thresholds[node] ? left : childrenRight[node]
+            }
+            return nil
+        }
+    }
+
+    struct SVRModel: Decodable, Sendable {
+        let means: [Double]
+        let scales: [Double]
+        let supportVectors: [[Double]]
+        let dualCoefficients: [Double]
+        let intercept: Double
+        let gamma: Double
+
+        func predict(_ input: [Double]) -> Double? {
+            guard input.count == means.count, means.count == scales.count,
+                  supportVectors.count == dualCoefficients.count else { return nil }
+            let standardized = zip(zip(input, means), scales).map { pair, scale in
+                (pair.0 - pair.1) / max(scale, 1e-12)
+            }
+            var prediction = intercept
+            for (vector, coefficient) in zip(supportVectors, dualCoefficients) {
+                guard vector.count == standardized.count else { return nil }
+                let squaredDistance = zip(vector, standardized)
+                    .map { pow($0 - $1, 2) }
+                    .reduce(0, +)
+                prediction += coefficient * exp(-gamma * squaredDistance)
+            }
+            return prediction
+        }
+    }
+
+    struct GradientBoostedModel: Decodable, Sendable {
+        let initialPrediction: Double
+        let learningRate: Double
+        let trees: [ExtraTree]
+
+        func predict(_ input: [Double]) -> Double? {
+            let predictions = trees.compactMap { $0.predict(input) }
+            guard predictions.count == trees.count else { return nil }
+            return initialPrediction + learningRate * predictions.reduce(0, +)
+        }
+    }
+
+    let version: String
+    let featureVersion: String
+    let directWeight: Double
+    let extraTreesWeight: Double
+    let trees: [ExtraTree]
+    let svr: SVRModel
+    let needModel: GradientBoostedModel
+    let consistencyModel: GradientBoostedModel
+    let pillarSVR: SVRModel
+
+    func predict(_ features: [Double]) -> Double? {
+        guard featureVersion == SleepScoreFeatureBuilder.version,
+              features.count == SleepScoreFeatureBuilder.featureCount,
+              !trees.isEmpty,
+              let svrPrediction = svr.predict(features),
+              let need = needModel.predict(features), need > 0,
+              let consistency = consistencyModel.predict(features) else { return nil }
+        let treePredictions = trees.compactMap { $0.predict(features) }
+        guard treePredictions.count == trees.count else { return nil }
+        let forestPrediction = treePredictions.reduce(0, +) / Double(treePredictions.count)
+        let directPrediction = extraTreesWeight * forestPrediction
+            + (1 - extraTreesWeight) * svrPrediction
+        let sufficiency = min(100, features[0] / need * 100)
+        guard let pillarPrediction = pillarSVR.predict([
+            sufficiency, consistency, features[1]
+        ]) else { return nil }
+        return min(99, max(0,
+            directWeight * directPrediction + (1 - directWeight) * pillarPrediction
+        ))
+    }
+
+    static func load(from bundle: Bundle = .main) -> SleepScoreModelBundle? {
+        guard let url = bundle.url(forResource: "whoop-score-model", withExtension: "json"),
+              let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(Self.self, from: data)
     }
 }
 

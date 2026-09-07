@@ -29,6 +29,19 @@ def local_date_key(end: str, offset: str) -> str:
     return parse_instant(end).astimezone(zone).date().isoformat()
 
 
+def local_zone(offset: str) -> timezone:
+    if offset == "Z":
+        return timezone.utc
+    sign = 1 if offset[0] == "+" else -1
+    hours, minutes = (int(part) for part in offset[1:].split(":"))
+    return timezone(sign * timedelta(hours=hours, minutes=minutes))
+
+
+def minute_of_day(value: str, offset: str) -> float:
+    local = parse_instant(value).astimezone(local_zone(offset))
+    return local.hour * 60 + local.minute + local.second / 60 + local.microsecond / 60_000_000
+
+
 def build_seed(archive: Path) -> list[dict[str, Any]]:
     sleeps = load_records(archive / "sleeps-combined.json")
     recoveries = {
@@ -44,6 +57,7 @@ def build_seed(archive: Path) -> list[dict[str, Any]]:
         recovery = recoveries.get(int(sleep["cycle_id"]))
         sleep_score = sleep["score"]
         stages = sleep_score["stage_summary"]
+        sleep_needed = sleep_score["sleep_needed"]
         total_sleep_milli = sum(
             stages[key]
             for key in (
@@ -53,6 +67,15 @@ def build_seed(archive: Path) -> list[dict[str, Any]]:
             )
         )
         recovery_score = recovery.get("score", {}) if recovery else {}
+        need_milli = sum(
+            sleep_needed[key]
+            for key in (
+                "baseline_milli",
+                "need_from_sleep_debt_milli",
+                "need_from_recent_strain_milli",
+                "need_from_recent_nap_milli",
+            )
+        )
         source_updated = max(
             parse_instant(sleep["updated_at"]),
             parse_instant(recovery["updated_at"]) if recovery else parse_instant(sleep["updated_at"]),
@@ -77,6 +100,28 @@ def build_seed(archive: Path) -> list[dict[str, Any]]:
                 "source": "whoop_api",
                 "sourceArchive": archive.name,
                 "sourceUpdatedAt": source_updated.isoformat().replace("+00:00", "Z"),
+                "sleepStartAt": sleep["start"],
+                "sleepEndAt": sleep["end"],
+                "sleepStartMinute": minute_of_day(sleep["start"], sleep["timezone_offset"]),
+                "sleepEndMinute": minute_of_day(sleep["end"], sleep["timezone_offset"]),
+                "sleepNeedMinutes": need_milli / 60_000,
+                "sleepConsistencyPercentage": float(
+                    sleep_score["sleep_consistency_percentage"]
+                ),
+                "sleepEfficiencyPercentage": float(
+                    sleep_score["sleep_efficiency_percentage"]
+                ),
+                "sleepSufficiencyPercentage": min(
+                    100.0, total_sleep_milli / need_milli * 100
+                ),
+                "sourceSleepPayloadJSON": json.dumps(
+                    sleep, separators=(",", ":"), sort_keys=True
+                ),
+                "sourceRecoveryPayloadJSON": (
+                    json.dumps(recovery, separators=(",", ":"), sort_keys=True)
+                    if recovery
+                    else None
+                ),
             }
         )
 
