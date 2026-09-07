@@ -8,6 +8,12 @@ enum WhoopReconnectPolicy {
     }
 }
 
+enum WhoopSleepProcessStart: Equatable {
+    case unavailable
+    case waitForCurrentOffload
+    case startFreshOffload
+}
+
 @MainActor
 final class WhoopHandshakeProbe: NSObject, ObservableObject {
     @Published private(set) var bluetoothState = "Starting"
@@ -57,6 +63,17 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     nonisolated static func shouldDeduplicateTransportRetries(frameType: UInt8?) -> Bool {
         guard let frameType else { return false }
         return [36, 38, 47, 49, 50, 56].contains(frameType)
+    }
+
+    /// A manual Process request may never finalize from an earlier completion
+    /// marker. It either joins the offload already in flight or starts a fresh
+    /// one, so the calculation sees everything currently banked on the strap.
+    nonisolated static func sleepProcessStart(
+        isConnected: Bool,
+        historicalSyncActive: Bool
+    ) -> WhoopSleepProcessStart {
+        guard isConnected else { return .unavailable }
+        return historicalSyncActive ? .waitForCurrentOffload : .startFreshOffload
     }
 
     nonisolated static func batteryLevelStatusCharging(_ data: Data) -> Bool? {
@@ -283,11 +300,22 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         pendingSleep = pending
     }
 
-    /// Finishes the detected night from coherent data already collected on the
-    /// phone. If a history offload is in flight, the tap remains pending until
-    /// its completion marker is durable rather than banking the partial prefix.
+    /// Finishes the detected night only after the current or a newly requested
+    /// history offload reaches its durable completion marker. A prior complete
+    /// offload can be coherent but stale, so it is never enough for a new tap.
     func processPendingSleep() {
         guard !isProcessingSleep, let pending = pendingSleep else { return }
+        let start = Self.sleepProcessStart(
+            isConnected: isConnected,
+            historicalSyncActive: historicalSyncActive
+        )
+        guard start != .unavailable else {
+            sleepProcessFailure = "Reconnect WHOOP to finish"
+            AppHaptics.warning()
+            scheduleProcessFailureReset()
+            return
+        }
+
         isProcessingSleep = true
         sleepProcessFailure = nil
         processFailureResetTask?.cancel()
@@ -296,10 +324,11 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         pendingSleep = nil
         AppHaptics.softImpact()
 
-        // An in-flight offload is definitionally incomplete even during the
-        // short interval before its first historical sample is persisted.
-        guard !historicalSyncActive else { return }
-        finalizeProcessRequest()
+        // If a sync is already active, HISTORY_COMPLETE will resume this exact
+        // request. Otherwise deliberately start a new sync before finalizing.
+        if start == .startFreshOffload {
+            beginHistoricalSync()
+        }
     }
 
     private func finalizeProcessRequest() {

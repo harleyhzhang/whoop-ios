@@ -68,9 +68,9 @@ The app should eventually cover the complete personal loop:
   exact current value: 1W and 1M use daily points, 1Y uses weekly medians, and
   All widens adaptive median buckets from weekly toward monthly to stay near
   40–60 plotted points.
-- The native segmented selector uses compact `1W`, `1M`, `1Y`, and `All`
-  labels while retaining full VoiceOver names. Fixed ranges appear only when
-  the stored history is long enough to support them. One-week and one-month
+- The native segmented selector uses `Week`, `Month`, `Year`, and `All` labels
+  with matching full VoiceOver names. Fixed ranges appear only when the stored
+  history is long enough to support them. One-week and one-month
   charts retain compact start/midpoint/Today labels; one-year and all-history
   charts show at most four evenly distributed abbreviated month-and-year labels
   without vertical month gridlines or wasted footer space.
@@ -165,11 +165,13 @@ The app should eventually cover the complete personal loop:
   the domain so the round line cap overhanging the final point is dimmed with
   the rest of the line instead of staying at full strength on the right edge.
 - Sleep finalization is an explicit state machine. Before a new sleep begins,
-  the dashboard continues showing the latest completed night. While the band
-  reports sleep—or the interim `up` state inside the same night—the four
-  sleep-derived metrics show dashes. As soon as the band reports awake, the
-  dashboard exposes the compact `Sleep detected` card and `Process` control;
-  that control remains until the night is stored or automatic processing wins.
+  the dashboard continues showing the latest completed night. As soon as the
+  band detects sleep, the compact card says only `Sleep detected`—never a
+  provisional duration—and remains visible through waking and processing.
+  While the band reports sleep—or the interim `up` state inside the same
+  night—the four sleep-derived metrics show dashes and Process is unavailable;
+  after waking the `Process` control remains until the night is stored or
+  automatic processing wins.
   The automatic path still requires at least three hours of detected sleep,
   50% observed-session coverage, thirty minutes of banked wake data, and thirty
   minutes since the last asleep sample. It additionally requires a persisted
@@ -177,9 +179,10 @@ The app should eventually cover the complete personal loop:
   and RHR are derived first and committed only when all four are present, so a
   partial night can never replace the previous one in the UI. Pressing Process
   waives only the wake-timing gates; it never waives evidence or metric
-  completeness, and a tap made during a historical offload now remains queued
-  until the durable HISTORY_COMPLETE marker arrives. A failed process restores
-  the control with a short reason. Internal `up` intervals shorter than ninety
+  completeness. Every tap now joins an in-flight historical offload or starts
+  a fresh one, then remains queued until its new durable HISTORY_COMPLETE
+  marker arrives; it can never finalize from an older, stale completion marker.
+  A failed process restores the control. Internal `up` intervals shorter than ninety
   minutes remain part of one detected night, preventing a mid-sleep state from
   splitting and prematurely storing the first portion. A later coherent
   reconstruction can grow an already-local row when it proves the night was

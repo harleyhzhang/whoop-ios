@@ -115,6 +115,15 @@ struct RootView: View {
         return whoopCollector.pendingSleep
     }
 
+    /// Once the strap has identified sleep, keep the prompt in the layout
+    /// through waking and finalization. The pending candidate does not exist
+    /// until the first awake sample, while processing intentionally clears it.
+    private var showsSleepDetectedCard: Bool {
+        whoopCollector.isSleeping
+            || displayedPendingSleep != nil
+            || whoopCollector.isProcessingSleep
+    }
+
     var body: some View {
         ZStack {
             Color(uiColor: .systemGroupedBackground).ignoresSafeArea()
@@ -124,7 +133,7 @@ struct RootView: View {
                     sleepDetectedSection
                         .animation(
                             .smooth(duration: 0.45, extraBounce: 0.18),
-                            value: displayedPendingSleep
+                            value: showsSleepDetectedCard
                         )
                     dateHeader
                     summaryGrid
@@ -292,12 +301,12 @@ struct RootView: View {
     }
 
     /// A compact status card above the entire dashboard. It exists only while
-    /// the store reports a detected night that is not written yet, so a night
-    /// the automatic gates finish first never shows it at all.
+    /// sleep is detected or the detected night is waiting to be written. It
+    /// stays put while a complete history offload is being processed.
     @ViewBuilder
     private var sleepDetectedSection: some View {
-        if let pending = displayedPendingSleep {
-            sleepDetectedCard(pending)
+        if showsSleepDetectedCard {
+            sleepDetectedCard
                 .transition(
                     .modifier(
                         active: SleepDetectedCardHeightTransition(progress: 0),
@@ -307,7 +316,7 @@ struct RootView: View {
         }
     }
 
-    private func sleepDetectedCard(_ pending: WhoopPendingSleep) -> some View {
+    private var sleepDetectedCard: some View {
         HStack(spacing: 12) {
             Image(systemName: "moon.zzz.fill")
                 .font(.system(size: 15, weight: .semibold))
@@ -315,16 +324,9 @@ struct RootView: View {
                 .frame(width: 34, height: 34)
                 .background(sleepAccent.opacity(0.14), in: Circle())
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Sleep detected")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.primary)
-
-                Text(whoopCollector.sleepProcessFailure ?? formatDuration(pending.durationMinutes / 60))
-                    .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(whoopCollector.sleepProcessFailure == nil ? .secondary : Color.orange)
-                    .contentTransition(.opacity)
-            }
+            Text("Sleep detected")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.primary)
 
             Spacer(minLength: 8)
 
@@ -344,7 +346,11 @@ struct RootView: View {
                     .background(sleepAccent, in: Capsule(style: .continuous))
             }
             .buttonStyle(.plain)
-            .disabled(whoopCollector.isProcessingSleep)
+            .disabled(
+                whoopCollector.isSleeping
+                    || displayedPendingSleep == nil
+                    || whoopCollector.isProcessingSleep
+            )
         }
         .padding(.horizontal, 14)
         .frame(height: SleepDetectedCardHeightTransition.expandedHeight)
@@ -357,7 +363,12 @@ struct RootView: View {
                 .stroke(.white.opacity(0.055), lineWidth: 0.5)
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Sleep detected, \(formatDuration(pending.durationMinutes / 60))")
+        .accessibilityLabel("Sleep detected")
+        .accessibilityHint(
+            whoopCollector.isSleeping
+                ? "Process becomes available after waking"
+                : (whoopCollector.sleepProcessFailure ?? "Process the complete sleep record")
+        )
     }
 
     private func processPendingSleepCard() {
@@ -389,7 +400,7 @@ struct RootView: View {
     private var rangeSelector: some View {
         Picker("Trend range", selection: $selectedRange) {
             ForEach(availableRanges) { range in
-                Text(range.compactTitle)
+                Text(range.rawValue)
                     .tag(range)
                     .accessibilityLabel(range.accessibilityName)
             }
@@ -1410,15 +1421,6 @@ private enum HealthRange: String, CaseIterable, Identifiable {
     case all = "All"
 
     var id: String { rawValue }
-
-    var compactTitle: String {
-        switch self {
-        case .week: "1W"
-        case .month: "1M"
-        case .year: "1Y"
-        case .all: "All"
-        }
-    }
 
     var menuTitle: String {
         switch self {
