@@ -122,6 +122,12 @@ struct WhoopDecodedHistorical: Sendable {
     let heartRate: Int
     let rrIntervals: [UInt16]
     let sleepState: Int
+    /// Candidate WHOOP 5 motion fields retained with their wire-level meaning.
+    /// The counter is cumulative and must be differenced with UInt16 wrapping;
+    /// neither cadence nor class is assigned an invented physical unit.
+    let stepMotionCounter: UInt16
+    let stepCadenceRaw: UInt8
+    let motionClassRaw: UInt8
 
     /// WHOOP 5 v18 offsets cross-checked against the independent NOOP and Goose
     /// implementations before enabling the destructive-on-ACK history trim.
@@ -147,7 +153,10 @@ struct WhoopDecodedHistorical: Sendable {
             sampleAt: Date(timeIntervalSince1970: TimeInterval(timestamp)),
             heartRate: Int(bytes[22]),
             rrIntervals: intervals,
-            sleepState: Int((bytes[81] >> 4) & 3)
+            sleepState: Int((bytes[81] >> 4) & 3),
+            stepMotionCounter: UInt16(bytes[57]) | (UInt16(bytes[58]) << 8),
+            stepCadenceRaw: bytes[59],
+            motionClassRaw: bytes[63]
         )
     }
 
@@ -162,6 +171,90 @@ struct WhoopDecodedHistorical: Sendable {
         if bytes[9] != 18 { return "version \(bytes[9]), expected 18" }
         if !WhoopFrameIntegrity.isValid(data) { return "CRC mismatch" }
         return "decodes"
+    }
+}
+
+struct WhoopStepCounterSample: Sendable, Equatable {
+    let timestamp: TimeInterval
+    let counter: UInt16
+}
+
+struct WhoopStepDaySummary: Sendable, Equatable {
+    static let algorithmVersion = 1
+    /// A deliberately permissive physiological ceiling. Values above it are
+    /// treated as counter resets/corruption rather than tens of thousands of
+    /// fabricated steps; ordinary walk/run deltas are far below this bound.
+    static let maximumStepsPerSecond = 8.0
+
+    let stepCount: Int
+    let sampleCount: Int
+    let spanSeconds: Int
+    let coverageFraction: Double
+    let gapSeconds: Int
+    let counterWrapCount: Int
+    let rejectedDeltaCount: Int
+    let firstSampleAt: TimeInterval?
+    let lastSampleAt: TimeInterval?
+
+    static func summarize(_ input: [WhoopStepCounterSample]) -> WhoopStepDaySummary {
+        let sorted = input.sorted { lhs, rhs in
+            if lhs.timestamp == rhs.timestamp { return lhs.counter < rhs.counter }
+            return lhs.timestamp < rhs.timestamp
+        }
+        var samples: [WhoopStepCounterSample] = []
+        samples.reserveCapacity(sorted.count)
+        for sample in sorted {
+            if samples.last?.timestamp == sample.timestamp {
+                samples[samples.count - 1] = sample
+            } else {
+                samples.append(sample)
+            }
+        }
+
+        guard let first = samples.first, let last = samples.last else {
+            return WhoopStepDaySummary(
+                stepCount: 0,
+                sampleCount: 0,
+                spanSeconds: 0,
+                coverageFraction: 0,
+                gapSeconds: 0,
+                counterWrapCount: 0,
+                rejectedDeltaCount: 0,
+                firstSampleAt: nil,
+                lastSampleAt: nil
+            )
+        }
+
+        var steps = 0
+        var gapSeconds = 0
+        var wraps = 0
+        var rejected = 0
+        for (previous, current) in zip(samples, samples.dropFirst()) {
+            let elapsed = current.timestamp - previous.timestamp
+            guard elapsed > 0 else { continue }
+            gapSeconds += max(0, Int(elapsed.rounded(.down)) - 1)
+            let delta = Int(current.counter &- previous.counter)
+            let maximumPlausible = max(8, Int(ceil(elapsed * maximumStepsPerSecond)))
+            guard delta <= maximumPlausible else {
+                rejected += 1
+                continue
+            }
+            steps += delta
+            if current.counter < previous.counter, delta > 0 { wraps += 1 }
+        }
+
+        let span = max(1, Int((last.timestamp - first.timestamp).rounded(.down)) + 1)
+        return WhoopStepDaySummary(
+            stepCount: steps,
+            sampleCount: samples.count,
+            spanSeconds: span,
+            coverageFraction: min(1, Double(samples.count) / Double(span)),
+            gapSeconds: gapSeconds,
+            counterWrapCount: wraps,
+            rejectedDeltaCount: rejected,
+            firstSampleAt: first.timestamp,
+            lastSampleAt: last.timestamp
+        )
     }
 }
 
@@ -303,11 +396,12 @@ final class WhoopStore: @unchecked Sendable {
     /// safely. Preparing every statement for every BLE notification was a
     /// measurable source of CPU and allocator churn during history offloads.
     private var cachedStatements: [String: OpaquePointer] = [:]
+    private var pendingStepDateKeys: Set<String> = []
     private var nextDeliverySequence: Int64 = 1
     private static let logger = Logger(subsystem: "com.clintonst.sideload.sleep", category: "WhoopStore")
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
-    private static let schemaVersion = 7
-    private static let decoderVersion = 2
+    private static let schemaVersion = 8
+    private static let decoderVersion = 3
 
     init(databaseURL: URL? = nil, runBackgroundDecoding: Bool = true) {
         databaseURLOverride = databaseURL
@@ -320,13 +414,17 @@ final class WhoopStore: @unchecked Sendable {
             // deterministic so tests may inspect the file immediately.
             queue.sync { [self] in
                 openDatabase()
-                if runBackgroundDecoding { backfillVersion26PPG() }
+                if runBackgroundDecoding {
+                    backfillVersion26PPG()
+                    backfillVersion18Motion()
+                }
             }
         } else {
             queue.async { [self] in
                 openDatabase()
                 if runBackgroundDecoding {
                     backfillVersion26PPG()
+                    backfillVersion18Motion()
                 }
             }
         }
@@ -511,6 +609,62 @@ final class WhoopStore: @unchecked Sendable {
         }
     }
 
+    func loadDailyStepRecords(
+        completion: @escaping @Sendable (Result<[DailyStepRecord], Error>) -> Void
+    ) {
+        queue.async { [self] in
+            guard let database else {
+                completion(.failure(StoreError.databaseUnavailable))
+                return
+            }
+            let sql = """
+                SELECT date_key, step_count, sample_count, span_seconds,
+                       coverage_fraction, gap_seconds, counter_wrap_count,
+                       rejected_delta_count, first_sample_at, last_sample_at,
+                       source, algorithm_version
+                FROM whoop_daily_step_metric
+                ORDER BY date_key ASC
+                """
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+                  let statement else {
+                completion(.failure(StoreError.queryFailed(errorMessage(database))))
+                return
+            }
+            defer { sqlite3_finalize(statement) }
+
+            var records: [DailyStepRecord] = []
+            var result = sqlite3_step(statement)
+            while result == SQLITE_ROW {
+                guard let dateKey = textColumn(statement, 0),
+                      let source = textColumn(statement, 10) else {
+                    result = sqlite3_step(statement)
+                    continue
+                }
+                records.append(DailyStepRecord(
+                    dateKey: dateKey,
+                    stepCount: Int(sqlite3_column_int64(statement, 1)),
+                    sampleCount: Int(sqlite3_column_int64(statement, 2)),
+                    spanSeconds: Int(sqlite3_column_int64(statement, 3)),
+                    coverageFraction: sqlite3_column_double(statement, 4),
+                    gapSeconds: Int(sqlite3_column_int64(statement, 5)),
+                    counterWrapCount: Int(sqlite3_column_int64(statement, 6)),
+                    rejectedDeltaCount: Int(sqlite3_column_int64(statement, 7)),
+                    firstSampleAt: doubleColumn(statement, 8).map { Date(timeIntervalSince1970: $0) },
+                    lastSampleAt: doubleColumn(statement, 9).map { Date(timeIntervalSince1970: $0) },
+                    source: source,
+                    algorithmVersion: Int(sqlite3_column_int(statement, 11))
+                ))
+                result = sqlite3_step(statement)
+            }
+            guard result == SQLITE_DONE else {
+                completion(.failure(StoreError.queryFailed(errorMessage(database))))
+                return
+            }
+            completion(.success(records))
+        }
+    }
+
     func loadLatestHeartRateSample(
         completion: @escaping @Sendable (WhoopLatestHeartRateSample?) -> Void
     ) {
@@ -645,24 +799,36 @@ final class WhoopStore: @unchecked Sendable {
         }
 
         let temporaryURL = directory.appendingPathComponent(".migration-backup-in-progress.sqlite3")
-        try? fileManager.removeItem(at: temporaryURL)
+        Self.removeSQLiteFiles(at: temporaryURL, fileManager: fileManager)
         guard Self.copySQLiteDatabase(source: database, destinationURL: temporaryURL),
               Self.validSQLiteSnapshot(at: temporaryURL, expectedVersion: current) else {
-            try? fileManager.removeItem(at: temporaryURL)
+            Self.removeSQLiteFiles(at: temporaryURL, fileManager: fileManager)
             Self.logger.error("Refusing schema migration because its SQLite snapshot failed validation")
             return false
         }
         do {
             try fileManager.moveItem(at: temporaryURL, to: snapshotURL)
+            Self.removeSQLiteSidecars(at: temporaryURL, fileManager: fileManager)
             try fileManager.setAttributes(
                 [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
                 ofItemAtPath: snapshotURL.path
             )
             return true
         } catch {
-            try? fileManager.removeItem(at: temporaryURL)
+            Self.removeSQLiteFiles(at: temporaryURL, fileManager: fileManager)
             Self.logger.error("Could not finalize migration snapshot: \(error.localizedDescription, privacy: .public)")
             return false
+        }
+    }
+
+    private static func removeSQLiteFiles(at url: URL, fileManager: FileManager) {
+        try? fileManager.removeItem(at: url)
+        removeSQLiteSidecars(at: url, fileManager: fileManager)
+    }
+
+    private static func removeSQLiteSidecars(at url: URL, fileManager: FileManager) {
+        for suffix in ["-wal", "-shm", "-journal"] {
+            try? fileManager.removeItem(atPath: url.path + suffix)
         }
     }
 
@@ -965,6 +1131,56 @@ final class WhoopStore: @unchecked Sendable {
                 )
                 """)
             && execute("CREATE INDEX IF NOT EXISTS whoop_time_zone_observation_zone ON whoop_time_zone_observation(time_zone_identifier, observed_at)")
+        case 8:
+            // Version-18 packets already contain these candidate motion
+            // fields. Materialize them without replacing their immutable raw
+            // packet, then keep the UI-facing daily total in a separate table
+            // with coverage and derivation provenance.
+            return addColumnIfNeeded(
+                table: "whoop_historical_sample",
+                column: "step_motion_counter",
+                declaration: "INTEGER"
+            )
+            && addColumnIfNeeded(
+                table: "whoop_historical_sample",
+                column: "step_cadence_raw",
+                declaration: "INTEGER"
+            )
+            && addColumnIfNeeded(
+                table: "whoop_historical_sample",
+                column: "motion_class_raw",
+                declaration: "INTEGER"
+            )
+            && addColumnIfNeeded(
+                table: "whoop_historical_sample",
+                column: "step_utc_offset_seconds",
+                declaration: "INTEGER"
+            )
+            && addColumnIfNeeded(
+                table: "whoop_historical_sample",
+                column: "step_date_key",
+                declaration: "TEXT"
+            )
+            && execute("CREATE INDEX IF NOT EXISTS whoop_historical_sample_step_day ON whoop_historical_sample(step_date_key, peripheral_id, sample_at)")
+            && execute("""
+                CREATE TABLE IF NOT EXISTS whoop_daily_step_metric (
+                    date_key TEXT PRIMARY KEY,
+                    peripheral_id TEXT NOT NULL,
+                    step_count INTEGER NOT NULL CHECK(step_count >= 0),
+                    sample_count INTEGER NOT NULL CHECK(sample_count >= 0),
+                    span_seconds INTEGER NOT NULL CHECK(span_seconds >= 0),
+                    coverage_fraction REAL NOT NULL CHECK(coverage_fraction BETWEEN 0 AND 1),
+                    gap_seconds INTEGER NOT NULL CHECK(gap_seconds >= 0),
+                    counter_wrap_count INTEGER NOT NULL CHECK(counter_wrap_count >= 0),
+                    rejected_delta_count INTEGER NOT NULL CHECK(rejected_delta_count >= 0),
+                    first_sample_at REAL,
+                    last_sample_at REAL,
+                    source TEXT NOT NULL,
+                    algorithm_version INTEGER NOT NULL,
+                    derived_at REAL NOT NULL
+                )
+                """)
+            && execute("CREATE INDEX IF NOT EXISTS whoop_daily_step_metric_last_sample ON whoop_daily_step_metric(last_sample_at)")
         default:
             return false
         }
@@ -986,6 +1202,34 @@ final class WhoopStore: @unchecked Sendable {
         bind(zone.identifier, to: 2, in: statement)
         sqlite3_bind_int(statement, 3, Int32(zone.secondsFromGMT(for: now)))
         _ = sqlite3_step(statement)
+    }
+
+    private func nearestRecordedUTCOffset(database: OpaquePointer, sampleAt: Date) -> Int {
+        let sql = """
+            SELECT utc_offset_seconds
+            FROM whoop_time_zone_observation
+            ORDER BY ABS(observed_at - ?)
+            LIMIT 1
+            """
+        if let statement = cachedStatement(database: database, sql: sql) {
+            sqlite3_bind_double(statement, 1, sampleAt.timeIntervalSince1970)
+            if sqlite3_step(statement) == SQLITE_ROW {
+                return Int(sqlite3_column_int(statement, 0))
+            }
+        }
+        return TimeZone.autoupdatingCurrent.secondsFromGMT(for: sampleAt)
+    }
+
+    static func dateKey(for date: Date, utcOffsetSeconds: Int) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: utcOffsetSeconds) ?? .gmt
+        let components = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(
+            format: "%04d-%02d-%02d",
+            components.year ?? 0,
+            components.month ?? 0,
+            components.day ?? 0
+        )
     }
 
     private func addColumnIfNeeded(
@@ -1278,6 +1522,7 @@ final class WhoopStore: @unchecked Sendable {
                 execute("ROLLBACK")
                 return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
             }
+            finishStepMaterializationIfNeeded(for: packet)
             return WhoopPacketPersistenceResult(success: true, deliverySequence: deliverySequence)
         case .new:
             break
@@ -1327,6 +1572,7 @@ final class WhoopStore: @unchecked Sendable {
             execute("ROLLBACK")
             return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
         }
+        finishStepMaterializationIfNeeded(for: packet)
         return WhoopPacketPersistenceResult(success: true, deliverySequence: deliverySequence)
     }
 
@@ -1643,6 +1889,164 @@ final class WhoopStore: @unchecked Sendable {
         }
     }
 
+    /// Materializes the candidate counter/cadence/class bytes that older app
+    /// versions preserved only inside immutable v18 packets. Work is bounded
+    /// so upgrading a phone-sized store cannot monopolize the store queue.
+    private func backfillVersion18Motion(cursor: Int64 = 0, batchSize: Int = 1_000) {
+        guard let database,
+              metadataValue(database: database, key: "decoder-3-v18-motion-backfill") != "complete" else {
+            return
+        }
+        let sql = """
+            SELECT rowid, id, payload
+            FROM whoop_raw_packet
+            WHERE rowid > ?
+              AND frame_type = 47
+              AND length(payload) = 124
+              AND hex(substr(payload, 10, 1)) = '12'
+            ORDER BY rowid
+            LIMIT ?
+            """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return }
+        sqlite3_bind_int64(statement, 1, cursor)
+        sqlite3_bind_int(statement, 2, Int32(batchSize))
+        var rows: [(Int64, String, Data)] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if let id = textColumn(statement, 1), let payload = dataColumn(statement, 2) {
+                rows.append((sqlite3_column_int64(statement, 0), id, payload))
+            }
+        }
+        sqlite3_finalize(statement)
+
+        guard !rows.isEmpty else {
+            _ = setMetadataValue(
+                database: database,
+                key: "decoder-3-v18-motion-backfill",
+                value: "complete"
+            )
+            let changedDays = pendingStepDateKeys
+            pendingStepDateKeys.removeAll(keepingCapacity: true)
+            guard !changedDays.isEmpty else { return }
+            rebuildDailySteps(for: changedDays, database: database)
+            publishStepUpdate()
+            return
+        }
+        guard execute("BEGIN IMMEDIATE") else { return }
+        for (_, packetID, payload) in rows {
+            guard decodePacketIfNeeded(
+                database: database,
+                packetID: packetID,
+                packet: payload,
+                historical: nil
+            ) else {
+                execute("ROLLBACK")
+                return
+            }
+        }
+        guard execute("COMMIT") else {
+            execute("ROLLBACK")
+            return
+        }
+        let nextCursor = rows.last!.0
+        queue.asyncAfter(deadline: .now() + .milliseconds(25)) { [self] in
+            backfillVersion18Motion(cursor: nextCursor, batchSize: batchSize)
+        }
+    }
+
+    private func rebuildDailySteps(for dateKeys: Set<String>, database: OpaquePointer) {
+        guard !dateKeys.isEmpty else { return }
+        let selectSQL = """
+            SELECT peripheral_id, sample_at, step_motion_counter
+            FROM whoop_historical_sample
+            WHERE step_date_key = ? AND step_motion_counter IS NOT NULL
+            ORDER BY peripheral_id, sample_at
+            """
+        let upsertSQL = """
+            INSERT INTO whoop_daily_step_metric
+            (date_key, peripheral_id, step_count, sample_count, span_seconds,
+             coverage_fraction, gap_seconds, counter_wrap_count,
+             rejected_delta_count, first_sample_at, last_sample_at,
+             source, algorithm_version, derived_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    'whoop5_v18_step_counter', ?, ?)
+            ON CONFLICT(date_key) DO UPDATE SET
+                peripheral_id = excluded.peripheral_id,
+                step_count = excluded.step_count,
+                sample_count = excluded.sample_count,
+                span_seconds = excluded.span_seconds,
+                coverage_fraction = excluded.coverage_fraction,
+                gap_seconds = excluded.gap_seconds,
+                counter_wrap_count = excluded.counter_wrap_count,
+                rejected_delta_count = excluded.rejected_delta_count,
+                first_sample_at = excluded.first_sample_at,
+                last_sample_at = excluded.last_sample_at,
+                source = excluded.source,
+                algorithm_version = excluded.algorithm_version,
+                derived_at = excluded.derived_at
+            """
+
+        for dateKey in dateKeys.sorted() {
+            guard let select = cachedStatement(database: database, sql: selectSQL) else { continue }
+            bind(dateKey, to: 1, in: select)
+            var byPeripheral: [String: [WhoopStepCounterSample]] = [:]
+            while sqlite3_step(select) == SQLITE_ROW {
+                guard let peripheralID = textColumn(select, 0) else { continue }
+                byPeripheral[peripheralID, default: []].append(
+                    WhoopStepCounterSample(
+                        timestamp: sqlite3_column_double(select, 1),
+                        counter: UInt16(truncatingIfNeeded: sqlite3_column_int(select, 2))
+                    )
+                )
+            }
+            let candidates = byPeripheral.map { peripheralID, samples in
+                (peripheralID, WhoopStepDaySummary.summarize(samples))
+            }
+            guard let chosen = candidates.max(by: { lhs, rhs in
+                if lhs.1.sampleCount == rhs.1.sampleCount {
+                    return (lhs.1.lastSampleAt ?? 0) < (rhs.1.lastSampleAt ?? 0)
+                }
+                return lhs.1.sampleCount < rhs.1.sampleCount
+            }), let upsert = cachedStatement(database: database, sql: upsertSQL) else { continue }
+
+            let summary = chosen.1
+            bind(dateKey, to: 1, in: upsert)
+            bind(chosen.0, to: 2, in: upsert)
+            sqlite3_bind_int64(upsert, 3, Int64(summary.stepCount))
+            sqlite3_bind_int64(upsert, 4, Int64(summary.sampleCount))
+            sqlite3_bind_int64(upsert, 5, Int64(summary.spanSeconds))
+            sqlite3_bind_double(upsert, 6, summary.coverageFraction)
+            sqlite3_bind_int64(upsert, 7, Int64(summary.gapSeconds))
+            sqlite3_bind_int64(upsert, 8, Int64(summary.counterWrapCount))
+            sqlite3_bind_int64(upsert, 9, Int64(summary.rejectedDeltaCount))
+            bind(summary.firstSampleAt, to: 10, in: upsert)
+            bind(summary.lastSampleAt, to: 11, in: upsert)
+            sqlite3_bind_int(upsert, 12, Int32(WhoopStepDaySummary.algorithmVersion))
+            sqlite3_bind_double(upsert, 13, Date().timeIntervalSince1970)
+            _ = sqlite3_step(upsert)
+        }
+    }
+
+    private func finishStepMaterializationIfNeeded(for packet: Data) {
+        let isComplete = packet.count > 10
+            && (packet[8] == 49 || packet[8] == 56)
+            && packet[10] == 3
+            && WhoopFrameIntegrity.isValid(packet)
+        guard isComplete, let database else { return }
+        let changedDays = pendingStepDateKeys
+        pendingStepDateKeys.removeAll(keepingCapacity: true)
+        guard !changedDays.isEmpty else { return }
+        rebuildDailySteps(for: changedDays, database: database)
+        publishStepUpdate()
+    }
+
+    private func publishStepUpdate() {
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .whoopDailyHealthUpdated, object: nil)
+        }
+    }
+
     private func metadataValue(database: OpaquePointer, key: String) -> String? {
         let sql = "SELECT value FROM whoop_store_metadata WHERE key = ?"
         var statement: OpaquePointer?
@@ -1706,19 +2110,34 @@ final class WhoopStore: @unchecked Sendable {
         packetID: String,
         sample: WhoopDecodedHistorical
     ) -> Bool {
+        let utcOffsetSeconds = nearestRecordedUTCOffset(
+            database: database,
+            sampleAt: sample.sampleAt
+        )
+        let stepDateKey = Self.dateKey(
+            for: sample.sampleAt,
+            utcOffsetSeconds: utcOffsetSeconds
+        )
         let sql = """
             INSERT INTO whoop_historical_sample
             (sample_at, source_packet_id, peripheral_id, protocol_version, ordinal,
-             heart_rate, rr_intervals_json, sleep_state, decoder_version)
+             heart_rate, rr_intervals_json, sleep_state, decoder_version,
+             step_motion_counter, step_cadence_raw, motion_class_raw,
+             step_utc_offset_seconds, step_date_key)
             SELECT ?, ?, p.peripheral_id, COALESCE(p.protocol_version, 18), 0,
-                   ?, ?, ?, ?
+                   ?, ?, ?, ?, ?, ?, ?, ?, ?
             FROM whoop_raw_packet p WHERE p.id = ?
             ON CONFLICT(peripheral_id, protocol_version, sample_at, ordinal) DO UPDATE SET
                 source_packet_id = excluded.source_packet_id,
                 heart_rate = excluded.heart_rate,
                 rr_intervals_json = excluded.rr_intervals_json,
                 sleep_state = excluded.sleep_state,
-                decoder_version = excluded.decoder_version
+                decoder_version = excluded.decoder_version,
+                step_motion_counter = excluded.step_motion_counter,
+                step_cadence_raw = excluded.step_cadence_raw,
+                motion_class_raw = excluded.motion_class_raw,
+                step_utc_offset_seconds = excluded.step_utc_offset_seconds,
+                step_date_key = excluded.step_date_key
             """
         guard let statement = cachedStatement(database: database, sql: sql) else { return false }
         sqlite3_bind_double(statement, 1, sample.sampleAt.timeIntervalSince1970)
@@ -1728,8 +2147,15 @@ final class WhoopStore: @unchecked Sendable {
         bind(rrJSON, to: 4, in: statement)
         sqlite3_bind_int(statement, 5, Int32(sample.sleepState))
         sqlite3_bind_int(statement, 6, Int32(Self.decoderVersion))
-        bind(packetID, to: 7, in: statement)
-        return sqlite3_step(statement) == SQLITE_DONE
+        sqlite3_bind_int(statement, 7, Int32(sample.stepMotionCounter))
+        sqlite3_bind_int(statement, 8, Int32(sample.stepCadenceRaw))
+        sqlite3_bind_int(statement, 9, Int32(sample.motionClassRaw))
+        sqlite3_bind_int(statement, 10, Int32(utcOffsetSeconds))
+        bind(stepDateKey, to: 11, in: statement)
+        bind(packetID, to: 12, in: statement)
+        let succeeded = sqlite3_step(statement) == SQLITE_DONE
+        if succeeded { pendingStepDateKeys.insert(stepDateKey) }
+        return succeeded
     }
 
     private func backfillHistoricalSamplesIfNeeded() {

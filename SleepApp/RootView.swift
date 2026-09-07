@@ -178,6 +178,16 @@ struct RootView: View {
                         color: .red,
                         formatValue: { String(Int($0.rounded())) }
                     )
+
+                    metricCard(
+                        metric: .steps,
+                        title: "Steps",
+                        symbol: "figure.walk",
+                        unit: "",
+                        series: metricSeries(for: .steps),
+                        color: .green,
+                        formatValue: formatSteps
+                    )
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
@@ -519,11 +529,18 @@ struct RootView: View {
         let selectedMetricPoint: MetricPoint? = cardSelection.flatMap {
             self.selectedPoint(in: series.plotted, near: $0)
         }
-        let currentValue = metricValue(for: metric, in: currentSleepRecord)
+        let currentStepPoint = metric == .steps
+            ? series.daily.last { Calendar.current.isDate($0.date, inSameDayAs: currentDate) } ?? series.daily.last
+            : nil
+        let currentValue = metric == .steps
+            ? currentStepPoint?.value
+            : metricValue(for: metric, in: currentSleepRecord)
         let displayedValue = cardSelection == nil ? currentValue : selectedMetricPoint?.value
         let value = displayedValue.map(formatValue) ?? "—"
         let valueDateLabel = cardSelection == nil
-            ? "Today"
+            ? (metric == .steps
+                ? currentStepPoint.map { selectionLabel(for: $0.date) } ?? "No real data"
+                : "Today")
             : selectedMetricPoint.map { selectionLabel(for: $0.date) } ?? "No real data"
 
         return VStack(alignment: .leading, spacing: 7) {
@@ -880,6 +897,8 @@ struct RootView: View {
             return formatDuration(value)
         case .hrv, .rhr:
             return String(Int(value.rounded()))
+        case .steps:
+            return formatCompactSteps(value)
         }
     }
 
@@ -1039,6 +1058,18 @@ struct RootView: View {
         return String(format: "%dh %02dm", minutes / 60, minutes % 60)
     }
 
+    private func formatSteps(_ value: Double) -> String {
+        Int(value.rounded()).formatted(.number.grouping(.automatic))
+    }
+
+    private func formatCompactSteps(_ value: Double) -> String {
+        guard abs(value) >= 1_000 else { return String(Int(value.rounded())) }
+        let thousands = value / 1_000
+        return thousands >= 10
+            ? "\(Int(thousands.rounded()))k"
+            : String(format: "%.1fk", thousands)
+    }
+
     private func yAxisValues(for domain: ClosedRange<Double>) -> [Double] {
         let step = (domain.upperBound - domain.lowerBound) / 4
         return (0...4).map { domain.lowerBound + (Double($0) * step) }
@@ -1052,6 +1083,8 @@ struct RootView: View {
             String(format: "%.1fh", value)
         case .hrv, .rhr:
             String(Int(value.rounded()))
+        case .steps:
+            formatCompactSteps(value)
         }
     }
 
@@ -1062,7 +1095,7 @@ struct RootView: View {
         history.metricSeries(
             for: metric,
             range: requestedRange ?? selectedRange,
-            referenceDate: referenceDate
+            referenceDate: metric == .steps ? currentDate : referenceDate
         )
     }
 
@@ -1073,6 +1106,7 @@ struct RootView: View {
         case .duration: record.sleepDurationMinutes.map { $0 / 60 }
         case .hrv: record.hrvRMSSDMilliseconds
         case .rhr: record.restingHeartRateBPM
+        case .steps: nil
         }
     }
 
@@ -1081,6 +1115,9 @@ struct RootView: View {
         let values = points.map(\.value)
         let low = values.min() ?? 0
         let high = values.max() ?? 1
+        if metric == .steps {
+            return 0...max(100, high * 1.12)
+        }
         let padding = max((high - low) * 0.18, 0.5)
         return (low - padding)...(high + padding)
     }
@@ -1350,6 +1387,7 @@ enum MetricKind: Hashable {
     case duration
     case hrv
     case rhr
+    case steps
 }
 
 enum HealthRange: String, CaseIterable, Identifiable {

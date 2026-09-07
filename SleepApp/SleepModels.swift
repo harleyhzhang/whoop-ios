@@ -101,6 +101,36 @@ struct DailyHealthRecord: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+struct DailyStepRecord: Hashable, Identifiable, Sendable {
+    let dateKey: String
+    let stepCount: Int
+    let sampleCount: Int
+    let spanSeconds: Int
+    let coverageFraction: Double
+    let gapSeconds: Int
+    let counterWrapCount: Int
+    let rejectedDeltaCount: Int
+    let firstSampleAt: Date?
+    let lastSampleAt: Date?
+    let source: String
+    let algorithmVersion: Int
+
+    var id: String { dateKey }
+
+    var date: Date {
+        let pieces = dateKey.split(separator: "-").compactMap { Int($0) }
+        guard pieces.count == 3 else { return .distantPast }
+        var components = DateComponents()
+        components.calendar = Calendar(identifier: .gregorian)
+        components.timeZone = .current
+        components.year = pieces[0]
+        components.month = pieces[1]
+        components.day = pieces[2]
+        components.hour = 12
+        return components.date ?? .distantPast
+    }
+}
+
 struct SleepScoreNight: Sendable, Equatable {
     let dateKey: String
     let durationMinutes: Double
@@ -309,6 +339,7 @@ struct SleepScoreModelBundle: Decodable, Sendable {
 @MainActor
 final class HealthHistoryModel: ObservableObject {
     @Published private(set) var records: [DailyHealthRecord] = []
+    @Published private(set) var stepRecords: [DailyStepRecord] = []
     @Published private(set) var isLoading = true
     @Published private(set) var errorMessage: String?
 
@@ -365,17 +396,27 @@ final class HealthHistoryModel: ObservableObject {
         let cutoff = range.dayCount.flatMap {
             calendar.date(byAdding: .day, value: -($0 - 1), to: referenceDay)
         }
-        let daily = records.compactMap { record -> MetricPoint? in
-            let date = cachedDate(for: record)
-            if let cutoff, date < calendar.startOfDay(for: cutoff) { return nil }
-            let value: Double?
-            switch metric {
-            case .sleep: value = record.sleepScore
-            case .duration: value = record.sleepDurationMinutes.map { $0 / 60 }
-            case .hrv: value = record.hrvRMSSDMilliseconds
-            case .rhr: value = record.restingHeartRateBPM
+        let daily: [MetricPoint]
+        if metric == .steps {
+            daily = stepRecords.compactMap { record in
+                let date = cachedDate(dateKey: record.dateKey, fallback: record.date)
+                if let cutoff, date < calendar.startOfDay(for: cutoff) { return nil }
+                return MetricPoint(date: date, value: Double(record.stepCount))
             }
-            return value.map { MetricPoint(date: date, value: $0) }
+        } else {
+            daily = records.compactMap { record -> MetricPoint? in
+                let date = cachedDate(for: record)
+                if let cutoff, date < calendar.startOfDay(for: cutoff) { return nil }
+                let value: Double?
+                switch metric {
+                case .sleep: value = record.sleepScore
+                case .duration: value = record.sleepDurationMinutes.map { $0 / 60 }
+                case .hrv: value = record.hrvRMSSDMilliseconds
+                case .rhr: value = record.restingHeartRateBPM
+                case .steps: value = nil
+                }
+                return value.map { MetricPoint(date: date, value: $0) }
+            }
         }
         let plotted: [MetricPoint]
         switch range {
@@ -392,10 +433,13 @@ final class HealthHistoryModel: ObservableObject {
     }
 
     private func cachedDate(for record: DailyHealthRecord) -> Date {
-        if let cached = dateCache[record.dateKey] { return cached }
-        let date = record.date
-        dateCache[record.dateKey] = date
-        return date
+        cachedDate(dateKey: record.dateKey, fallback: record.date)
+    }
+
+    private func cachedDate(dateKey: String, fallback: Date) -> Date {
+        if let cached = dateCache[dateKey] { return cached }
+        dateCache[dateKey] = fallback
+        return fallback
     }
 
     private func adaptiveBucketDays(for points: [MetricPoint]) -> Int {
@@ -437,21 +481,31 @@ final class HealthHistoryModel: ObservableObject {
         reloadGeneration += 1
         let generation = reloadGeneration
         isLoading = true
+        let store = store
         store.loadDailyHealthRecords { [weak self] result in
-            Task { @MainActor in
-                guard let self, generation == self.reloadGeneration else { return }
-                switch result {
-                case .success(let records):
-                    self.records = records
+            store.loadDailyStepRecords { stepResult in
+                Task { @MainActor in
+                    guard let self, generation == self.reloadGeneration else { return }
+                    var errors: [String] = []
+                    switch result {
+                    case .success(let records):
+                        self.records = records
+                    case .failure(let error):
+                        errors.append(error.localizedDescription)
+                    }
+                    switch stepResult {
+                    case .success(let records):
+                        self.stepRecords = records
+                    case .failure(let error):
+                        errors.append(error.localizedDescription)
+                    }
+                    // Preserve either last known-good dataset through a
+                    // transient read failure instead of blanking its chart.
                     self.seriesCache.removeAll(keepingCapacity: true)
                     self.dateCache.removeAll(keepingCapacity: true)
-                    self.errorMessage = nil
-                case .failure(let error):
-                    // Keep the last known-good dashboard visible through a
-                    // transient read failure instead of blanking every chart.
-                    self.errorMessage = error.localizedDescription
+                    self.errorMessage = errors.isEmpty ? nil : errors.joined(separator: "\n")
+                    self.isLoading = false
                 }
-                self.isLoading = false
             }
         }
     }

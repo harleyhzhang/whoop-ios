@@ -403,7 +403,7 @@ final class WhoopSleepStateTests: XCTestCase {
         var database: OpaquePointer?
         XCTAssertEqual(sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READONLY, nil), SQLITE_OK)
         defer { if let database { sqlite3_close(database) } }
-        XCTAssertEqual(scalarInt(database, sql: "PRAGMA user_version"), 7)
+        XCTAssertEqual(scalarInt(database, sql: "PRAGMA user_version"), 8)
         XCTAssertEqual(scalarInt(
             database,
             sql: "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('whoop_decode_result','whoop_ppg_packet','whoop_store_metadata')"
@@ -420,6 +420,100 @@ final class WhoopSleepStateTests: XCTestCase {
             database,
             sql: "SELECT COUNT(*) FROM whoop_time_zone_observation"
         ), 1)
+        XCTAssertEqual(scalarInt(
+            database,
+            sql: "SELECT COUNT(*) FROM pragma_table_info('whoop_historical_sample') WHERE name IN ('step_motion_counter','step_cadence_raw','motion_class_raw','step_utc_offset_seconds','step_date_key')"
+        ), 5)
+        XCTAssertEqual(scalarInt(
+            database,
+            sql: "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='whoop_daily_step_metric'"
+        ), 1)
+    }
+
+    func testVersion18DecoderPreservesMotionFieldsAndRejectsCorruption() {
+        var frame = version18Frame(
+            timestamp: 1_800_000_000,
+            sleepState: 2,
+            stepCounter: 54_321,
+            cadenceRaw: 73,
+            motionClassRaw: 4
+        )
+
+        let decoded = WhoopDecodedHistorical.decode(frame)
+        XCTAssertEqual(decoded?.stepMotionCounter, 54_321)
+        XCTAssertEqual(decoded?.stepCadenceRaw, 73)
+        XCTAssertEqual(decoded?.motionClassRaw, 4)
+
+        frame[57] ^= 0x01
+        XCTAssertNil(WhoopDecodedHistorical.decode(frame))
+    }
+
+    func testStepSummaryCountsNormalAndWrappedDeltas() {
+        let summary = WhoopStepDaySummary.summarize([
+            WhoopStepCounterSample(timestamp: 0, counter: 65_532),
+            WhoopStepCounterSample(timestamp: 1, counter: 65_534),
+            WhoopStepCounterSample(timestamp: 2, counter: 2),
+            WhoopStepCounterSample(timestamp: 3, counter: 5),
+        ])
+
+        XCTAssertEqual(summary.stepCount, 9)
+        XCTAssertEqual(summary.counterWrapCount, 1)
+        XCTAssertEqual(summary.rejectedDeltaCount, 0)
+        XCTAssertEqual(summary.sampleCount, 4)
+        XCTAssertEqual(summary.coverageFraction, 1, accuracy: 0.001)
+    }
+
+    func testStepSummaryRejectsImplausibleResetAndTracksCoverage() {
+        let summary = WhoopStepDaySummary.summarize([
+            WhoopStepCounterSample(timestamp: 0, counter: 30_000),
+            WhoopStepCounterSample(timestamp: 10, counter: 2),
+            WhoopStepCounterSample(timestamp: 11, counter: 5),
+        ])
+
+        XCTAssertEqual(summary.stepCount, 3)
+        XCTAssertEqual(summary.rejectedDeltaCount, 1)
+        XCTAssertEqual(summary.gapSeconds, 9)
+        XCTAssertEqual(summary.spanSeconds, 12)
+        XCTAssertEqual(summary.coverageFraction, 0.25, accuracy: 0.001)
+    }
+
+    func testCompletedOffloadMaterializesDailyStepsWithProvenance() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = WhoopStore(
+            databaseURL: directory.appendingPathComponent("sleep.sqlite3"),
+            runBackgroundDecoding: false
+        )
+        let peripheral = UUID()
+        let timestamp = UInt32(Date().timeIntervalSince1970)
+
+        let first = try await append(
+            version18Frame(timestamp: timestamp, sleepState: 0, stepCounter: 100),
+            store: store, peripheral: peripheral, sessionID: nil
+        )
+        XCTAssertTrue(first.success)
+        let second = try await append(
+            version18Frame(timestamp: timestamp + 1, sleepState: 0, stepCounter: 103),
+            store: store, peripheral: peripheral, sessionID: nil
+        )
+        XCTAssertTrue(second.success)
+        let completion = try await append(
+            metadataFrame(type: 3),
+            store: store, peripheral: peripheral, sessionID: nil
+        )
+        XCTAssertTrue(completion.success)
+
+        let records: [DailyStepRecord] = try await withCheckedThrowingContinuation { continuation in
+            store.loadDailyStepRecords { continuation.resume(with: $0) }
+        }
+        let record = try XCTUnwrap(records.last)
+        XCTAssertEqual(record.stepCount, 3)
+        XCTAssertEqual(record.sampleCount, 2)
+        XCTAssertEqual(record.coverageFraction, 1, accuracy: 0.001)
+        XCTAssertEqual(record.rejectedDeltaCount, 0)
+        XCTAssertEqual(record.source, "whoop5_v18_step_counter")
+        XCTAssertEqual(record.algorithmVersion, WhoopStepDaySummary.algorithmVersion)
     }
 
     func testOnlineBackupIncludesCommittedWALData() throws {
@@ -454,6 +548,41 @@ final class WhoopSleepStateTests: XCTestCase {
         XCTAssertEqual(scalarInt(snapshot, sql: "PRAGMA user_version"), 6)
         XCTAssertEqual(scalarInt(snapshot, sql: "SELECT COUNT(*) FROM evidence"), 1)
         XCTAssertEqual(scalarText(snapshot, sql: "PRAGMA quick_check"), "ok")
+    }
+
+    func testMigrationSnapshotRemovesStaleTemporarySidecars() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let url = directory.appendingPathComponent("sleep.sqlite3")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        do {
+            let store = WhoopStore(databaseURL: url, runBackgroundDecoding: false)
+            _ = store
+        }
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READWRITE, nil), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(database, "PRAGMA user_version=7", nil, nil, nil), SQLITE_OK)
+        sqlite3_close(database)
+
+        let backupDirectory = directory.appendingPathComponent("migration-backups", isDirectory: true)
+        try FileManager.default.createDirectory(at: backupDirectory, withIntermediateDirectories: true)
+        let temporary = backupDirectory.appendingPathComponent(".migration-backup-in-progress.sqlite3")
+        for path in [temporary.path, temporary.path + "-wal", temporary.path + "-shm"] {
+            try Data("stale".utf8).write(to: URL(fileURLWithPath: path))
+        }
+
+        do {
+            let store = WhoopStore(databaseURL: url, runBackgroundDecoding: false)
+            _ = store
+        }
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: temporary.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: temporary.path + "-wal"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: temporary.path + "-shm"))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: backupDirectory.appendingPathComponent("sleep-v7-before-v8.sqlite3").path
+        ))
     }
 
     func testSleepScoreFeaturesCaptureDurationEfficiencyAndRecentTiming() {
@@ -710,13 +839,23 @@ final class WhoopSleepStateTests: XCTestCase {
         return Data(bytes)
     }
 
-    private func version18Frame(timestamp: UInt32, sleepState: UInt8) -> Data {
+    private func version18Frame(
+        timestamp: UInt32,
+        sleepState: UInt8,
+        stepCounter: UInt16 = 0,
+        cadenceRaw: UInt8 = 0,
+        motionClassRaw: UInt8 = 0
+    ) -> Data {
         var bytes = framedPacket(length: 124, type: 47, version: 18)
         bytes[15] = UInt8(truncatingIfNeeded: timestamp)
         bytes[16] = UInt8(truncatingIfNeeded: timestamp >> 8)
         bytes[17] = UInt8(truncatingIfNeeded: timestamp >> 16)
         bytes[18] = UInt8(truncatingIfNeeded: timestamp >> 24)
         bytes[22] = 55
+        bytes[57] = UInt8(truncatingIfNeeded: stepCounter)
+        bytes[58] = UInt8(truncatingIfNeeded: stepCounter >> 8)
+        bytes[59] = cadenceRaw
+        bytes[63] = motionClassRaw
         bytes[81] = sleepState << 4
         finishChecksums(&bytes)
         return Data(bytes)
