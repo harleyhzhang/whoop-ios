@@ -103,6 +103,11 @@ The app should eventually cover the complete personal loop:
   numbers use a brief restrained digit pop while retaining the previous value
   underneath; Reduce Motion remains immediate and direct chart scrubbing does
   not replay the animation.
+- Moving between daily and long-range trends now fades the source curve out,
+  changes scale only during the quiet middle, then fades the independently
+  bucketed curve in. Long-range translucency, average rules, labels, and the
+  month footer follow on a delayed ramp instead of snapping onto all four cards
+  in the same frame as the aggregation change.
 - Haptics follow a restrained interaction vocabulary: selection ticks occur
   only when the range or exact selected night changes; lightweight impacts
   accompany diagnostic navigation and rescanning; handshake initiation is
