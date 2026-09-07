@@ -19,9 +19,7 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 20
     env:
-      DERIVED_DATA: ${{ runner.temp }}/SleepDerivedData
-      TEST_RESULTS: ${{ runner.temp }}/SleepTests.xcresult
-      WHOOP_HISTORY_SEED_PATH: ${{ runner.temp }}/missing-whoop-history.json
+      WHOOP_HISTORY_SEED_PATH: /tmp/missing-whoop-history.json
 
     steps:
       - name: Check out source
@@ -48,8 +46,8 @@ jobs:
             -scheme Sleep \
             -configuration Debug \
             -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=latest' \
-            -derivedDataPath "$DERIVED_DATA" \
-            -resultBundlePath "$TEST_RESULTS" \
+            -derivedDataPath "$RUNNER_TEMP/SleepDerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/SleepTests.xcresult" \
             CODE_SIGNING_ALLOWED=NO
 
       - name: Build Release
@@ -59,7 +57,7 @@ jobs:
             -scheme Sleep \
             -configuration Release \
             -destination 'generic/platform=iOS Simulator' \
-            -derivedDataPath "$DERIVED_DATA" \
+            -derivedDataPath "$RUNNER_TEMP/SleepDerivedData" \
             CODE_SIGNING_ALLOWED=NO
 
       - name: Upload failing test result
@@ -67,6 +65,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: SleepTests-${{ github.run_id }}
-          path: ${{ env.TEST_RESULTS }}
+          path: ${{ runner.temp }}/SleepTests.xcresult
           if-no-files-found: ignore
           retention-days: 7
