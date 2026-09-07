@@ -13,8 +13,8 @@ The app should eventually cover the complete personal loop:
 
 1. Pair, reconnect, and maintain the WHOOP 5 Bluetooth session automatically.
 2. Losslessly capture live and historical packets before decoding them.
-3. Derive heart rate, R–R intervals, HRV, resting heart rate, sleep periods,
-   sleep stages, disturbances, and supporting physiology with provenance.
+3. Derive steps, heart rate, R–R intervals, HRV, resting heart rate, sleep
+   periods, sleep stages, disturbances, and supporting physiology with provenance.
 4. Store a complete offline history on the phone and replicate it to a private
    backend without making the UI depend on that backend.
 5. Show an interpretable, versioned Sleep Score plus the underlying measurements.
@@ -68,6 +68,16 @@ The app should eventually cover the complete personal loop:
   compact metric icons, and gives all values stable semibold white typography
   under gray metric titles. Icons retain fixed metric colors; no phone-motion
   metrics or Motion & Fitness permission are part of this surface.
+- A separate `Steps` trend card appears after RHR without changing those five
+  summary values. It is derived entirely offline from the WHOOP 5 cumulative
+  motion counter already present in retained version-18 history packets, so it
+  does not enable the battery-heavy raw IMU stream or request phone motion
+  access. Schema 8 retains the counter, cadence-like byte, motion-class byte,
+  civil-date offset, and source packet alongside the immutable raw packet. The
+  daily materialization also retains sample/span coverage, missing seconds,
+  wrap count, rejected implausible deltas, source, and algorithm version. Totals
+  are rebuilt only after a durable history-complete marker, and the UI title is
+  simply `Steps`.
 - Chart density is range-aware without altering the stored daily history or
   exact current value: 1W and 1M use daily points, 1Y uses weekly medians, and
   All widens adaptive median buckets from weekly toward monthly to stay near
@@ -242,7 +252,7 @@ The app should eventually cover the complete personal loop:
   historical data is arriving.
 - Range-filtering, date parsing, and long-range median buckets are cached by
   metric, range, reference day, and history revision. A chart morph now spends
-  its frames interpolating the curve rather than rebuilding all four datasets.
+  its frames interpolating the curve rather than rebuilding the datasets.
   The Bluetooth collector is app-scoped, preventing multiple windows from
   creating competing central managers.
 - Dashboard reads are generation-ordered: an older asynchronous reload cannot
