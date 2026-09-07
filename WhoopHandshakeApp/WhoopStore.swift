@@ -1518,11 +1518,14 @@ final class WhoopStore: @unchecked Sendable {
                 execute("ROLLBACK")
                 return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
             }
-            guard execute("COMMIT") else {
+            guard let materializedStepDays = materializePendingStepsIfNeeded(
+                for: packet,
+                database: database
+            ), execute("COMMIT") else {
                 execute("ROLLBACK")
                 return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
             }
-            finishStepMaterializationIfNeeded(for: packet)
+            finishCommittedStepMaterialization(materializedStepDays)
             return WhoopPacketPersistenceResult(success: true, deliverySequence: deliverySequence)
         case .new:
             break
@@ -1568,11 +1571,14 @@ final class WhoopStore: @unchecked Sendable {
             execute("ROLLBACK")
             return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
         }
-        guard execute("COMMIT") else {
+        guard let materializedStepDays = materializePendingStepsIfNeeded(
+            for: packet,
+            database: database
+        ), execute("COMMIT") else {
             execute("ROLLBACK")
             return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
         }
-        finishStepMaterializationIfNeeded(for: packet)
+        finishCommittedStepMaterialization(materializedStepDays)
         return WhoopPacketPersistenceResult(success: true, deliverySequence: deliverySequence)
     }
 
@@ -1921,16 +1927,23 @@ final class WhoopStore: @unchecked Sendable {
         sqlite3_finalize(statement)
 
         guard !rows.isEmpty else {
-            _ = setMetadataValue(
-                database: database,
-                key: "decoder-3-v18-motion-backfill",
-                value: "complete"
-            )
-            let changedDays = pendingStepDateKeys
+            // Re-derive the durable set instead of trusting the in-memory set.
+            // If the app was suspended mid-backfill, packets decoded before
+            // that restart no longer appear in `pendingStepDateKeys`.
+            guard let changedDays = allStoredStepDateKeys(database: database),
+                  execute("BEGIN IMMEDIATE") else { return }
+            guard rebuildDailySteps(for: changedDays, database: database),
+                  setMetadataValue(
+                    database: database,
+                    key: "decoder-3-v18-motion-backfill",
+                    value: "complete"
+                  ),
+                  execute("COMMIT") else {
+                execute("ROLLBACK")
+                return
+            }
             pendingStepDateKeys.removeAll(keepingCapacity: true)
-            guard !changedDays.isEmpty else { return }
-            rebuildDailySteps(for: changedDays, database: database)
-            publishStepUpdate()
+            if !changedDays.isEmpty { publishStepUpdate() }
             return
         }
         guard execute("BEGIN IMMEDIATE") else { return }
@@ -1955,8 +1968,27 @@ final class WhoopStore: @unchecked Sendable {
         }
     }
 
-    private func rebuildDailySteps(for dateKeys: Set<String>, database: OpaquePointer) {
-        guard !dateKeys.isEmpty else { return }
+    private func allStoredStepDateKeys(database: OpaquePointer) -> Set<String>? {
+        let sql = """
+            SELECT DISTINCT step_date_key
+            FROM whoop_historical_sample
+            WHERE step_date_key IS NOT NULL AND step_motion_counter IS NOT NULL
+            """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return nil }
+        defer { sqlite3_finalize(statement) }
+        var dateKeys: Set<String> = []
+        var result = sqlite3_step(statement)
+        while result == SQLITE_ROW {
+            if let dateKey = textColumn(statement, 0) { dateKeys.insert(dateKey) }
+            result = sqlite3_step(statement)
+        }
+        return result == SQLITE_DONE ? dateKeys : nil
+    }
+
+    private func rebuildDailySteps(for dateKeys: Set<String>, database: OpaquePointer) -> Bool {
+        guard !dateKeys.isEmpty else { return true }
         let selectSQL = """
             SELECT peripheral_id, sample_at, step_motion_counter
             FROM whoop_historical_sample
@@ -1988,18 +2020,22 @@ final class WhoopStore: @unchecked Sendable {
             """
 
         for dateKey in dateKeys.sorted() {
-            guard let select = cachedStatement(database: database, sql: selectSQL) else { continue }
+            guard let select = cachedStatement(database: database, sql: selectSQL) else { return false }
             bind(dateKey, to: 1, in: select)
             var byPeripheral: [String: [WhoopStepCounterSample]] = [:]
-            while sqlite3_step(select) == SQLITE_ROW {
-                guard let peripheralID = textColumn(select, 0) else { continue }
-                byPeripheral[peripheralID, default: []].append(
-                    WhoopStepCounterSample(
-                        timestamp: sqlite3_column_double(select, 1),
-                        counter: UInt16(truncatingIfNeeded: sqlite3_column_int(select, 2))
+            var result = sqlite3_step(select)
+            while result == SQLITE_ROW {
+                if let peripheralID = textColumn(select, 0) {
+                    byPeripheral[peripheralID, default: []].append(
+                        WhoopStepCounterSample(
+                            timestamp: sqlite3_column_double(select, 1),
+                            counter: UInt16(truncatingIfNeeded: sqlite3_column_int(select, 2))
+                        )
                     )
-                )
+                }
+                result = sqlite3_step(select)
             }
+            guard result == SQLITE_DONE else { return false }
             let candidates = byPeripheral.map { peripheralID, samples in
                 (peripheralID, WhoopStepDaySummary.summarize(samples))
             }
@@ -2008,7 +2044,8 @@ final class WhoopStore: @unchecked Sendable {
                     return (lhs.1.lastSampleAt ?? 0) < (rhs.1.lastSampleAt ?? 0)
                 }
                 return lhs.1.sampleCount < rhs.1.sampleCount
-            }), let upsert = cachedStatement(database: database, sql: upsertSQL) else { continue }
+            }) else { continue }
+            guard let upsert = cachedStatement(database: database, sql: upsertSQL) else { return false }
 
             let summary = chosen.1
             bind(dateKey, to: 1, in: upsert)
@@ -2024,20 +2061,29 @@ final class WhoopStore: @unchecked Sendable {
             bind(summary.lastSampleAt, to: 11, in: upsert)
             sqlite3_bind_int(upsert, 12, Int32(WhoopStepDaySummary.algorithmVersion))
             sqlite3_bind_double(upsert, 13, Date().timeIntervalSince1970)
-            _ = sqlite3_step(upsert)
+            guard sqlite3_step(upsert) == SQLITE_DONE else { return false }
         }
+        return true
     }
 
-    private func finishStepMaterializationIfNeeded(for packet: Data) {
+    /// Runs in the packet transaction so a history-complete acknowledgement
+    /// cannot become durable before its UI-facing totals do.
+    private func materializePendingStepsIfNeeded(
+        for packet: Data,
+        database: OpaquePointer
+    ) -> Set<String>? {
         let isComplete = packet.count > 10
             && (packet[8] == 49 || packet[8] == 56)
             && packet[10] == 3
             && WhoopFrameIntegrity.isValid(packet)
-        guard isComplete, let database else { return }
+        guard isComplete else { return [] }
         let changedDays = pendingStepDateKeys
-        pendingStepDateKeys.removeAll(keepingCapacity: true)
+        return rebuildDailySteps(for: changedDays, database: database) ? changedDays : nil
+    }
+
+    private func finishCommittedStepMaterialization(_ changedDays: Set<String>) {
         guard !changedDays.isEmpty else { return }
-        rebuildDailySteps(for: changedDays, database: database)
+        pendingStepDateKeys.subtract(changedDays)
         publishStepUpdate()
     }
 

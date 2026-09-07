@@ -516,6 +516,45 @@ final class WhoopSleepStateTests: XCTestCase {
         XCTAssertEqual(record.algorithmVersion, WhoopStepDaySummary.algorithmVersion)
     }
 
+    func testMotionBackfillRebuildsPreviouslyDecodedDaysAfterRestart() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("sleep.sqlite3")
+        let peripheral = UUID()
+        let timestamp = UInt32(Date().timeIntervalSince1970)
+
+        do {
+            let store = WhoopStore(databaseURL: databaseURL, runBackgroundDecoding: false)
+            _ = try await append(
+                version18Frame(timestamp: timestamp, sleepState: 0, stepCounter: 100),
+                store: store,
+                peripheral: peripheral,
+                sessionID: nil
+            )
+            _ = try await append(
+                version18Frame(timestamp: timestamp + 1, sleepState: 0, stepCounter: 103),
+                store: store,
+                peripheral: peripheral,
+                sessionID: nil
+            )
+        }
+
+        let restarted = WhoopStore(databaseURL: databaseURL, runBackgroundDecoding: true)
+        var records: [DailyStepRecord] = []
+        for _ in 0..<100 {
+            records = try await withCheckedThrowingContinuation { continuation in
+                restarted.loadDailyStepRecords { continuation.resume(with: $0) }
+            }
+            if !records.isEmpty { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        let record = try XCTUnwrap(records.last)
+        XCTAssertEqual(record.stepCount, 3)
+        XCTAssertEqual(record.sampleCount, 2)
+    }
+
     func testOnlineBackupIncludesCommittedWALData() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
