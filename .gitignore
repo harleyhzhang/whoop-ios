@@ -13,6 +13,7 @@ xcuserdata/
 .env
 .env.*
 whoop-history.json
+whoop-score-model.json
 *.sqlite
 *.sqlite3
 *.sqlite3-*

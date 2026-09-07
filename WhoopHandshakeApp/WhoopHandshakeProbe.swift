@@ -1167,9 +1167,7 @@ extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
                         if let historicalEndData {
                             // The store queue is serial: reaching this completion proves every
                             // preceding raw and decoded sample in this chunk is durable.
-                            if self.acknowledgeHistoricalChunk(endData: historicalEndData) {
-                                self.refreshSleepSnapshot()
-                            }
+                            _ = self.acknowledgeHistoricalChunk(endData: historicalEndData)
                         } else if metadataType == 3 {
                             guard self.historicalSyncActive || self.pendingProcessRequest != nil else {
                                 return

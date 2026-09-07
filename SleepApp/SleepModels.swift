@@ -314,6 +314,14 @@ final class HealthHistoryModel: ObservableObject {
 
     private let store: WhoopStore
     private var reloadGeneration = 0
+    private var seriesCache: [ChartSeriesCacheKey: MetricSeries] = [:]
+    private var dateCache: [String: Date] = [:]
+
+    private struct ChartSeriesCacheKey: Hashable {
+        let metric: MetricKind
+        let range: HealthRange
+        let referenceDay: Date
+    }
 
     init(store: WhoopStore = .shared) {
         self.store = store
@@ -336,6 +344,93 @@ final class HealthHistoryModel: ObservableObject {
             records.append(record)
             records.sort { $0.dateKey < $1.dateKey }
         }
+        seriesCache.removeAll(keepingCapacity: true)
+        dateCache[record.dateKey] = record.date
+    }
+
+    /// Chart construction is intentionally cached outside `View.body`.
+    /// SwiftUI evaluates the chart repeatedly during a range morph; date
+    /// parsing, filtering and bucket medians only need to run when history,
+    /// range, metric, or the reference day changes.
+    func metricSeries(
+        for metric: MetricKind,
+        range: HealthRange,
+        referenceDate: Date
+    ) -> MetricSeries {
+        let calendar = Calendar.current
+        let referenceDay = calendar.startOfDay(for: referenceDate)
+        let key = ChartSeriesCacheKey(metric: metric, range: range, referenceDay: referenceDay)
+        if let cached = seriesCache[key] { return cached }
+
+        let cutoff = range.dayCount.flatMap {
+            calendar.date(byAdding: .day, value: -($0 - 1), to: referenceDay)
+        }
+        let daily = records.compactMap { record -> MetricPoint? in
+            let date = cachedDate(for: record)
+            if let cutoff, date < calendar.startOfDay(for: cutoff) { return nil }
+            let value: Double?
+            switch metric {
+            case .sleep: value = record.sleepScore
+            case .duration: value = record.sleepDurationMinutes.map { $0 / 60 }
+            case .hrv: value = record.hrvRMSSDMilliseconds
+            case .rhr: value = record.restingHeartRateBPM
+            }
+            return value.map { MetricPoint(date: date, value: $0) }
+        }
+        let plotted: [MetricPoint]
+        switch range {
+        case .week, .month:
+            plotted = daily
+        case .year:
+            plotted = medianBuckets(from: daily, spanning: 7)
+        case .all:
+            plotted = medianBuckets(from: daily, spanning: adaptiveBucketDays(for: daily))
+        }
+        let result = MetricSeries(daily: daily, plotted: plotted)
+        seriesCache[key] = result
+        return result
+    }
+
+    private func cachedDate(for record: DailyHealthRecord) -> Date {
+        if let cached = dateCache[record.dateKey] { return cached }
+        let date = record.date
+        dateCache[record.dateKey] = date
+        return date
+    }
+
+    private func adaptiveBucketDays(for points: [MetricPoint]) -> Int {
+        guard let first = points.first, let last = points.last else { return 7 }
+        let calendar = Calendar.current
+        let span = max(1, (calendar.dateComponents(
+            [.day],
+            from: calendar.startOfDay(for: first.date),
+            to: calendar.startOfDay(for: last.date)
+        ).day ?? 0) + 1)
+        return max(7, Int(ceil(Double(span) / 50)))
+    }
+
+    private func medianBuckets(from points: [MetricPoint], spanning bucketDays: Int) -> [MetricPoint] {
+        guard let first = points.first, bucketDays > 1 else { return points }
+        let calendar = Calendar.current
+        let anchor = calendar.startOfDay(for: first.date)
+        let grouped = Dictionary(grouping: points) {
+            max(0, (calendar.dateComponents(
+                [.day], from: anchor, to: calendar.startOfDay(for: $0.date)
+            ).day ?? 0) / bucketDays)
+        }
+        let finalBucket = grouped.keys.max()
+        return grouped.keys.sorted().compactMap { key in
+            guard let bucket = grouped[key]?.sorted(by: { $0.date < $1.date }), !bucket.isEmpty else {
+                return nil
+            }
+            if key == finalBucket { return bucket.last }
+            let values = bucket.map(\.value).sorted()
+            let middle = values.count / 2
+            let median = values.count.isMultiple(of: 2)
+                ? (values[middle - 1] + values[middle]) / 2
+                : values[middle]
+            return MetricPoint(date: bucket.last!.date, value: median)
+        }
     }
 
     func reload() {
@@ -348,6 +443,8 @@ final class HealthHistoryModel: ObservableObject {
                 switch result {
                 case .success(let records):
                     self.records = records
+                    self.seriesCache.removeAll(keepingCapacity: true)
+                    self.dateCache.removeAll(keepingCapacity: true)
                     self.errorMessage = nil
                 case .failure(let error):
                     // Keep the last known-good dashboard visible through a

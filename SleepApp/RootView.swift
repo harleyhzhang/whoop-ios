@@ -13,7 +13,7 @@ struct RootView: View {
     @State private var chartMorphGeneration = 0
     @State private var currentDate = Date()
     @State private var debugMockPendingSleepDismissed = false
-    @StateObject private var whoopCollector = WhoopHandshakeProbe()
+    @ObservedObject var whoopCollector: WhoopHandshakeProbe
     @StateObject private var history = HealthHistoryModel()
 
     private var referenceDate: Date {
@@ -1059,96 +1059,20 @@ struct RootView: View {
         for metric: MetricKind,
         range requestedRange: HealthRange? = nil
     ) -> MetricSeries {
-        let range = requestedRange ?? selectedRange
-        let calendar = Calendar.current
-        let records: [DailyHealthRecord]
-        if let dayCount = range.dayCount,
-           let cutoff = calendar.date(byAdding: .day, value: -(dayCount - 1), to: referenceDate) {
-            records = history.records.filter { $0.date >= calendar.startOfDay(for: cutoff) }
-        } else {
-            records = history.records
-        }
-
-        let daily = records.compactMap { record in
-            metricValue(for: metric, in: record).map { MetricPoint(date: record.date, value: $0) }
-        }
-
-        return MetricSeries(
-            daily: daily,
-            plotted: aggregatedPoints(from: daily, for: range)
+        history.metricSeries(
+            for: metric,
+            range: requestedRange ?? selectedRange,
+            referenceDate: referenceDate
         )
     }
 
     private func metricValue(for metric: MetricKind, in record: DailyHealthRecord?) -> Double? {
         guard let record else { return nil }
-        switch metric {
-        case .sleep:
-            return record.sleepScore
-        case .duration:
-            return record.sleepDurationMinutes.map { $0 / 60 }
-        case .hrv:
-            return record.hrvRMSSDMilliseconds
-        case .rhr:
-            return record.restingHeartRateBPM
-        }
-    }
-
-    private func aggregatedPoints(from daily: [MetricPoint], for range: HealthRange) -> [MetricPoint] {
-        switch range {
-        case .week, .month:
-            daily
-        case .year:
-            medianBuckets(from: daily, spanning: 7)
-        case .all:
-            medianBuckets(from: daily, spanning: adaptiveAllHistoryBucketDays(for: daily))
-        }
-    }
-
-    private func adaptiveAllHistoryBucketDays(for points: [MetricPoint]) -> Int {
-        guard let first = points.first, let last = points.last else { return 7 }
-        let calendar = Calendar.current
-        let span = max(
-            1,
-            (calendar.dateComponents(
-                [.day],
-                from: calendar.startOfDay(for: first.date),
-                to: calendar.startOfDay(for: last.date)
-            ).day ?? 0) + 1
-        )
-
-        return max(7, Int(ceil(Double(span) / 50.0)))
-    }
-
-    private func medianBuckets(from points: [MetricPoint], spanning bucketDays: Int) -> [MetricPoint] {
-        guard let first = points.first, bucketDays > 1 else { return points }
-        let calendar = Calendar.current
-        let anchor = calendar.startOfDay(for: first.date)
-        let grouped = Dictionary(grouping: points) { point in
-            let dayOffset = calendar.dateComponents(
-                [.day],
-                from: anchor,
-                to: calendar.startOfDay(for: point.date)
-            ).day ?? 0
-            return max(0, dayOffset / bucketDays)
-        }
-
-        let finalBucketKey = grouped.keys.max()
-        return grouped.keys.sorted().compactMap { key in
-            guard let bucket = grouped[key]?.sorted(by: { $0.date < $1.date }), !bucket.isEmpty else {
-                return nil
-            }
-            // The dashboard's current value is an exact observation. Anchor the
-            // trend to that same point so its endpoint and marker cannot diverge.
-            if key == finalBucketKey {
-                return bucket.last
-            }
-            let values = bucket.map(\.value).sorted()
-            let middle = values.count / 2
-            let median = values.count.isMultiple(of: 2)
-                ? (values[middle - 1] + values[middle]) / 2
-                : values[middle]
-            let representativeDate = bucket.last!.date
-            return MetricPoint(date: representativeDate, value: median)
+        return switch metric {
+        case .sleep: record.sleepScore
+        case .duration: record.sleepDurationMinutes.map { $0 / 60 }
+        case .hrv: record.hrvRMSSDMilliseconds
+        case .rhr: record.restingHeartRateBPM
         }
     }
 
@@ -1395,7 +1319,7 @@ private struct PreviousMetricValueFade: AnimatableModifier {
     }
 }
 
-private struct MetricPoint: Identifiable {
+struct MetricPoint: Identifiable {
     let date: Date
     let value: Double
 
@@ -1416,19 +1340,19 @@ private struct AverageLevel: Identifiable {
     var id: Date { startDate }
 }
 
-private struct MetricSeries {
+struct MetricSeries {
     let daily: [MetricPoint]
     let plotted: [MetricPoint]
 }
 
-private enum MetricKind: Hashable {
+enum MetricKind: Hashable {
     case sleep
     case duration
     case hrv
     case rhr
 }
 
-private enum HealthRange: String, CaseIterable, Identifiable {
+enum HealthRange: String, CaseIterable, Identifiable {
     case week = "Week"
     case month = "Month"
     case year = "Year"
@@ -1506,5 +1430,5 @@ enum AppHaptics {
 }
 
 #Preview {
-    RootView()
+    RootView(whoopCollector: WhoopHandshakeProbe())
 }
