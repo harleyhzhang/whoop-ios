@@ -17,6 +17,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     @Published private(set) var notificationState = "Not requested"
     @Published private(set) var heartRate = "—"
     @Published private(set) var batteryLevel: Int?
+    @Published private(set) var isCharging = false
     @Published private(set) var isSleeping = false
     /// A detected main sleep that is not stored yet. The dashboard shows its
     /// "Sleep detected" row exactly while this is non-nil.
@@ -58,6 +59,53 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         return [36, 38, 47, 49, 50, 56].contains(frameType)
     }
 
+    nonisolated static func batteryLevelStatusCharging(_ data: Data) -> Bool? {
+        guard data.count >= 3 else { return nil }
+        let powerState = UInt16(data[data.startIndex + 1])
+            | (UInt16(data[data.startIndex + 2]) << 8)
+        let wiredPower = (powerState >> 1) & 0b11
+        let wirelessPower = (powerState >> 3) & 0b11
+        let chargeState = (powerState >> 5) & 0b11
+        let hasExternalPower = wiredPower == 1 || wirelessPower == 1
+
+        if chargeState == 1 || hasExternalPower { return true }
+        if chargeState == 2 || chargeState == 3 { return false }
+        return nil
+    }
+
+    nonisolated static func legacyBatteryPowerStateCharging(_ data: Data) -> Bool? {
+        guard let powerState = data.first else { return nil }
+        switch (powerState >> 4) & 0b11 {
+        case 3: return true
+        case 1, 2: return false
+        default: return nil
+        }
+    }
+
+    nonisolated static func freshWhoop5WristState(
+        _ data: Data,
+        receivedAt: Date,
+        freshnessWindow: TimeInterval = 45
+    ) -> Bool? {
+        let bytes = [UInt8](data)
+        guard bytes.count >= 20,
+              bytes[8] == 48,
+              WhoopFrameIntegrity.isValid(data) else { return nil }
+
+        let timestamp = UInt32(bytes[12])
+            | (UInt32(bytes[13]) << 8)
+            | (UInt32(bytes[14]) << 16)
+            | (UInt32(bytes[15]) << 24)
+        let eventDate = Date(timeIntervalSince1970: TimeInterval(timestamp))
+        guard abs(receivedAt.timeIntervalSince(eventDate)) <= freshnessWindow else { return nil }
+
+        switch bytes[10] {
+        case 9: return true
+        case 10: return false
+        default: return nil
+        }
+    }
+
     var diagnosticReport: String {
         (["WHOOP 5 handshake diagnostic", "Generated: \(Self.reportDateFormatter.string(from: .now))", ""] + diagnosticEvents)
             .joined(separator: "\n")
@@ -68,6 +116,10 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     private var commandCharacteristic: CBCharacteristic?
     private var heartRateCharacteristic: CBCharacteristic?
     private var batteryLevelCharacteristic: CBCharacteristic?
+    private var batteryPowerStateCharacteristic: CBCharacteristic?
+    private var batteryLevelStatusCharacteristic: CBCharacteristic?
+    private var hasExplicitChargingState = false
+    private var lastObservedWristState: Bool?
     private var notifyCharacteristics: [CBCharacteristic] = []
     private var helloOutstanding = false
     private var helloAttemptID: UUID?
@@ -110,6 +162,8 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     private let heartRateService = CBUUID(string: "180D")
     private let batteryService = CBUUID(string: "180F")
     private let batteryLevelUUID = CBUUID(string: "2A19")
+    private let batteryPowerStateUUID = CBUUID(string: "2A1A")
+    private let batteryLevelStatusUUID = CBUUID(string: "2BED")
     private let commandUUID = CBUUID(string: "FD4B0002-CCE1-4033-93CE-002D5875F58A")
     private let notifyUUIDs = Set([
         CBUUID(string: "FD4B0003-CCE1-4033-93CE-002D5875F58A"),
@@ -356,6 +410,13 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
 
     private func cacheBatteryLevel(_ level: Int) {
         let clampedLevel = min(max(level, 0), 100)
+        if !hasExplicitChargingState, let previousLevel = batteryLevel {
+            if clampedLevel > previousLevel {
+                isCharging = true
+            } else if clampedLevel < previousLevel {
+                isCharging = false
+            }
+        }
         batteryLevel = clampedLevel
         UserDefaults.standard.set(clampedLevel, forKey: cachedBatteryLevelKey)
         UserDefaults.standard.set(Date(), forKey: cachedBatteryLevelDateKey)
@@ -456,6 +517,10 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         commandCharacteristic = nil
         heartRateCharacteristic = nil
         batteryLevelCharacteristic = nil
+        batteryPowerStateCharacteristic = nil
+        batteryLevelStatusCharacteristic = nil
+        hasExplicitChargingState = false
+        isCharging = false
         notifyCharacteristics.removeAll(keepingCapacity: true)
         helloOutstanding = false
         helloAttemptID = nil
@@ -901,6 +966,22 @@ extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
                 if characteristic.properties.contains(.notify) || characteristic.properties.contains(.indicate) {
                     peripheral.setNotifyValue(true, for: characteristic)
                 }
+            } else if characteristic.uuid == batteryLevelStatusUUID {
+                batteryLevelStatusCharacteristic = characteristic
+                if characteristic.properties.contains(.read) {
+                    peripheral.readValue(for: characteristic)
+                }
+                if characteristic.properties.contains(.notify) || characteristic.properties.contains(.indicate) {
+                    peripheral.setNotifyValue(true, for: characteristic)
+                }
+            } else if characteristic.uuid == batteryPowerStateUUID {
+                batteryPowerStateCharacteristic = characteristic
+                if characteristic.properties.contains(.read) {
+                    peripheral.readValue(for: characteristic)
+                }
+                if characteristic.properties.contains(.notify) || characteristic.properties.contains(.indicate) {
+                    peripheral.setNotifyValue(true, for: characteristic)
+                }
             } else if notifyUUIDs.contains(characteristic.uuid) {
                 if !notifyCharacteristics.contains(where: { $0.uuid == characteristic.uuid }) {
                     notifyCharacteristics.append(characteristic)
@@ -975,10 +1056,26 @@ extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
             } else if uuid == batteryLevelUUID, let level = data.first {
                 cacheBatteryLevel(Int(level))
                 record("Battery level: \(batteryLevel ?? 0)%")
+            } else if uuid == batteryLevelStatusUUID,
+                      let charging = Self.batteryLevelStatusCharging(data) {
+                hasExplicitChargingState = true
+                isCharging = charging
+                record("Battery charging: \(charging ? "yes" : "no") (Battery Level Status)")
+            } else if uuid == batteryPowerStateUUID,
+                      let charging = Self.legacyBatteryPowerStateCharging(data) {
+                hasExplicitChargingState = true
+                isCharging = charging
+                record("Battery charging: \(charging ? "yes" : "no") (Battery Power State)")
             } else if notifyUUIDs.contains(uuid) {
                 receivedProprietaryPacketCount += 1
                 let packetOrdinal = receivedProprietaryPacketCount
                 let frameType = data.count > 8 ? data[8] : nil
+                if let isWorn = Self.freshWhoop5WristState(data, receivedAt: deliveredAt),
+                   isWorn != lastObservedWristState {
+                    lastObservedWristState = isWorn
+                    WhoopNotificationManager.shared.observeWristState(isWorn: isWorn)
+                    record("Wrist state: \(isWorn ? "on" : "off")")
+                }
                 let realtime = parseWhoop5Packet(data)
                 let historical = parseWhoop5Historical(data)
                 let bytes = [UInt8](data)
