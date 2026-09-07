@@ -494,7 +494,11 @@ final class WhoopSleepStateTests: XCTestCase {
         let data = try JSONSerialization.data(withJSONObject: payload)
         let model = try JSONDecoder().decode(SleepScoreModelBundle.self, from: data)
 
-        XCTAssertEqual(try XCTUnwrap(model.predict(features)), 98.5, accuracy: 0.0001)
+        let prediction = try XCTUnwrap(model.prediction(features))
+        XCTAssertEqual(prediction.score, 98.5, accuracy: 0.0001)
+        XCTAssertEqual(prediction.sleepNeedMinutes, 500, accuracy: 0.0001)
+        XCTAssertEqual(prediction.consistencyPercentage, 80, accuracy: 0.0001)
+        XCTAssertEqual(prediction.sufficiencyPercentage, 0, accuracy: 0.0001)
     }
 
     func testPrivateSleepScoreModelDecodesWhenAvailable() throws {

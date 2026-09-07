@@ -163,6 +163,9 @@ The app should eventually cover the complete personal loop:
   dynamic need and consistency, then an RBF-SVR applies the learned pillar
   relationship. A 10% direct Extra Trees/SVR estimate stabilizes that staged
   result. This reaches 1.68-point forward-held-out error (RMSE 2.43, R² 0.920).
+  Local rows retain the model's predicted need, consistency, sufficiency, and
+  observed efficiency alongside the final score, keeping those materialized
+  outputs available for future diagnostics and model comparisons.
   HRV, RHR, stages, respiration, and ad-hoc stress proxies were tested and
   rejected because they worsened unseen-night error. The reproducible trainer lives at
   `Tools/backtest_sleep_score.py`; fitted parameters stay in Harley's private
