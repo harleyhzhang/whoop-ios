@@ -524,21 +524,32 @@ final class WhoopSleepStateTests: XCTestCase {
         let peripheral = UUID()
         let timestamp = UInt32(Date().timeIntervalSince1970)
 
-        do {
-            let store = WhoopStore(databaseURL: databaseURL, runBackgroundDecoding: false)
-            _ = try await append(
-                version18Frame(timestamp: timestamp, sleepState: 0, stepCounter: 100),
-                store: store,
-                peripheral: peripheral,
-                sessionID: nil
-            )
-            _ = try await append(
-                version18Frame(timestamp: timestamp + 1, sleepState: 0, stepCounter: 103),
-                store: store,
-                peripheral: peripheral,
-                sessionID: nil
-            )
+        var initialStore: WhoopStore? = WhoopStore(
+            databaseURL: databaseURL,
+            runBackgroundDecoding: false
+        )
+        weak let releasedInitialStore = initialStore
+        _ = try await append(
+            version18Frame(timestamp: timestamp, sleepState: 0, stepCounter: 100),
+            store: try XCTUnwrap(initialStore),
+            peripheral: peripheral,
+            sessionID: nil
+        )
+        _ = try await append(
+            version18Frame(timestamp: timestamp + 1, sleepState: 0, stepCounter: 103),
+            store: try XCTUnwrap(initialStore),
+            peripheral: peripheral,
+            sessionID: nil
+        )
+
+        // A restart requires the original SQLite connection to be closed. ARC
+        // may extend a lexical scope across an async suspension, so release the
+        // fixture explicitly before opening the replacement store.
+        initialStore = nil
+        for _ in 0..<100 where releasedInitialStore != nil {
+            await Task.yield()
         }
+        XCTAssertNil(releasedInitialStore)
 
         let restarted = WhoopStore(databaseURL: databaseURL, runBackgroundDecoding: true)
         var records: [DailyStepRecord] = []
