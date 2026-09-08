@@ -705,11 +705,13 @@ SQL
 Then verify behavior, not only row counts:
 
 - the app launches without a sample-data fallback;
-- the main five metrics are unchanged;
+- the compact summary reads Sleep, Duration, Steps, Recovery, and RHR;
 - Steps appears as `Steps`, with no `Beta` label, and spans the official/local
   boundary without duplicate days;
 - Recovery follows Steps, historical dates show exact official targets, and
   locally derived dates show versioned predictions;
+- the trend cards read Sleep, Duration, Steps, Recovery, RHR, and HRV in that
+  order, while hidden summary metrics remain collected and stored;
 - selecting Week, Month, Year, and All never lets the line or endpoint escape
   the plot, and range changes replace data atomically without curve morphing;
 - the installed sidecar hash matches `sourceDatabaseSHA256` in the official

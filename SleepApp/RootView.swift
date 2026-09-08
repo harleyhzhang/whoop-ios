@@ -52,18 +52,6 @@ struct RootView: View {
             || whoopCollector.isProcessingSleep
     }
 
-    private var liveHeartRateValue: String {
-        #if DEBUG
-        if let mockValue = ProcessInfo.processInfo.environment["WHOOP_MOCK_LIVE_HR"],
-           !mockValue.isEmpty {
-            return mockValue
-        }
-        #endif
-
-        guard whoopConnected, whoopCollector.hasFreshHeartRate else { return "—" }
-        return whoopCollector.heartRate.split(separator: " ").first.map(String.init) ?? "—"
-    }
-
     private var whoopBatteryLevel: Int? {
         #if DEBUG
         if let mockValue = ProcessInfo.processInfo.environment["WHOOP_MOCK_BATTERY"],
@@ -157,26 +145,6 @@ struct RootView: View {
                     )
 
                     metricCard(
-                        metric: .hrv,
-                        title: "HRV",
-                        symbol: "waveform.path.ecg",
-                        unit: "MS",
-                        series: metricSeries(for: .hrv),
-                        color: .pink,
-                        formatValue: { String(Int($0.rounded())) }
-                    )
-
-                    metricCard(
-                        metric: .rhr,
-                        title: "RHR",
-                        symbol: "heart.fill",
-                        unit: "BPM",
-                        series: metricSeries(for: .rhr),
-                        color: .red,
-                        formatValue: { String(Int($0.rounded())) }
-                    )
-
-                    metricCard(
                         metric: .steps,
                         title: "Steps",
                         symbol: "figure.walk",
@@ -194,6 +162,26 @@ struct RootView: View {
                         series: metricSeries(for: .recovery),
                         color: .mint,
                         formatValue: { "\(Int($0.rounded()))%" }
+                    )
+
+                    metricCard(
+                        metric: .rhr,
+                        title: "RHR",
+                        symbol: "heart.fill",
+                        unit: "BPM",
+                        series: metricSeries(for: .rhr),
+                        color: .red,
+                        formatValue: { String(Int($0.rounded())) }
+                    )
+
+                    metricCard(
+                        metric: .hrv,
+                        title: "HRV",
+                        symbol: "waveform.path.ecg",
+                        unit: "MS",
+                        series: metricSeries(for: .hrv),
+                        color: .pink,
+                        formatValue: { String(Int($0.rounded())) }
                     )
                 }
                 .padding(.horizontal, 16)
@@ -427,11 +415,16 @@ struct RootView: View {
 
             HStack(alignment: .top, spacing: 12) {
                 activityMetric(
-                    title: "HRV",
-                    symbol: "waveform.path.ecg",
-                    value: summaryHRV,
-                    unit: summaryHRV == "—" ? "" : "MS",
-                    iconTint: .pink
+                    title: "Steps",
+                    symbol: "figure.walk",
+                    value: summarySteps,
+                    iconTint: .green
+                )
+                activityMetric(
+                    title: "Recovery",
+                    symbol: "gauge.with.dots.needle.50percent",
+                    value: summaryRecovery,
+                    iconTint: .mint
                 )
                 activityMetric(
                     title: "RHR",
@@ -440,19 +433,12 @@ struct RootView: View {
                     unit: summaryRHR == "—" ? "" : "BPM",
                     iconTint: .red
                 )
-                activityMetric(
-                    title: "Heart Rate",
-                    symbol: "heart.fill",
-                    value: liveHeartRateValue,
-                    unit: liveHeartRateValue == "—" ? "" : "BPM",
-                    iconTint: .red
-                )
             }
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
-            "Sleep \(summarySleepScore), duration \(summarySleepDuration), heart rate variability \(summaryHRV) milliseconds, resting heart rate \(summaryRHR) beats per minute, live heart rate \(liveHeartRateValue) beats per minute"
+            "Sleep \(summarySleepScore), duration \(summarySleepDuration), steps \(summarySteps), recovery \(summaryRecovery), resting heart rate \(summaryRHR) beats per minute"
         )
     }
 
@@ -496,8 +482,18 @@ struct RootView: View {
         currentSleepRecord?.sleepDurationMinutes.map { formatDuration($0 / 60) } ?? "—"
     }
 
-    private var summaryHRV: String {
-        currentSleepRecord?.hrvRMSSDMilliseconds.map { String(Int($0.rounded())) } ?? "—"
+    private var summarySteps: String {
+        let record = history.stepRecords.last {
+            Calendar.current.isDate($0.date, inSameDayAs: currentDate)
+        } ?? history.stepRecords.last
+        return record.map { formatSteps(Double($0.stepCount)) } ?? "—"
+    }
+
+    private var summaryRecovery: String {
+        let record = history.recoveryRecords.last {
+            Calendar.current.isDate($0.date, inSameDayAs: currentDate)
+        } ?? history.recoveryRecords.last
+        return record.map { "\(Int($0.score.rounded()))%" } ?? "—"
     }
 
     private var summaryRHR: String {
