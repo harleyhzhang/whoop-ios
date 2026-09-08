@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["numpy==2.3.5", "scikit-learn==1.7.2"]
 # ///
-"""Backtest and export Harley's private WHOOP-compatible Recovery model.
+"""Backtest and export an account-specific WHOOP-compatible Recovery model.
 
 The feature contract intentionally uses only fields the independent app can
 continue producing: local sleep features, HRV, RHR, Steps, and past-only

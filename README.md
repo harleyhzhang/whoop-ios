@@ -19,10 +19,20 @@ The app should eventually cover the complete personal loop:
    backend without making the UI depend on that backend.
 5. Show an interpretable, versioned Sleep Score plus the underlying measurements.
 
+## Migration and data preservation
+
+The [WHOOP data migration runbook](docs/whoop-data-migration.md) explains how to
+reproduce the complete private workflow: request the supported account export,
+archive the public Developer API, optionally preserve read-only official-app
+responses, continue with direct WHOOP 5 BLE collection, generate deterministic
+private seeds and models, install without losing the phone database, and verify
+the result. It also defines the evidence/projection boundary, secret handling,
+idempotent rebuild rules, and the limits of historical recovery.
+
 ## Current state
 
 - The SwiftUI dashboard and interaction design are installed on the paired iPhone.
-- The app can reconnect to Harley's bonded WHOOP 5, establish its encrypted
+- The app can reconnect to the paired WHOOP 5, establish its encrypted
   link, subscribe to all known live notification channels, and construct the
   reversible WHOOP 5 live-stream commands.
 - The diagnostic path decodes standard Bluetooth heart-rate measurements and
@@ -183,7 +193,7 @@ The app should eventually cover the complete personal loop:
   outputs available for future diagnostics and model comparisons.
   HRV, RHR, stages, respiration, and ad-hoc stress proxies were tested and
   rejected because they worsened unseen-night error. The reproducible trainer lives at
-  `Tools/backtest_sleep_score.py`; fitted parameters stay in Harley's private
+  `Tools/backtest_sleep_score.py`; fitted parameters stay in the account owner's private
   data tree because support vectors and tree thresholds derive from real health
   history.
 - Derived rows carry a versioned source. A change to any derivation re-derives
@@ -269,7 +279,7 @@ The app should eventually cover the complete personal loop:
   repair cannot notify twice for the same morning.
 - The 2026-09-01 real-history build was installed in place and visibly launched
   on the paired iPhone; the dashboard rendered the imported history correctly.
-- The generated seed remains in Harley's private data tree rather than the
+- The generated seed remains in the account owner's private data tree rather than the
   source tree. Local builds optionally copy the file selected by
   `WHOOP_HISTORY_SEED_PATH` (or the private local default) into the app bundle
   for first-launch import. The private fitted model follows the same rule via

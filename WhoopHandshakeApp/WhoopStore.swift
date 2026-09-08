@@ -816,13 +816,23 @@ final class WhoopStore: @unchecked Sendable {
             database = nil
             return
         }
+        // Install the busy handler before changing journal mode. A prior
+        // connection can have released its last Swift reference while SQLite
+        // is still finishing WAL cleanup; without an early timeout, an
+        // immediate reopen fails `PRAGMA journal_mode=WAL` with SQLITE_BUSY and
+        // leaves the store permanently unavailable.
+        guard let openedDatabase = database,
+              sqlite3_busy_timeout(openedDatabase, 5_000) == SQLITE_OK else {
+            if let database { sqlite3_close_v2(database) }
+            database = nil
+            return
+        }
         try? FileManager.default.setAttributes(
             [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
             ofItemAtPath: url.path
         )
         let configured = execute("PRAGMA journal_mode=WAL")
             && execute("PRAGMA foreign_keys=ON")
-            && execute("PRAGMA busy_timeout=5000")
             && execute("PRAGMA wal_autocheckpoint=1000")
             && execute("PRAGMA journal_size_limit=8388608")
         guard configured,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Backtest and export Harley's private WHOOP-compatible sleep score model.
+"""Backtest and export an account-specific WHOOP-compatible sleep score model.
 
 Requires numpy and scikit-learn. The output contains fitted support vectors and
 tree thresholds derived from private health history, so write it only to the
