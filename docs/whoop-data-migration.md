@@ -466,9 +466,9 @@ validation nights with:
 - mean absolute error: 4.79 points;
 - root mean squared error: 6.70 points;
 - R²: 0.875;
-- median absolute error: 3.47 points;
+- median absolute error: 3.46 points;
 - 90th-percentile absolute error: 10.59 points; and
-- 64.29% of estimates within five points.
+- 63.49% of estimates within five points.
 
 These figures are an honest backtest on one history, not official-WHOOP parity
 or a guarantee for another person. The fitted model is private because its

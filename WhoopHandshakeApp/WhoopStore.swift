@@ -442,6 +442,19 @@ final class WhoopStore: @unchecked Sendable {
         }
     }
 
+#if DEBUG
+    /// Test fixtures own temporary database directories. Close the SQLite
+    /// connection before a fixture removes that directory; relying on ARC's
+    /// end-of-scope timing can unlink live WAL files on slower simulators.
+    func shutdownForTesting() {
+        if DispatchQueue.getSpecific(key: queueSpecificKey) != nil {
+            closeDatabase()
+        } else {
+            queue.sync { closeDatabase() }
+        }
+    }
+#endif
+
     private func closeDatabase() {
         for statement in cachedStatements.values {
             sqlite3_finalize(statement)

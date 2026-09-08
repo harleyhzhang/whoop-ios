@@ -393,11 +393,11 @@ final class WhoopSleepStateTests: XCTestCase {
 
         do {
             let store = WhoopStore(databaseURL: url, runBackgroundDecoding: false)
-            _ = store
+            store.shutdownForTesting()
         }
         do {
             let store = WhoopStore(databaseURL: url, runBackgroundDecoding: false)
-            _ = store
+            store.shutdownForTesting()
         }
 
         var database: OpaquePointer?
@@ -489,6 +489,7 @@ final class WhoopSleepStateTests: XCTestCase {
             databaseURL: directory.appendingPathComponent("sleep.sqlite3"),
             runBackgroundDecoding: false
         )
+        defer { store.shutdownForTesting() }
         let peripheral = UUID()
         let timestamp = UInt32(Date().timeIntervalSince1970)
 
@@ -532,7 +533,6 @@ final class WhoopSleepStateTests: XCTestCase {
             databaseURL: databaseURL,
             runBackgroundDecoding: false
         )
-        weak let releasedInitialStore = initialStore
         _ = try await append(
             version18Frame(timestamp: timestamp, sleepState: 0, stepCounter: 100),
             store: try XCTUnwrap(initialStore),
@@ -546,16 +546,13 @@ final class WhoopSleepStateTests: XCTestCase {
             sessionID: nil
         )
 
-        // A restart requires the original SQLite connection to be closed. ARC
-        // may extend a lexical scope across an async suspension, so release the
-        // fixture explicitly before opening the replacement store.
+        // A restart requires the original SQLite connection to be closed.
+        // Explicit shutdown avoids relying on ARC timing across async work.
+        initialStore?.shutdownForTesting()
         initialStore = nil
-        for _ in 0..<100 where releasedInitialStore != nil {
-            await Task.yield()
-        }
-        XCTAssertNil(releasedInitialStore)
 
         let restarted = WhoopStore(databaseURL: databaseURL, runBackgroundDecoding: true)
+        defer { restarted.shutdownForTesting() }
         var records: [DailyStepRecord] = []
         for _ in 0..<100 {
             records = try await withCheckedThrowingContinuation { continuation in
@@ -612,7 +609,7 @@ final class WhoopSleepStateTests: XCTestCase {
 
         do {
             let store = WhoopStore(databaseURL: url, runBackgroundDecoding: false)
-            _ = store
+            store.shutdownForTesting()
         }
         var database: OpaquePointer?
         XCTAssertEqual(sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READWRITE, nil), SQLITE_OK)
@@ -628,7 +625,7 @@ final class WhoopSleepStateTests: XCTestCase {
 
         do {
             let store = WhoopStore(databaseURL: url, runBackgroundDecoding: false)
-            _ = store
+            store.shutdownForTesting()
         }
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: temporary.path))
@@ -773,6 +770,7 @@ final class WhoopSleepStateTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let databaseURL = directory.appendingPathComponent("sleep.sqlite3")
         let store = WhoopStore(databaseURL: databaseURL, runBackgroundDecoding: false)
+        defer { store.shutdownForTesting() }
         var database: OpaquePointer?
         XCTAssertEqual(sqlite3_open_v2(databaseURL.path, &database, SQLITE_OPEN_READWRITE, nil), SQLITE_OK)
         defer { if let database { sqlite3_close(database) } }
@@ -915,6 +913,7 @@ final class WhoopSleepStateTests: XCTestCase {
             databaseURL: directory.appendingPathComponent("sleep.sqlite3"),
             runBackgroundDecoding: false
         )
+        defer { store.shutdownForTesting() }
         let peripheral = UUID()
         let sessionID = try await beginOffload(store: store, peripheral: peripheral)
         let history = version18Frame(timestamp: 1_800_000_000, sleepState: 2)
@@ -956,6 +955,7 @@ final class WhoopSleepStateTests: XCTestCase {
             databaseURL: directory.appendingPathComponent("sleep.sqlite3"),
             runBackgroundDecoding: false
         )
+        defer { store.shutdownForTesting() }
         let peripheral = UUID()
         let sessionID = try await beginOffload(store: store, peripheral: peripheral)
         let historyResult = try await append(
@@ -984,6 +984,7 @@ final class WhoopSleepStateTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("sleep.sqlite3")
         let store = WhoopStore(databaseURL: url, runBackgroundDecoding: false)
+        defer { store.shutdownForTesting() }
         let packet = version18Frame(timestamp: 1_800_000_000, sleepState: 2)
 
         let first = try await append(
