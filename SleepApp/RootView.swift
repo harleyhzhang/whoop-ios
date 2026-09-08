@@ -1085,7 +1085,7 @@ private struct WhoopBatteryPercentIcon: View {
     private static let shellRadius: CGFloat = 4.6
 
     private func percentageLabel(color: Color) -> some View {
-        HStack(spacing: -0.7) {
+        HStack(spacing: -0.5) {
             ForEach(Array(percentageText.enumerated()), id: \.offset) { _, digit in
                 Text(String(digit))
             }
@@ -1097,7 +1097,7 @@ private struct WhoopBatteryPercentIcon: View {
 
     private var chargingLabel: some View {
         HStack(spacing: 1) {
-            HStack(spacing: -0.7) {
+            HStack(spacing: -0.5) {
                 ForEach(Array(percentageText.enumerated()), id: \.offset) { _, digit in
                     Text(String(digit))
                 }
