@@ -14,6 +14,11 @@ enum WhoopSleepProcessStart: Equatable {
     case startFreshOffload
 }
 
+private struct WhoopPendingSleepProcessRequest {
+    let candidate: WhoopPendingSleep?
+    let manualEndAt: Date
+}
+
 @MainActor
 final class WhoopHandshakeProbe: NSObject, ObservableObject {
     @Published private(set) var bluetoothState = "Starting"
@@ -164,7 +169,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     private var optimisticallyProcessedSleepID: String?
     /// A Process tap waiting for the in-flight historical offload to become a
     /// coherent whole. It is retried exactly when HISTORY_COMPLETE is durable.
-    private var pendingProcessRequest: WhoopPendingSleep?
+    private var pendingProcessRequest: WhoopPendingSleepProcessRequest?
     private var processFinalizationInFlight = false
     private var processFailureResetTask: Task<Void, Never>?
     private let store = WhoopStore.shared
@@ -303,8 +308,9 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     /// Finishes the detected night only after the current or a newly requested
     /// history offload reaches its durable completion marker. A prior complete
     /// offload can be coherent but stale, so it is never enough for a new tap.
-    func processPendingSleep() {
-        guard !isProcessingSleep, let pending = pendingSleep else { return }
+    func processPendingSleep(manualEndAt: Date = .now) {
+        guard !isProcessingSleep else { return }
+        let candidate = pendingSleep
         let start = Self.sleepProcessStart(
             isConnected: isConnected,
             historicalSyncActive: historicalSyncActive
@@ -319,8 +325,11 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         isProcessingSleep = true
         sleepProcessFailure = nil
         processFailureResetTask?.cancel()
-        optimisticallyProcessedSleepID = pending.sleepID
-        pendingProcessRequest = pending
+        optimisticallyProcessedSleepID = candidate?.sleepID
+        pendingProcessRequest = WhoopPendingSleepProcessRequest(
+            candidate: candidate,
+            manualEndAt: manualEndAt
+        )
         pendingSleep = nil
         AppHaptics.softImpact()
 
@@ -333,9 +342,9 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
 
     private func finalizeProcessRequest() {
         guard !processFinalizationInFlight,
-              let pending = pendingProcessRequest else { return }
+              let request = pendingProcessRequest else { return }
         processFinalizationInFlight = true
-        store.finalizePendingSleep { [weak self] result in
+        store.finalizePendingSleep(endingAt: request.manualEndAt) { [weak self] result in
             Task { @MainActor in
                 guard let self else { return }
                 self.processFinalizationInFlight = false
@@ -357,7 +366,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
                         self.pendingProcessRequest = nil
                         self.isProcessingSleep = false
                         self.optimisticallyProcessedSleepID = nil
-                        self.pendingSleep = pending
+                        self.pendingSleep = request.candidate
                         self.sleepProcessFailure = "Reconnect WHOOP to finish"
                         AppHaptics.warning()
                         self.scheduleProcessFailureReset()
@@ -369,7 +378,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
                     self.pendingProcessRequest = nil
                     self.isProcessingSleep = false
                     self.optimisticallyProcessedSleepID = nil
-                    self.pendingSleep = pending
+                    self.pendingSleep = request.candidate
                     self.sleepProcessFailure = error.message
                     AppHaptics.warning()
                     self.scheduleProcessFailureReset()

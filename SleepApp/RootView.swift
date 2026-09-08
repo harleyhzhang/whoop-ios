@@ -101,8 +101,8 @@ struct RootView: View {
     }
 
     /// Once the strap has identified sleep, keep the prompt in the layout
-    /// through waking and finalization. The pending candidate does not exist
-    /// until the first awake sample, while processing intentionally clears it.
+    /// through waking and finalization. Processing intentionally clears the
+    /// candidate while the fresh history offload settles.
     private var showsSleepDetectedCard: Bool {
         whoopCollector.isSleeping
             || displayedPendingSleep != nil
@@ -332,11 +332,7 @@ struct RootView: View {
                     .background(sleepAccent, in: Capsule(style: .continuous))
             }
             .buttonStyle(.plain)
-            .disabled(
-                whoopCollector.isSleeping
-                    || displayedPendingSleep == nil
-                    || whoopCollector.isProcessingSleep
-            )
+            .disabled(whoopCollector.isProcessingSleep)
         }
         .padding(.horizontal, 14)
         .frame(height: SleepDetectedCardHeightTransition.expandedHeight)
@@ -351,8 +347,8 @@ struct RootView: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Sleep detected")
         .accessibilityHint(
-            whoopCollector.isSleeping
-                ? "Process becomes available after waking"
+            whoopCollector.isProcessingSleep
+                ? "Finishing sleep"
                 : (whoopCollector.sleepProcessFailure ?? "Process the complete sleep record")
         )
     }
