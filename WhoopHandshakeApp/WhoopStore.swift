@@ -544,11 +544,17 @@ final class WhoopStore: @unchecked Sendable {
     }
 
     func refreshSleepSnapshot(
+        now: Date = .now,
+        manualEndAt: Date? = nil,
         allowAutomaticFinalization: Bool = false,
         completion: @escaping @Sendable (WhoopSleepSnapshot) -> Void
     ) {
         queue.async { [self] in
-            completion(analyzeLatestSleep(allowAutomaticFinalization: allowAutomaticFinalization))
+            completion(analyzeLatestSleep(
+                now: now,
+                manualEndAt: manualEndAt,
+                allowAutomaticFinalization: allowAutomaticFinalization
+            ))
         }
     }
 
@@ -2429,6 +2435,32 @@ final class WhoopStore: @unchecked Sendable {
         return sqlite3_step(statement) == SQLITE_DONE
     }
 
+    private func manualSleepEnd(
+        forStartedAt startedAt: TimeInterval,
+        database: OpaquePointer
+    ) -> TimeInterval? {
+        metadataValue(
+            database: database,
+            key: Self.manualSleepEndKey(forStartedAt: startedAt)
+        ).flatMap(TimeInterval.init)
+    }
+
+    private func setManualSleepEnd(
+        _ endedAt: Date,
+        forStartedAt startedAt: TimeInterval,
+        database: OpaquePointer
+    ) -> Bool {
+        setMetadataValue(
+            database: database,
+            key: Self.manualSleepEndKey(forStartedAt: startedAt),
+            value: String(endedAt.timeIntervalSince1970)
+        )
+    }
+
+    private static func manualSleepEndKey(forStartedAt startedAt: TimeInterval) -> String {
+        "manual-sleep-end:\(Int64(startedAt))"
+    }
+
     private func insertRealtime(
         database: OpaquePointer,
         packetID: String,
@@ -2682,7 +2714,7 @@ final class WhoopStore: @unchecked Sendable {
 
     private enum SleepAnalysis {
         case noData
-        case sleeping(Date)
+        case sleeping(Date, SleepCandidate?)
         /// Every main sleep in the window, oldest first. All of them are
         /// considered, not only the most recent: a night that ends while the app
         /// is never opened would otherwise be skipped permanently, because the
@@ -2935,31 +2967,48 @@ final class WhoopStore: @unchecked Sendable {
         }
     }
 
-    private func analyze(now: Date) -> SleepAnalysis {
-        guard database != nil else { return .noData }
-        let rows = recentHistoricalRows(now: now)
+    private func analyze(now: Date, manualEndAt: Date? = nil) -> SleepAnalysis {
+        guard let database else { return .noData }
+        let unboundedRows = recentHistoricalRows(now: now)
+        let rows: [HistoricalRow]
+        if let manualEndAt {
+            let boundary = min(manualEndAt, now).timeIntervalSince1970
+            rows = unboundedRows.filter { $0.timestamp <= boundary }
+        } else {
+            rows = unboundedRows
+        }
         guard let latest = rows.last else { return .noData }
         let latestDate = Date(timeIntervalSince1970: latest.timestamp)
         let sampleIsCurrent = abs(now.timeIntervalSince(latestDate)) <= 30 * 60
         let lastAsleepTimestamp = rows.last { $0.sleepState == 2 }?.timestamp
         // State 3 ("up") can occur inside a still-running night and is followed
-        // by more state-2 sleep in real captures. Keep dashes through it. The
-        // first current state-0 sample is the wake transition and should expose
-        // Process immediately rather than waiting another 30 minutes.
+        // by more state-2 sleep in real captures. Keep dashes through it for the
+        // automatic path, while still exposing the current candidate so Process
+        // can serve as Harley's explicit wake boundary.
         let recentSleepBeforeUp = lastAsleepTimestamp.map {
             latest.timestamp - $0 <= 90 * 60
         } == true
-        let isSleeping = sampleIsCurrent
+        let detectorReportsSleeping = sampleIsCurrent
             && (latest.sleepState == 2
                 || (latest.sleepState == 3 && recentSleepBeforeUp))
-        guard !isSleeping else { return .sleeping(latestDate) }
-
         let asleepRows = rows.filter { $0.sleepState == 2 }
         guard !asleepRows.isEmpty else { return .awake(latestDate, []) }
 
         let groups = Self.groupedAsleepRows(asleepRows)
         var candidates: [SleepCandidate] = []
-        for session in groups {
+        var latestSessionHasManualEnd = false
+        for (index, unboundedSession) in groups.enumerated() {
+            guard let unboundedFirstSleep = unboundedSession.first else { continue }
+            let storedManualEnd = manualSleepEnd(
+                forStartedAt: unboundedFirstSleep.timestamp,
+                database: database
+            )
+            if index == groups.count - 1, storedManualEnd != nil {
+                latestSessionHasManualEnd = true
+            }
+            let session = storedManualEnd.map { end in
+                unboundedSession.filter { $0.timestamp <= end }
+            } ?? unboundedSession
             guard let firstSleep = session.first, let lastSleep = session.last else { continue }
             let sessionRows = rows.filter {
                 $0.timestamp >= firstSleep.timestamp && $0.timestamp <= lastSleep.timestamp
@@ -2984,6 +3033,10 @@ final class WhoopStore: @unchecked Sendable {
                 wakeSeconds: Self.elapsedSeconds(across: wakeRows, cadence: cadence)
             ))
         }
+        let detectorSaysSleeping = manualEndAt == nil
+            && !latestSessionHasManualEnd
+            && detectorReportsSleeping
+        if detectorSaysSleeping { return .sleeping(latestDate, candidates.last) }
         return .awake(latestDate, candidates)
     }
 
@@ -2993,9 +3046,10 @@ final class WhoopStore: @unchecked Sendable {
     /// dashboard can offer to finish it instead of silently showing dashes.
     private func analyzeLatestSleep(
         now: Date = .now,
+        manualEndAt: Date? = nil,
         allowAutomaticFinalization: Bool = false
     ) -> WhoopSleepSnapshot {
-        switch analyze(now: now) {
+        switch analyze(now: now, manualEndAt: manualEndAt) {
         case .noData:
             return WhoopSleepSnapshot(
                 isSleeping: false,
@@ -3004,12 +3058,18 @@ final class WhoopStore: @unchecked Sendable {
                 pendingSleep: nil
             )
 
-        case .sleeping(let sampleAt):
+        case .sleeping(let sampleAt, let candidate):
+            let pending: WhoopPendingSleep? = candidate.flatMap { latest in
+                guard let database, shouldDerive(candidate: latest, database: database) else {
+                    return nil
+                }
+                return latest.pendingSleep
+            }
             return WhoopSleepSnapshot(
                 isSleeping: true,
                 sampleAt: sampleAt,
                 finalizedRecord: nil,
-                pendingSleep: nil
+                pendingSleep: pending
             )
 
         case .awake(let sampleAt, let candidates):
@@ -3058,20 +3118,23 @@ final class WhoopStore: @unchecked Sendable {
         }
     }
 
-    /// Manual path behind the dashboard's Process control. It waives only the
-    /// wake-timing gates, because pressing the button is itself the proof that
-    /// the night is over.
+    /// Manual path behind the dashboard's Process control. The tap is the
+    /// authoritative upper boundary even while the strap still reports sleep.
+    /// It waives detector and wake-timing gates, but never evidence, complete-
+    /// metric, or completed-history gates.
     func finalizePendingSleep(
+        endingAt manualEndAt: Date,
         completion: @escaping @Sendable (Result<DailyHealthRecord, WhoopSleepProcessError>) -> Void
     ) {
         queue.async { [self] in
             let now = Date()
+            let effectiveManualEnd = min(manualEndAt, now)
             guard let database else {
                 completion(.failure(.storeUnavailable))
                 return
             }
 
-            switch analyze(now: now) {
+            switch analyze(now: now, manualEndAt: effectiveManualEnd) {
             case .noData:
                 completion(.failure(.noRecentData))
 
@@ -3099,7 +3162,18 @@ final class WhoopStore: @unchecked Sendable {
                     completion(.failure(.metricsStillLoading))
                     return
                 }
-                guard upsertLocalDailyHealthRecord(record, database: database) else {
+                guard execute("BEGIN IMMEDIATE") else {
+                    completion(.failure(.writeFailed))
+                    return
+                }
+                guard upsertLocalDailyHealthRecord(record, database: database),
+                      setManualSleepEnd(
+                          effectiveManualEnd,
+                          forStartedAt: candidate.firstSleep.timestamp,
+                          database: database
+                      ),
+                      execute("COMMIT") else {
+                    execute("ROLLBACK")
                     completion(.failure(.writeFailed))
                     return
                 }
@@ -3120,6 +3194,17 @@ final class WhoopStore: @unchecked Sendable {
         queue.sync { [self] in
             guard let database else { return false }
             return completedOffloadCoversLatestHistory(database: database)
+        }
+    }
+
+    func setManualSleepEndForTesting(startedAt: Date, endedAt: Date) -> Bool {
+        queue.sync { [self] in
+            guard let database else { return false }
+            return setManualSleepEnd(
+                endedAt,
+                forStartedAt: startedAt.timeIntervalSince1970,
+                database: database
+            )
         }
     }
 
