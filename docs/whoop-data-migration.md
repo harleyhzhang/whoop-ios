@@ -577,20 +577,39 @@ xcodebuild build -quiet \
   CODE_SIGN_STYLE=Automatic
 ```
 
-Before replacing an installed app, pull its data container to private storage:
+Before replacing an installed app, close it and pull its Application Support
+directory to private storage. Copying the entire app-data container with
+`--source .` can fail on Apple's protected
+`.com.apple.mobile_container_manager.metadata.plist` even though the app's own
+files are accessible; that metadata file is not needed for a WHOOP database
+rollback.
 
 ```sh
 export DEVICE_ID="YOUR DEVICE UDID OR NAME"
 export BUNDLE_ID=org.example.whoop
 export PREINSTALL_BACKUP="$PRIVATE_DATA_ROOT/device-backups/preinstall-$(date -u +%Y%m%dT%H%M%SZ)"
-mkdir -p "$PREINSTALL_BACKUP"
+mkdir -p "$PREINSTALL_BACKUP/Sleep"
 xcrun devicectl device copy from \
   --device "$DEVICE_ID" \
   --domain-type appDataContainer \
   --domain-identifier "$BUNDLE_ID" \
-  --source . \
-  --destination "$PREINSTALL_BACKUP"
+  --source 'Library/Application Support/Sleep' \
+  --destination "$PREINSTALL_BACKUP/Sleep"
+
+export PREINSTALL_DB="$PREINSTALL_BACKUP/Sleep/sleep.sqlite3"
+export STANDALONE_DB="$PREINSTALL_BACKUP/Sleep/sleep-preinstall-standalone.sqlite3"
+sqlite3 "$PREINSTALL_DB" "PRAGMA quick_check; PRAGMA user_version;"
+sqlite3 "$PREINSTALL_DB" ".backup '$STANDALONE_DB'"
+sqlite3 "$STANDALONE_DB" 'PRAGMA quick_check;'
+shasum -a 256 "$PREINSTALL_DB" "$STANDALONE_DB" \
+  > "$PREINSTALL_BACKUP/SHA256SUMS"
 ```
+
+Retain the original pulled directory as evidence even after making the
+standalone image. If the source directory contains `sleep.sqlite3-wal` or
+`sleep.sqlite3-shm`, keep them beside the database; do not checksum or move the
+database alone and assume it represents all committed pages. Stop and diagnose
+the backup before installing if either integrity check fails.
 
 Install in place so the data container is migrated rather than erased:
 
@@ -600,6 +619,19 @@ xcrun devicectl device install app --device "$DEVICE_ID" "$APP_PATH"
 xcrun devicectl device process launch \
   --device "$DEVICE_ID" --terminate-existing "$BUNDLE_ID"
 ```
+
+Installation can finish while the phone remains locked, but iOS will deny the
+launch until the device is unlocked. Unlock the phone or approve iPhone
+Mirroring, rerun only the launch command, and then continue with post-install
+verification; do not uninstall/reinstall in response to this harmless launch
+denial because uninstalling would erase the retained container.
+
+If command-line automatic signing reports that Xcode has no configured account
+but an appropriate development certificate and provisioning profile already
+exist locally, either add the account in Xcode or select that matching profile
+explicitly with `CODE_SIGN_STYLE=Manual`, `PROVISIONING_PROFILE_SPECIFIER`, and
+`CODE_SIGN_IDENTITY`. Verify the resulting bundle identifier, version,
+signature, embedded profile, and private-asset hashes before installation.
 
 The store currently targets schema 9. Before any non-empty schema upgrade, it
 uses SQLite's online backup API to create a WAL-consistent standalone database
