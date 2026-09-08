@@ -74,13 +74,13 @@ discipline, and the limits of historical recovery.
   dashboard shows missing data instead of extrapolating and keeps archive
   provenance out of the daily-use header.
 - The top summary uses an untitled, borderless layout inspired by Apple
-  Fitness: Sleep and Duration share the first row, while HRV, RHR, and Heart
-  Rate share a compact three-column second row. It has no divider lines, uses
+  Fitness: Sleep and Duration share the first row, while Steps, Recovery, and
+  RHR share a compact three-column second row. It has no divider lines, uses
   compact metric icons, and gives all values stable semibold white typography
   under gray metric titles. Icons retain fixed metric colors; no phone-motion
   metrics or Motion & Fitness permission are part of this surface.
-- A separate `Steps` trend card appears after RHR without changing those five
-  summary values. It joins 317 exact official-app daily totals from 2025-10-16
+- `Steps` is the first trend card after the two sleep cards. It joins 317 exact
+  official-app daily totals from 2025-10-16
   through 2026-08-31 to local WHOOP 5 cumulative-counter totals from Sep 1
   onward, preferring the official value on any overlapping day. Ongoing local
   collection does not enable the battery-heavy raw IMU stream or request phone
@@ -88,14 +88,17 @@ discipline, and the limits of historical recovery.
   byte, civil-date offset, source packet, sample/span coverage, missing seconds,
   wrap count, rejected deltas, source, and algorithm version. The UI title is
   simply `Steps`.
-- A `Recovery` trend card follows Steps while the main five summary values stay
-  unchanged. Historical points use 316 exact official scores. Future points use
+- A `Recovery` trend card follows Steps. Historical points use 316 exact
+  official scores. Future points use
   a versioned 70% gradient-boosting / 30% ridge model over independently
   available sleep, HRV, RHR, Steps, and past-only rolling history. Four forward
   chronological folds covering 126 unseen nights measure 4.79-point MAE,
   6.70-point RMSE, and R² 0.875. The store keeps WHOOP targets separate from
   local predictions and retains each prediction's 169 inputs, confidence,
   component counterfactuals, baselines, model version, and derivation time.
+- RHR follows Recovery in the trend stack, and HRV appears last. Removing HRV
+  and live Heart Rate from the compact summary does not stop their collection,
+  storage, or use in local Recovery modeling.
 - Chart density is range-aware without altering the stored daily history or
   exact current value: 1W and 1M use daily points, 1Y uses weekly medians, and
   All widens adaptive median buckets from weekly toward monthly to stay near
