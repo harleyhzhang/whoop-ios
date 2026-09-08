@@ -400,7 +400,7 @@ final class WhoopStore: @unchecked Sendable {
     private var nextDeliverySequence: Int64 = 1
     private static let logger = Logger(subsystem: "com.clintonst.sideload.sleep", category: "WhoopStore")
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
-    private static let schemaVersion = 8
+    private static let schemaVersion = 9
     private static let decoderVersion = 3
 
     init(databaseURL: URL? = nil, runBackgroundDecoding: Bool = true) {
@@ -441,6 +441,19 @@ final class WhoopStore: @unchecked Sendable {
             queue.sync { closeDatabase() }
         }
     }
+
+#if DEBUG
+    /// Test fixtures own temporary database directories. Close the SQLite
+    /// connection before a fixture removes that directory; relying on ARC's
+    /// end-of-scope timing can unlink live WAL files on slower simulators.
+    func shutdownForTesting() {
+        if DispatchQueue.getSpecific(key: queueSpecificKey) != nil {
+            closeDatabase()
+        } else {
+            queue.sync { closeDatabase() }
+        }
+    }
+#endif
 
     private func closeDatabase() {
         for statement in cachedStatements.values {
@@ -548,19 +561,27 @@ final class WhoopStore: @unchecked Sendable {
                 return
             }
             let sql = """
-                SELECT date_key, sleep_score, sleep_duration_minutes,
-                       hrv_rmssd_milliseconds, resting_heart_rate_bpm,
-                       sleep_id, cycle_id, source, source_archive, source_updated_at,
-                       sleep_start_at, sleep_end_at, sleep_start_minute, sleep_end_minute,
-                       sleep_need_minutes, sleep_consistency_percentage,
-                       sleep_efficiency_percentage, sleep_sufficiency_percentage
-                FROM daily_health_metric
-                WHERE source NOT LIKE 'whoop5_local_%'
-                   OR (sleep_score IS NOT NULL
-                       AND sleep_duration_minutes IS NOT NULL
-                       AND hrv_rmssd_milliseconds IS NOT NULL
-                       AND resting_heart_rate_bpm IS NOT NULL)
-                ORDER BY date_key ASC
+                SELECT d.date_key, d.sleep_score,
+                       COALESCE(o.official_recovery_score, r.score),
+                       CASE WHEN o.official_recovery_score IS NOT NULL
+                            THEN 'whoop_private_ios_api'
+                            WHEN r.score IS NOT NULL THEN r.model_version END,
+                       d.sleep_duration_minutes, d.hrv_rmssd_milliseconds,
+                       d.resting_heart_rate_bpm, d.sleep_id, d.cycle_id,
+                       d.source, d.source_archive, d.source_updated_at,
+                       d.sleep_start_at, d.sleep_end_at, d.sleep_start_minute,
+                       d.sleep_end_minute, d.sleep_need_minutes,
+                       d.sleep_consistency_percentage,
+                       d.sleep_efficiency_percentage, d.sleep_sufficiency_percentage
+                FROM daily_health_metric d
+                LEFT JOIN whoop_official_daily_metric o ON o.date_key = d.date_key
+                LEFT JOIN whoop_daily_recovery_metric r ON r.date_key = d.date_key
+                WHERE d.source NOT LIKE 'whoop5_local_%'
+                   OR (d.sleep_score IS NOT NULL
+                       AND d.sleep_duration_minutes IS NOT NULL
+                       AND d.hrv_rmssd_milliseconds IS NOT NULL
+                       AND d.resting_heart_rate_bpm IS NOT NULL)
+                ORDER BY d.date_key ASC
                 """
             var statement: OpaquePointer?
             guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
@@ -574,30 +595,32 @@ final class WhoopStore: @unchecked Sendable {
             var stepResult = sqlite3_step(statement)
             while stepResult == SQLITE_ROW {
                 guard let dateKey = textColumn(statement, 0),
-                      let source = textColumn(statement, 7),
-                      let sourceUpdatedAt = textColumn(statement, 9) else {
+                      let source = textColumn(statement, 9),
+                      let sourceUpdatedAt = textColumn(statement, 11) else {
                     stepResult = sqlite3_step(statement)
                     continue
                 }
                 records.append(DailyHealthRecord(
                     dateKey: dateKey,
                     sleepScore: doubleColumn(statement, 1),
-                    sleepDurationMinutes: doubleColumn(statement, 2),
-                    hrvRMSSDMilliseconds: doubleColumn(statement, 3),
-                    restingHeartRateBPM: doubleColumn(statement, 4),
-                    sleepID: textColumn(statement, 5),
-                    cycleID: int64Column(statement, 6),
+                    recoveryScore: doubleColumn(statement, 2),
+                    recoveryScoreSource: textColumn(statement, 3),
+                    sleepDurationMinutes: doubleColumn(statement, 4),
+                    hrvRMSSDMilliseconds: doubleColumn(statement, 5),
+                    restingHeartRateBPM: doubleColumn(statement, 6),
+                    sleepID: textColumn(statement, 7),
+                    cycleID: int64Column(statement, 8),
                     source: source,
-                    sourceArchive: textColumn(statement, 8),
+                    sourceArchive: textColumn(statement, 10),
                     sourceUpdatedAt: sourceUpdatedAt,
-                    sleepStartAt: textColumn(statement, 10),
-                    sleepEndAt: textColumn(statement, 11),
-                    sleepStartMinute: doubleColumn(statement, 12),
-                    sleepEndMinute: doubleColumn(statement, 13),
-                    sleepNeedMinutes: doubleColumn(statement, 14),
-                    sleepConsistencyPercentage: doubleColumn(statement, 15),
-                    sleepEfficiencyPercentage: doubleColumn(statement, 16),
-                    sleepSufficiencyPercentage: doubleColumn(statement, 17)
+                    sleepStartAt: textColumn(statement, 12),
+                    sleepEndAt: textColumn(statement, 13),
+                    sleepStartMinute: doubleColumn(statement, 14),
+                    sleepEndMinute: doubleColumn(statement, 15),
+                    sleepNeedMinutes: doubleColumn(statement, 16),
+                    sleepConsistencyPercentage: doubleColumn(statement, 17),
+                    sleepEfficiencyPercentage: doubleColumn(statement, 18),
+                    sleepSufficiencyPercentage: doubleColumn(statement, 19)
                 ))
                 stepResult = sqlite3_step(statement)
             }
@@ -622,7 +645,26 @@ final class WhoopStore: @unchecked Sendable {
                        coverage_fraction, gap_seconds, counter_wrap_count,
                        rejected_delta_count, first_sample_at, last_sample_at,
                        source, algorithm_version
-                FROM whoop_daily_step_metric
+                FROM (
+                    SELECT o.date_key, o.official_steps AS step_count,
+                           0 AS sample_count, 0 AS span_seconds,
+                           1.0 AS coverage_fraction, 0 AS gap_seconds,
+                           0 AS counter_wrap_count, 0 AS rejected_delta_count,
+                           NULL AS first_sample_at, NULL AS last_sample_at,
+                           'whoop_private_ios_api' AS source, 1 AS algorithm_version
+                    FROM whoop_official_daily_metric o
+                    WHERE o.official_steps IS NOT NULL
+                    UNION ALL
+                    SELECT l.date_key, l.step_count, l.sample_count, l.span_seconds,
+                           l.coverage_fraction, l.gap_seconds, l.counter_wrap_count,
+                           l.rejected_delta_count, l.first_sample_at, l.last_sample_at,
+                           l.source, l.algorithm_version
+                    FROM whoop_daily_step_metric l
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM whoop_official_daily_metric o
+                        WHERE o.date_key = l.date_key AND o.official_steps IS NOT NULL
+                    )
+                )
                 ORDER BY date_key ASC
                 """
             var statement: OpaquePointer?
@@ -655,6 +697,59 @@ final class WhoopStore: @unchecked Sendable {
                     source: source,
                     algorithmVersion: Int(sqlite3_column_int(statement, 11))
                 ))
+                result = sqlite3_step(statement)
+            }
+            guard result == SQLITE_DONE else {
+                completion(.failure(StoreError.queryFailed(errorMessage(database))))
+                return
+            }
+            completion(.success(records))
+        }
+    }
+
+    func loadDailyRecoveryRecords(
+        completion: @escaping @Sendable (Result<[DailyRecoveryRecord], Error>) -> Void
+    ) {
+        queue.async { [self] in
+            guard let database else {
+                completion(.failure(StoreError.databaseUnavailable))
+                return
+            }
+            let sql = """
+                SELECT date_key, score, source FROM (
+                    SELECT date_key, official_recovery_score AS score,
+                           'whoop_private_ios_api' AS source
+                    FROM whoop_official_daily_metric
+                    WHERE official_recovery_score IS NOT NULL
+                    UNION ALL
+                    SELECT r.date_key, r.score, r.model_version
+                    FROM whoop_daily_recovery_metric r
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM whoop_official_daily_metric o
+                        WHERE o.date_key = r.date_key
+                          AND o.official_recovery_score IS NOT NULL
+                    )
+                )
+                ORDER BY date_key ASC
+                """
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+                  let statement else {
+                completion(.failure(StoreError.queryFailed(errorMessage(database))))
+                return
+            }
+            defer { sqlite3_finalize(statement) }
+
+            var records: [DailyRecoveryRecord] = []
+            var result = sqlite3_step(statement)
+            while result == SQLITE_ROW {
+                if let dateKey = textColumn(statement, 0),
+                   let score = doubleColumn(statement, 1),
+                   let source = textColumn(statement, 2) {
+                    records.append(DailyRecoveryRecord(
+                        dateKey: dateKey, score: score, source: source
+                    ))
+                }
                 result = sqlite3_step(statement)
             }
             guard result == SQLITE_DONE else {
@@ -734,13 +829,23 @@ final class WhoopStore: @unchecked Sendable {
             database = nil
             return
         }
+        // Install the busy handler before changing journal mode. A prior
+        // connection can have released its last Swift reference while SQLite
+        // is still finishing WAL cleanup; without an early timeout, an
+        // immediate reopen fails `PRAGMA journal_mode=WAL` with SQLITE_BUSY and
+        // leaves the store permanently unavailable.
+        guard let openedDatabase = database,
+              sqlite3_busy_timeout(openedDatabase, 5_000) == SQLITE_OK else {
+            if let database { sqlite3_close_v2(database) }
+            database = nil
+            return
+        }
         try? FileManager.default.setAttributes(
             [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
             ofItemAtPath: url.path
         )
         let configured = execute("PRAGMA journal_mode=WAL")
             && execute("PRAGMA foreign_keys=ON")
-            && execute("PRAGMA busy_timeout=5000")
             && execute("PRAGMA wal_autocheckpoint=1000")
             && execute("PRAGMA journal_size_limit=8388608")
         guard configured,
@@ -765,7 +870,9 @@ final class WhoopStore: @unchecked Sendable {
         backfillHistoricalSamplesIfNeeded()
         if databaseURLOverride == nil {
             importBundledHistory()
+            importBundledOfficialMetrics()
             backfillLocalSleepScoresIfNeeded()
+            rebuildRecoveryMetricsIfNeeded()
         }
     }
 
@@ -1179,8 +1286,57 @@ final class WhoopStore: @unchecked Sendable {
                     algorithm_version INTEGER NOT NULL,
                     derived_at REAL NOT NULL
                 )
-                """)
+            """)
             && execute("CREATE INDEX IF NOT EXISTS whoop_daily_step_metric_last_sample ON whoop_daily_step_metric(last_sample_at)")
+        case 9:
+            // WHOOP cloud targets remain independent of local predictions so
+            // every model version can be backtested without overwriting its
+            // answer key. The UI reads a COALESCE projection only at query time.
+            return execute("""
+                CREATE TABLE IF NOT EXISTS whoop_official_daily_metric (
+                    date_key TEXT PRIMARY KEY,
+                    official_recovery_score REAL,
+                    official_steps INTEGER,
+                    official_day_strain REAL,
+                    day_strain_target REAL,
+                    steps_baseline REAL,
+                    hrv REAL,
+                    hrv_baseline REAL,
+                    rhr REAL,
+                    rhr_baseline REAL,
+                    respiratory_rate REAL,
+                    respiratory_rate_baseline REAL,
+                    sleep_performance REAL,
+                    sleep_performance_baseline REAL,
+                    source_recovery_sha256 TEXT,
+                    source_strain_sha256 TEXT,
+                    source_archive TEXT NOT NULL,
+                    source_manifest_sha256 TEXT NOT NULL,
+                    imported_at REAL NOT NULL
+                )
+                """)
+            && execute("CREATE INDEX IF NOT EXISTS whoop_official_daily_recovery ON whoop_official_daily_metric(official_recovery_score, date_key)")
+            && execute("CREATE INDEX IF NOT EXISTS whoop_official_daily_steps ON whoop_official_daily_metric(official_steps, date_key)")
+            && execute("""
+                CREATE TABLE IF NOT EXISTS whoop_daily_recovery_metric (
+                    date_key TEXT PRIMARY KEY,
+                    score REAL NOT NULL CHECK(score BETWEEN 0 AND 100),
+                    confidence REAL NOT NULL CHECK(confidence BETWEEN 0 AND 1),
+                    hrv_component REAL,
+                    rhr_component REAL,
+                    sleep_component REAL,
+                    steps_component REAL,
+                    hrv_baseline REAL,
+                    rhr_baseline REAL,
+                    sleep_baseline REAL,
+                    steps_baseline REAL,
+                    input_json TEXT NOT NULL,
+                    model_version TEXT NOT NULL,
+                    derived_at REAL NOT NULL,
+                    FOREIGN KEY(date_key) REFERENCES daily_health_metric(date_key)
+                )
+                """)
+            && execute("CREATE INDEX IF NOT EXISTS whoop_daily_recovery_model ON whoop_daily_recovery_metric(model_version, date_key)")
         default:
             return false
         }
@@ -1271,6 +1427,156 @@ final class WhoopStore: @unchecked Sendable {
             return
         }
         guard execute("COMMIT") else { execute("ROLLBACK"); return }
+    }
+
+    /// Imports only the stable daily projection into the hot database while
+    /// installing a compact, checksum-verified sidecar containing every exact
+    /// official-app response. This keeps launch queries small without throwing
+    /// away fields that a future model may need.
+    private func importBundledOfficialMetrics() {
+        guard let database,
+              let metricsURL = Bundle.main.url(
+                forResource: "whoop-official-metrics", withExtension: "json"
+              ),
+              let metricsData = try? Data(contentsOf: metricsURL),
+              let seed = try? JSONDecoder().decode(OfficialMetricsSeed.self, from: metricsData),
+              seed.formatVersion == 1 else { return }
+        let digest = SHA256.hash(data: metricsData).map { String(format: "%02x", $0) }.joined()
+        if metadataValue(database: database, key: "bundled-official-metrics-sha256") == digest {
+            if let directory = Self.databaseDirectory(),
+               !FileManager.default.fileExists(
+                    atPath: directory.appendingPathComponent("whoop-official-archive.sqlite3").path
+               ) {
+                _ = installBundledOfficialArchive(expectedSHA256: seed.sourceDatabaseSHA256)
+            }
+            return
+        }
+        guard installBundledOfficialArchive(expectedSHA256: seed.sourceDatabaseSHA256) else {
+            Self.logger.error("Refusing official metric import because its complete raw sidecar is unavailable")
+            return
+        }
+        guard execute("BEGIN IMMEDIATE") else { return }
+        for record in seed.daily where !upsertOfficialDailyMetric(
+            record,
+            sourceArchive: seed.sourceArchive,
+            sourceManifestSHA256: seed.sourceManifestSHA256,
+            database: database
+        ) {
+            execute("ROLLBACK")
+            return
+        }
+        guard setMetadataValue(
+            database: database,
+            key: "bundled-official-metrics-sha256",
+            value: digest
+        ), setMetadataValue(
+            database: database,
+            key: "bundled-official-archive-sha256",
+            value: seed.sourceDatabaseSHA256
+        ) else {
+            execute("ROLLBACK")
+            return
+        }
+        guard execute("COMMIT") else { execute("ROLLBACK"); return }
+    }
+
+    private func installBundledOfficialArchive(expectedSHA256: String) -> Bool {
+        guard let source = Bundle.main.url(
+            forResource: "whoop-official-archive", withExtension: "sqlite3"
+        ), let directory = Self.databaseDirectory() else { return false }
+        let destination = directory.appendingPathComponent("whoop-official-archive.sqlite3")
+        let fileManager = FileManager.default
+
+        func fileDigest(_ url: URL) -> String? {
+            guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return nil }
+            return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        }
+        if fileManager.fileExists(atPath: destination.path),
+           fileDigest(destination) == expectedSHA256 {
+            return true
+        }
+
+        let temporary = directory.appendingPathComponent(".whoop-official-archive-installing.sqlite3")
+        try? fileManager.removeItem(at: temporary)
+        do {
+            try fileManager.copyItem(at: source, to: temporary)
+            guard fileDigest(temporary) == expectedSHA256 else {
+                try? fileManager.removeItem(at: temporary)
+                return false
+            }
+            if fileManager.fileExists(atPath: destination.path) {
+                _ = try fileManager.replaceItemAt(destination, withItemAt: temporary)
+            } else {
+                try fileManager.moveItem(at: temporary, to: destination)
+            }
+            try fileManager.setAttributes(
+                [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                ofItemAtPath: destination.path
+            )
+            return true
+        } catch {
+            try? fileManager.removeItem(at: temporary)
+            Self.logger.error("Could not install official response archive: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
+    private func upsertOfficialDailyMetric(
+        _ record: OfficialDailyMetricSeed,
+        sourceArchive: String,
+        sourceManifestSHA256: String,
+        database: OpaquePointer
+    ) -> Bool {
+        let sql = """
+            INSERT INTO whoop_official_daily_metric
+            (date_key, official_recovery_score, official_steps, official_day_strain,
+             day_strain_target, steps_baseline, hrv, hrv_baseline, rhr, rhr_baseline,
+             respiratory_rate, respiratory_rate_baseline, sleep_performance,
+             sleep_performance_baseline, source_recovery_sha256, source_strain_sha256,
+             source_archive, source_manifest_sha256, imported_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(date_key) DO UPDATE SET
+                official_recovery_score = excluded.official_recovery_score,
+                official_steps = excluded.official_steps,
+                official_day_strain = excluded.official_day_strain,
+                day_strain_target = excluded.day_strain_target,
+                steps_baseline = excluded.steps_baseline,
+                hrv = excluded.hrv, hrv_baseline = excluded.hrv_baseline,
+                rhr = excluded.rhr, rhr_baseline = excluded.rhr_baseline,
+                respiratory_rate = excluded.respiratory_rate,
+                respiratory_rate_baseline = excluded.respiratory_rate_baseline,
+                sleep_performance = excluded.sleep_performance,
+                sleep_performance_baseline = excluded.sleep_performance_baseline,
+                source_recovery_sha256 = excluded.source_recovery_sha256,
+                source_strain_sha256 = excluded.source_strain_sha256,
+                source_archive = excluded.source_archive,
+                source_manifest_sha256 = excluded.source_manifest_sha256,
+                imported_at = excluded.imported_at
+            """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return false }
+        defer { sqlite3_finalize(statement) }
+        bind(record.dateKey, to: 1, in: statement)
+        bind(record.officialRecoveryScore, to: 2, in: statement)
+        bind(record.officialSteps.map(Int64.init), to: 3, in: statement)
+        bind(record.officialDayStrain, to: 4, in: statement)
+        bind(record.dayStrainTarget, to: 5, in: statement)
+        bind(record.stepsBaseline, to: 6, in: statement)
+        bind(record.hrv, to: 7, in: statement)
+        bind(record.hrvBaseline, to: 8, in: statement)
+        bind(record.rhr, to: 9, in: statement)
+        bind(record.rhrBaseline, to: 10, in: statement)
+        bind(record.respiratoryRate, to: 11, in: statement)
+        bind(record.respiratoryRateBaseline, to: 12, in: statement)
+        bind(record.sleepPerformance, to: 13, in: statement)
+        bind(record.sleepPerformanceBaseline, to: 14, in: statement)
+        bind(record.sourceRecoverySHA256, to: 15, in: statement)
+        bind(record.sourceStrainSHA256, to: 16, in: statement)
+        bind(sourceArchive, to: 17, in: statement)
+        bind(sourceManifestSHA256, to: 18, in: statement)
+        sqlite3_bind_double(statement, 19, Date().timeIntervalSince1970)
+        return sqlite3_step(statement) == SQLITE_DONE
     }
 
     private func upsertDailyHealthRecord(_ record: DailyHealthRecord, database: OpaquePointer) -> Bool {
@@ -2084,6 +2390,7 @@ final class WhoopStore: @unchecked Sendable {
     private func finishCommittedStepMaterialization(_ changedDays: Set<String>) {
         guard !changedDays.isEmpty else { return }
         pendingStepDateKeys.subtract(changedDays)
+        rebuildRecoveryMetricsIfNeeded(force: true)
         publishStepUpdate()
     }
 
@@ -2481,6 +2788,153 @@ final class WhoopStore: @unchecked Sendable {
         }
     }
 
+    private func rebuildRecoveryMetricsIfNeeded(force: Bool = false) {
+        guard let database, let model = Self.bundledRecoveryScoreModel else { return }
+        if !force,
+           metadataValue(database: database, key: "local-recovery-score-backfill") == model.version {
+            return
+        }
+        let healthSQL = """
+            SELECT date_key, sleep_score, sleep_duration_minutes,
+                   hrv_rmssd_milliseconds, resting_heart_rate_bpm,
+                   sleep_id, cycle_id, source, source_archive, source_updated_at,
+                   sleep_start_at, sleep_end_at, sleep_start_minute, sleep_end_minute,
+                   sleep_need_minutes, sleep_consistency_percentage,
+                   sleep_efficiency_percentage, sleep_sufficiency_percentage
+            FROM daily_health_metric
+            WHERE sleep_score IS NOT NULL AND sleep_duration_minutes IS NOT NULL
+              AND hrv_rmssd_milliseconds IS NOT NULL
+              AND resting_heart_rate_bpm IS NOT NULL
+              AND sleep_start_minute IS NOT NULL AND sleep_end_minute IS NOT NULL
+              AND sleep_efficiency_percentage IS NOT NULL
+            ORDER BY date_key ASC
+            """
+        var healthStatementPointer: OpaquePointer?
+        guard sqlite3_prepare_v2(database, healthSQL, -1, &healthStatementPointer, nil) == SQLITE_OK,
+              let healthStatement = healthStatementPointer else { return }
+        var records: [DailyHealthRecord] = []
+        var result = sqlite3_step(healthStatement)
+        while result == SQLITE_ROW {
+            guard let dateKey = textColumn(healthStatement, 0),
+                  let source = textColumn(healthStatement, 7),
+                  let sourceUpdatedAt = textColumn(healthStatement, 9) else {
+                result = sqlite3_step(healthStatement)
+                continue
+            }
+            records.append(DailyHealthRecord(
+                dateKey: dateKey,
+                sleepScore: doubleColumn(healthStatement, 1),
+                sleepDurationMinutes: doubleColumn(healthStatement, 2),
+                hrvRMSSDMilliseconds: doubleColumn(healthStatement, 3),
+                restingHeartRateBPM: doubleColumn(healthStatement, 4),
+                sleepID: textColumn(healthStatement, 5),
+                cycleID: int64Column(healthStatement, 6),
+                source: source,
+                sourceArchive: textColumn(healthStatement, 8),
+                sourceUpdatedAt: sourceUpdatedAt,
+                sleepStartAt: textColumn(healthStatement, 10),
+                sleepEndAt: textColumn(healthStatement, 11),
+                sleepStartMinute: doubleColumn(healthStatement, 12),
+                sleepEndMinute: doubleColumn(healthStatement, 13),
+                sleepNeedMinutes: doubleColumn(healthStatement, 14),
+                sleepConsistencyPercentage: doubleColumn(healthStatement, 15),
+                sleepEfficiencyPercentage: doubleColumn(healthStatement, 16),
+                sleepSufficiencyPercentage: doubleColumn(healthStatement, 17)
+            ))
+            result = sqlite3_step(healthStatement)
+        }
+        sqlite3_finalize(healthStatement)
+        guard result == SQLITE_DONE else { return }
+
+        let stepsSQL = """
+            SELECT date_key, step_count FROM (
+                SELECT date_key, official_steps AS step_count
+                FROM whoop_official_daily_metric WHERE official_steps IS NOT NULL
+                UNION ALL
+                SELECT l.date_key, l.step_count FROM whoop_daily_step_metric l
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM whoop_official_daily_metric o
+                    WHERE o.date_key = l.date_key AND o.official_steps IS NOT NULL
+                )
+            )
+            """
+        var stepsStatementPointer: OpaquePointer?
+        guard sqlite3_prepare_v2(database, stepsSQL, -1, &stepsStatementPointer, nil) == SQLITE_OK,
+              let stepsStatement = stepsStatementPointer else { return }
+        var stepsByDate: [String: Double] = [:]
+        result = sqlite3_step(stepsStatement)
+        while result == SQLITE_ROW {
+            if let dateKey = textColumn(stepsStatement, 0) {
+                stepsByDate[dateKey] = Double(sqlite3_column_int64(stepsStatement, 1))
+            }
+            result = sqlite3_step(stepsStatement)
+        }
+        sqlite3_finalize(stepsStatement)
+        guard result == SQLITE_DONE, execute("BEGIN IMMEDIATE") else { return }
+
+        let upsertSQL = """
+            INSERT INTO whoop_daily_recovery_metric
+            (date_key, score, confidence, hrv_component, rhr_component,
+             sleep_component, steps_component, hrv_baseline, rhr_baseline,
+             sleep_baseline, steps_baseline, input_json, model_version, derived_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(date_key) DO UPDATE SET
+                score = excluded.score, confidence = excluded.confidence,
+                hrv_component = excluded.hrv_component,
+                rhr_component = excluded.rhr_component,
+                sleep_component = excluded.sleep_component,
+                steps_component = excluded.steps_component,
+                hrv_baseline = excluded.hrv_baseline,
+                rhr_baseline = excluded.rhr_baseline,
+                sleep_baseline = excluded.sleep_baseline,
+                steps_baseline = excluded.steps_baseline,
+                input_json = excluded.input_json,
+                model_version = excluded.model_version,
+                derived_at = excluded.derived_at
+            """
+        var upsertStatementPointer: OpaquePointer?
+        guard sqlite3_prepare_v2(database, upsertSQL, -1, &upsertStatementPointer, nil) == SQLITE_OK,
+              let upsertStatement = upsertStatementPointer else { execute("ROLLBACK"); return }
+        let encoder = JSONEncoder()
+        for (index, record) in records.enumerated() {
+            guard let features = RecoveryScoreFeatureBuilder.features(
+                current: record,
+                history: Array(records[..<index]),
+                stepsByDate: stepsByDate
+            ), let prediction = model.prediction(features),
+               let inputs = try? encoder.encode(features.map { $0.isFinite ? Optional($0) : nil }),
+               let inputJSON = String(data: inputs, encoding: .utf8) else { continue }
+            bind(record.dateKey, to: 1, in: upsertStatement)
+            sqlite3_bind_double(upsertStatement, 2, prediction.score)
+            sqlite3_bind_double(upsertStatement, 3, prediction.confidence)
+            sqlite3_bind_double(upsertStatement, 4, prediction.hrvComponent)
+            sqlite3_bind_double(upsertStatement, 5, prediction.rhrComponent)
+            sqlite3_bind_double(upsertStatement, 6, prediction.sleepComponent)
+            sqlite3_bind_double(upsertStatement, 7, prediction.stepsComponent)
+            bind(prediction.hrvBaseline, to: 8, in: upsertStatement)
+            bind(prediction.rhrBaseline, to: 9, in: upsertStatement)
+            bind(prediction.sleepBaseline, to: 10, in: upsertStatement)
+            bind(prediction.stepsBaseline, to: 11, in: upsertStatement)
+            bind(inputJSON, to: 12, in: upsertStatement)
+            bind(model.version, to: 13, in: upsertStatement)
+            sqlite3_bind_double(upsertStatement, 14, Date().timeIntervalSince1970)
+            guard sqlite3_step(upsertStatement) == SQLITE_DONE else {
+                sqlite3_finalize(upsertStatement)
+                execute("ROLLBACK")
+                return
+            }
+            sqlite3_reset(upsertStatement)
+            sqlite3_clear_bindings(upsertStatement)
+        }
+        sqlite3_finalize(upsertStatement)
+        guard setMetadataValue(
+            database: database, key: "local-recovery-score-backfill", value: model.version
+        ), execute("COMMIT") else {
+            execute("ROLLBACK")
+            return
+        }
+    }
+
     private func analyze(now: Date) -> SleepAnalysis {
         guard database != nil else { return .noData }
         let rows = recentHistoricalRows(now: now)
@@ -2586,6 +3040,7 @@ final class WhoopStore: @unchecked Sendable {
                     newest = record
                 }
             }
+            if newest != nil { rebuildRecoveryMetricsIfNeeded(force: true) }
 
             let pending: WhoopPendingSleep?
             if shouldDerive(candidate: latest, database: database) {
@@ -2648,6 +3103,7 @@ final class WhoopStore: @unchecked Sendable {
                     completion(.failure(.writeFailed))
                     return
                 }
+                rebuildRecoveryMetricsIfNeeded(force: true)
                 completion(.success(record))
             }
         }
@@ -3191,6 +3647,7 @@ final class WhoopStore: @unchecked Sendable {
     /// Anything with the `whoop5_local` prefix is ours; anything else is an
     /// archived WHOOP row and is authoritative.
     private static let bundledSleepScoreModel = SleepScoreModelBundle.load()
+    private static let bundledRecoveryScoreModel = RecoveryScoreModelBundle.load()
     static let localSource = "\(bundledSleepScoreModel?.version ?? "whoop5_local_v5_fallback")_materialized_2"
     static let localSourcePrefix = "whoop5_local"
 

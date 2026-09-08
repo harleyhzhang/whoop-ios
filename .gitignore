@@ -14,6 +14,9 @@ xcuserdata/
 .env.*
 whoop-history.json
 whoop-score-model.json
+whoop-recovery-model.json
+whoop-official-metrics.json
+whoop-official-archive.sqlite3
 *.sqlite
 *.sqlite3
 *.sqlite3-*

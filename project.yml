@@ -7,8 +7,8 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
-    CURRENT_PROJECT_VERSION: 11
-    MARKETING_VERSION: 0.6.0
+    CURRENT_PROJECT_VERSION: 12
+    MARKETING_VERSION: 0.7.0
 targets:
   Sleep:
     type: application
@@ -36,9 +36,30 @@ targets:
           elif [ ! -f "${MODEL_PATH}" ]; then
             /bin/rm -f "${MODEL_DESTINATION}"
           fi
+          RECOVERY_MODEL_PATH="${WHOOP_RECOVERY_MODEL_PATH:-${HOME}/Documents/personal/data/whoop/app-seeds/whoop-recovery-model.json}"
+          RECOVERY_MODEL_DESTINATION="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/whoop-recovery-model.json"
+          if [ -f "${RECOVERY_MODEL_PATH}" ] && ! /usr/bin/cmp -s "${RECOVERY_MODEL_PATH}" "${RECOVERY_MODEL_DESTINATION}"; then
+            /bin/cp "${RECOVERY_MODEL_PATH}" "${RECOVERY_MODEL_DESTINATION}"
+          elif [ ! -f "${RECOVERY_MODEL_PATH}" ]; then
+            /bin/rm -f "${RECOVERY_MODEL_DESTINATION}"
+          fi
+          OFFICIAL_METRICS_PATH="${WHOOP_OFFICIAL_METRICS_PATH:-${HOME}/Documents/personal/data/whoop/app-seeds/whoop-official-metrics.json}"
+          OFFICIAL_METRICS_DESTINATION="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/whoop-official-metrics.json"
+          if [ -f "${OFFICIAL_METRICS_PATH}" ] && ! /usr/bin/cmp -s "${OFFICIAL_METRICS_PATH}" "${OFFICIAL_METRICS_DESTINATION}"; then
+            /bin/cp "${OFFICIAL_METRICS_PATH}" "${OFFICIAL_METRICS_DESTINATION}"
+          elif [ ! -f "${OFFICIAL_METRICS_PATH}" ]; then
+            /bin/rm -f "${OFFICIAL_METRICS_DESTINATION}"
+          fi
+          OFFICIAL_ARCHIVE_PATH="${WHOOP_OFFICIAL_ARCHIVE_PATH:-${HOME}/Documents/personal/data/whoop/app-seeds/whoop-official-archive.sqlite3}"
+          OFFICIAL_ARCHIVE_DESTINATION="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/whoop-official-archive.sqlite3"
+          if [ -f "${OFFICIAL_ARCHIVE_PATH}" ] && ! /usr/bin/cmp -s "${OFFICIAL_ARCHIVE_PATH}" "${OFFICIAL_ARCHIVE_DESTINATION}"; then
+            /bin/cp "${OFFICIAL_ARCHIVE_PATH}" "${OFFICIAL_ARCHIVE_DESTINATION}"
+          elif [ ! -f "${OFFICIAL_ARCHIVE_PATH}" ]; then
+            /bin/rm -f "${OFFICIAL_ARCHIVE_DESTINATION}"
+          fi
           if [ "${CONFIGURATION}" = "Release" ] && [ "${PLATFORM_NAME}" = "iphoneos" ]; then
-            if [ ! -f "${DESTINATION}" ] || [ ! -f "${MODEL_DESTINATION}" ]; then
-              echo "error: Personal WHOOP device releases require the private history and score model."
+            if [ ! -f "${DESTINATION}" ] || [ ! -f "${MODEL_DESTINATION}" ] || [ ! -f "${RECOVERY_MODEL_DESTINATION}" ] || [ ! -f "${OFFICIAL_METRICS_DESTINATION}" ] || [ ! -f "${OFFICIAL_ARCHIVE_DESTINATION}" ]; then
+              echo "error: Personal WHOOP device releases require the private history, models, and official raw archive."
               exit 1
             fi
           fi
