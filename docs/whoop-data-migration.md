@@ -721,6 +721,62 @@ Then verify behavior, not only row counts:
 Do not declare migration complete until the source archive, projection, app
 database, installed UI, and live continuation all agree.
 
+## Improvement discipline and contributor handoff
+
+Maintain this project as a reproducible system, not a chronological diary.
+Someone new should be able to determine the current contract, rebuild every
+projection, understand what has and has not been validated, and continue an
+experiment without reading old conversations.
+
+Keep each kind of knowledge in one durable place:
+
+| Knowledge | Canonical owner | What to retain |
+| --- | --- | --- |
+| What WHOOP or the strap returned | Immutable source archive plus manifest | Exact bytes, request/packet identity, timestamps, status, hashes, coverage, and acquisition-tool version |
+| What a payload means | Decoder source and focused fixtures/tests | Field offsets, units, wrap/reset rules, checksums, accepted/rejected examples, and known unknown bytes |
+| What the phone stores | Current schema and migration tests | Constraints, indexes, provenance links, rebuild markers, backup boundary, and forward migration behavior |
+| How a displayed metric is chosen | Current read/materialization code and this runbook | Source precedence, missing-data behavior, coverage gates, algorithm/model version, and UI abstraction |
+| How a model was selected | Reproducible trainer, private fitted artifact, and concise model card/metrics | Feature contract, past-only cutoff rules, cohort/time bounds, folds, error distribution, baselines, confidence, and rejected alternatives that materially informed the design |
+| What still needs evidence | Focused issue or validation checklist | Exact unanswered claim, required ground truth, acceptance threshold, and the retained source needed to answer it |
+
+Do not preserve a stream-of-consciousness record of commands. Promote the
+useful result of an investigation into the relevant owner: a fixture, parser
+contract, schema migration, model evaluation, decision rule, troubleshooting
+row, or open validation item. Preserve failed approaches only when they teach a
+reusable boundary—for example, a feature family that worsened chronological
+test error, a private endpoint with shorter retention, or whole-container copy
+behavior that fails on protected iOS metadata.
+
+For every decoder or derived metric change:
+
+1. freeze the source cohort by manifest hash and coverage dates;
+2. state the production feature contract using only signals available at the
+   score's derivation time;
+3. add fixtures for successful, missing, corrupt, wrap/reset, duplicate, and
+   boundary cases;
+4. compare the candidate with the shipped baseline on chronological unseen
+   data, including median and tail error rather than only training fit;
+5. record materially worse alternatives and why they were rejected;
+6. bump the decoder, feature, algorithm, or model version when semantics
+   change;
+7. rebuild projections from immutable evidence instead of editing rows;
+8. prove the independent Swift evaluator agrees with the trainer on golden
+   inputs; and
+9. perform a clean-clone test, a private Release build, and an in-place device
+   migration with pre/post integrity checks.
+
+A new person's minimum handoff packet is therefore small but complete: this
+runbook, the Git repository, their own private source manifests/archives, the
+current schema version, fitted private models and model cards, the last verified
+device backup, and the unresolved validation checklist. It must not require the
+original account holder's identifiers, credentials, tokens, private health
+records, filesystem paths, or undocumented oral knowledge.
+
+When WHOOP, firmware, iOS, or the local model changes, update the current
+contract in place and keep old evidence addressable by hash/version. Do not
+silently rewrite historical predictions under new semantics, delete unmodeled
+fields, or let a dashboard choice decide what data survives.
+
 ## Known limits and non-recoverable data
 
 - The public Developer API does not provide continuous heart-rate data. WHOOP

@@ -27,7 +27,8 @@ archive the public Developer API, optionally preserve read-only official-app
 responses, continue with direct WHOOP 5 BLE collection, generate deterministic
 private seeds and models, install without losing the phone database, and verify
 the result. It also defines the evidence/projection boundary, secret handling,
-idempotent rebuild rules, and the limits of historical recovery.
+idempotent rebuild rules, contributor handoff and experiment-recording
+discipline, and the limits of historical recovery.
 
 ## Current state
 
