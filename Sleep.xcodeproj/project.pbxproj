@@ -195,7 +195,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "SEED_PATH=\"${WHOOP_HISTORY_SEED_PATH:-${HOME}/Documents/personal/data/whoop/app-seeds/whoop-history.json}\"\nDESTINATION=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/whoop-history.json\"\nif [ -f \"${SEED_PATH}\" ] && ! /usr/bin/cmp -s \"${SEED_PATH}\" \"${DESTINATION}\"; then\n  /bin/cp \"${SEED_PATH}\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/whoop-history.json\"\nelif [ ! -f \"${SEED_PATH}\" ]; then\n  /bin/rm -f \"${DESTINATION}\"\nfi\nMODEL_PATH=\"${WHOOP_SCORE_MODEL_PATH:-${HOME}/Documents/personal/data/whoop/app-seeds/whoop-score-model.json}\"\nMODEL_DESTINATION=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/whoop-score-model.json\"\nif [ -f \"${MODEL_PATH}\" ] && ! /usr/bin/cmp -s \"${MODEL_PATH}\" \"${MODEL_DESTINATION}\"; then\n  /bin/cp \"${MODEL_PATH}\" \"${MODEL_DESTINATION}\"\nelif [ ! -f \"${MODEL_PATH}\" ]; then\n  /bin/rm -f \"${MODEL_DESTINATION}\"\nfi\nif [ \"${CONFIGURATION}\" = \"Release\" ] && [ \"${PLATFORM_NAME}\" = \"iphoneos\" ]; then\n  if [ ! -f \"${DESTINATION}\" ] || [ ! -f \"${MODEL_DESTINATION}\" ]; then\n    echo \"error: Personal WHOOP device releases require the private history and score model.\"\n    exit 1\n  fi\nfi\n";
+			shellScript = "SEED_PATH=\"${WHOOP_HISTORY_SEED_PATH:-${HOME}/Documents/personal/data/whoop/app-seeds/whoop-history.json}\"\nDESTINATION=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/whoop-history.json\"\nif [ -f \"${SEED_PATH}\" ] && ! /usr/bin/cmp -s \"${SEED_PATH}\" \"${DESTINATION}\"; then\n  /bin/cp \"${SEED_PATH}\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/whoop-history.json\"\nelif [ ! -f \"${SEED_PATH}\" ]; then\n  /bin/rm -f \"${DESTINATION}\"\nfi\nMODEL_PATH=\"${WHOOP_SCORE_MODEL_PATH:-${HOME}/Documents/personal/data/whoop/app-seeds/whoop-score-model.json}\"\nMODEL_DESTINATION=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/whoop-score-model.json\"\nif [ -f \"${MODEL_PATH}\" ] && ! /usr/bin/cmp -s \"${MODEL_PATH}\" \"${MODEL_DESTINATION}\"; then\n  /bin/cp \"${MODEL_PATH}\" \"${MODEL_DESTINATION}\"\nelif [ ! -f \"${MODEL_PATH}\" ]; then\n  /bin/rm -f \"${MODEL_DESTINATION}\"\nfi\nRECOVERY_MODEL_PATH=\"${WHOOP_RECOVERY_MODEL_PATH:-${HOME}/Documents/personal/data/whoop/app-seeds/whoop-recovery-model.json}\"\nRECOVERY_MODEL_DESTINATION=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/whoop-recovery-model.json\"\nif [ -f \"${RECOVERY_MODEL_PATH}\" ] && ! /usr/bin/cmp -s \"${RECOVERY_MODEL_PATH}\" \"${RECOVERY_MODEL_DESTINATION}\"; then\n  /bin/cp \"${RECOVERY_MODEL_PATH}\" \"${RECOVERY_MODEL_DESTINATION}\"\nelif [ ! -f \"${RECOVERY_MODEL_PATH}\" ]; then\n  /bin/rm -f \"${RECOVERY_MODEL_DESTINATION}\"\nfi\nOFFICIAL_METRICS_PATH=\"${WHOOP_OFFICIAL_METRICS_PATH:-${HOME}/Documents/personal/data/whoop/app-seeds/whoop-official-metrics.json}\"\nOFFICIAL_METRICS_DESTINATION=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/whoop-official-metrics.json\"\nif [ -f \"${OFFICIAL_METRICS_PATH}\" ] && ! /usr/bin/cmp -s \"${OFFICIAL_METRICS_PATH}\" \"${OFFICIAL_METRICS_DESTINATION}\"; then\n  /bin/cp \"${OFFICIAL_METRICS_PATH}\" \"${OFFICIAL_METRICS_DESTINATION}\"\nelif [ ! -f \"${OFFICIAL_METRICS_PATH}\" ]; then\n  /bin/rm -f \"${OFFICIAL_METRICS_DESTINATION}\"\nfi\nOFFICIAL_ARCHIVE_PATH=\"${WHOOP_OFFICIAL_ARCHIVE_PATH:-${HOME}/Documents/personal/data/whoop/app-seeds/whoop-official-archive.sqlite3}\"\nOFFICIAL_ARCHIVE_DESTINATION=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/whoop-official-archive.sqlite3\"\nif [ -f \"${OFFICIAL_ARCHIVE_PATH}\" ] && ! /usr/bin/cmp -s \"${OFFICIAL_ARCHIVE_PATH}\" \"${OFFICIAL_ARCHIVE_DESTINATION}\"; then\n  /bin/cp \"${OFFICIAL_ARCHIVE_PATH}\" \"${OFFICIAL_ARCHIVE_DESTINATION}\"\nelif [ ! -f \"${OFFICIAL_ARCHIVE_PATH}\" ]; then\n  /bin/rm -f \"${OFFICIAL_ARCHIVE_DESTINATION}\"\nfi\nif [ \"${CONFIGURATION}\" = \"Release\" ] && [ \"${PLATFORM_NAME}\" = \"iphoneos\" ]; then\n  if [ ! -f \"${DESTINATION}\" ] || [ ! -f \"${MODEL_DESTINATION}\" ] || [ ! -f \"${RECOVERY_MODEL_DESTINATION}\" ] || [ ! -f \"${OFFICIAL_METRICS_DESTINATION}\" ] || [ ! -f \"${OFFICIAL_ARCHIVE_DESTINATION}\" ]; then\n    echo \"error: Personal WHOOP device releases require the private history, models, and official raw archive.\"\n    exit 1\n  fi\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -340,7 +340,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 11;
+				CURRENT_PROJECT_VERSION = 12;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -359,7 +359,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MARKETING_VERSION = 0.6.0;
+				MARKETING_VERSION = 0.7.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -406,7 +406,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 11;
+				CURRENT_PROJECT_VERSION = 12;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -419,7 +419,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MARKETING_VERSION = 0.6.0;
+				MARKETING_VERSION = 0.7.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";

@@ -69,15 +69,22 @@ The app should eventually cover the complete personal loop:
   under gray metric titles. Icons retain fixed metric colors; no phone-motion
   metrics or Motion & Fitness permission are part of this surface.
 - A separate `Steps` trend card appears after RHR without changing those five
-  summary values. It is derived entirely offline from the WHOOP 5 cumulative
-  motion counter already present in retained version-18 history packets, so it
-  does not enable the battery-heavy raw IMU stream or request phone motion
-  access. Schema 8 retains the counter, cadence-like byte, motion-class byte,
-  civil-date offset, and source packet alongside the immutable raw packet. The
-  daily materialization also retains sample/span coverage, missing seconds,
-  wrap count, rejected implausible deltas, source, and algorithm version. Totals
-  are rebuilt only after a durable history-complete marker, and the UI title is
+  summary values. It joins 317 exact official-app daily totals from 2025-10-16
+  through 2026-08-31 to local WHOOP 5 cumulative-counter totals from Sep 1
+  onward, preferring the official value on any overlapping day. Ongoing local
+  collection does not enable the battery-heavy raw IMU stream or request phone
+  motion access. The store retains the counter, cadence-like byte, motion-class
+  byte, civil-date offset, source packet, sample/span coverage, missing seconds,
+  wrap count, rejected deltas, source, and algorithm version. The UI title is
   simply `Steps`.
+- A `Recovery` trend card follows Steps while the main five summary values stay
+  unchanged. Historical points use 316 exact official scores. Future points use
+  a versioned 70% gradient-boosting / 30% ridge model over independently
+  available sleep, HRV, RHR, Steps, and past-only rolling history. Four forward
+  chronological folds covering 126 unseen nights measure 4.79-point MAE,
+  6.70-point RMSE, and R² 0.875. The store keeps WHOOP targets separate from
+  local predictions and retains each prediction's 169 inputs, confidence,
+  component counterfactuals, baselines, model version, and derivation time.
 - Chart density is range-aware without altering the stored daily history or
   exact current value: 1W and 1M use daily points, 1Y uses weekly medians, and
   All widens adaptive median buckets from weekly toward monthly to stay near
@@ -107,12 +114,10 @@ The app should eventually cover the complete personal loop:
   recomputes the trend: it overlays a translucent future region after the
   selected point, then adds the rule and dot, leaving line geometry, scales,
   and layout unchanged while scrubbing.
-- Range changes keep the horizontal sample positions fixed and animate only the
-  y-values, so each curve morphs vertically into its new shape instead of
-  disappearing, sliding, or stretching sideways. The headline and current-card
-  numbers use a brief restrained digit pop while retaining the previous value
-  underneath; Reduce Motion remains immediate and direct chart scrubbing does
-  not replay the animation.
+- Range changes replace the chart data and scale atomically; there is no curve
+  morph between incompatible ranges. The headline and current-card numbers use
+  a brief restrained digit pop while retaining the previous value underneath;
+  Reduce Motion remains immediate and direct chart scrubbing does not replay it.
 - Haptics follow a restrained interaction vocabulary: selection ticks occur
   only when the range or exact selected night changes; lightweight impacts
   accompany diagnostic navigation and rescanning; handshake initiation is
@@ -187,9 +192,8 @@ The app should eventually cover the complete personal loop:
 - The chart selection dot remains a solid continuation of the trend, and the
   translucent future region extends past the visible data extent so the round
   line cap overhanging the final point is dimmed with the rest of the line.
-  Range morphs interpolate y-values and the y-domain in lockstep, then clip the
-  plot rectangle as a final safety boundary. Month-to-week scale changes stay
-  inside the card without an abrupt scale jump or a horizontally sheared dot.
+  The plot clips to its final y-domain and gives its x-domain endpoint padding,
+  so range changes cannot stretch outside the card or shear the final dot.
 - Sleep finalization is an explicit state machine. Before a new sleep begins,
   the dashboard continues showing the latest completed night. As soon as the
   band detects sleep, the compact card says only `Sleep detected`—never a
@@ -251,10 +255,9 @@ The app should eventually cover the complete personal loop:
   freshness clock, so an old cached BPM cannot look current merely because
   historical data is arriving.
 - Range-filtering, date parsing, and long-range median buckets are cached by
-  metric, range, reference day, and history revision. A chart morph now spends
-  its frames interpolating the curve rather than rebuilding the datasets.
-  The Bluetooth collector is app-scoped, preventing multiple windows from
-  creating competing central managers.
+  metric, range, reference day, and history revision. The Bluetooth collector
+  is app-scoped, preventing multiple windows from creating competing central
+  managers.
 - Dashboard reads are generation-ordered: an older asynchronous reload cannot
   overwrite a newly processed night, and a transient SQLite read error keeps
   the last known-good charts visible. The unnecessary full-history reload every
@@ -270,11 +273,14 @@ The app should eventually cover the complete personal loop:
   source tree. Local builds optionally copy the file selected by
   `WHOOP_HISTORY_SEED_PATH` (or the private local default) into the app bundle
   for first-launch import. The private fitted model follows the same rule via
-  `WHOOP_SCORE_MODEL_PATH`; clean clones use a bounded coefficient-only fallback.
-  Physical Release builds now fail closed if either private artifact is absent,
-  remove stale artifacts from reused build directories, and CI rejects either
-  private filename if it is ever staged. The app contains no API client secret
-  or refresh token.
+  `WHOOP_SCORE_MODEL_PATH`. The complete official-app pull is also preserved as
+  an immutable 1.03 GB source archive and a checksum-verified 61.5 MB SQLite
+  sidecar containing all 5,043 request records and every exact compressed
+  response body. A small daily projection feeds current charts without becoming
+  the evidence layer. Physical Release builds fail closed if the private
+  history, both fitted models, projection, or raw sidecar is absent; CI rejects
+  their filenames if staged. The app contains no API client secret or refresh
+  token.
 - Sustained worn live capture, foreground/background persistence, historical
   offload, conservative local sleep finalization, and local notifications work.
   Longer unattended overnight calibration, disconnect recovery, stage models,

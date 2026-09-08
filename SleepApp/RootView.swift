@@ -8,9 +8,6 @@ struct RootView: View {
     @AppStorage("selectedHealthRange") private var selectedRange: HealthRange = .month
     @State private var selectedDate: Date?
     @State private var activeMetric: MetricKind?
-    @State private var chartMorphFromRange: HealthRange?
-    @State private var chartMorphProgress: CGFloat = 1
-    @State private var chartMorphGeneration = 0
     @State private var currentDate = Date()
     @State private var debugMockPendingSleepDismissed = false
     @ObservedObject var whoopCollector: WhoopHandshakeProbe
@@ -188,6 +185,16 @@ struct RootView: View {
                         color: .green,
                         formatValue: formatSteps
                     )
+
+                    metricCard(
+                        metric: .recovery,
+                        title: "Recovery",
+                        symbol: "gauge.with.dots.needle.50percent",
+                        unit: "",
+                        series: metricSeries(for: .recovery),
+                        color: .mint,
+                        formatValue: { "\(Int($0.rounded()))%" }
+                    )
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
@@ -196,29 +203,10 @@ struct RootView: View {
             .scrollIndicators(.hidden)
         }
         .preferredColorScheme(.dark)
-        .onChange(of: selectedRange) { oldRange, _ in
+        .onChange(of: selectedRange) { _, _ in
             AppHaptics.selection()
             selectedDate = nil
             activeMetric = nil
-
-            var transaction = Transaction(animation: nil)
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                chartMorphFromRange = reduceMotion ? nil : oldRange
-                chartMorphProgress = reduceMotion ? 1 : 0
-                chartMorphGeneration &+= 1
-            }
-        }
-        .task(id: chartMorphGeneration) {
-            guard !reduceMotion, chartMorphProgress == 0 else { return }
-            await Task.yield()
-            guard !Task.isCancelled else { return }
-            withAnimation(.smooth(duration: 0.52, extraBounce: 0)) {
-                chartMorphProgress = 1
-            }
-            try? await Task.sleep(for: .seconds(0.52))
-            guard !Task.isCancelled else { return }
-            chartMorphFromRange = nil
         }
         .onChange(of: availableRanges) { _, ranges in
             // History can shorten as well as grow. Fall back to the longest
@@ -529,17 +517,18 @@ struct RootView: View {
         let selectedMetricPoint: MetricPoint? = cardSelection.flatMap {
             self.selectedPoint(in: series.plotted, near: $0)
         }
-        let currentStepPoint = metric == .steps
+        let usesLatestTimelinePoint = metric == .steps || metric == .recovery
+        let currentTimelinePoint = usesLatestTimelinePoint
             ? series.daily.last { Calendar.current.isDate($0.date, inSameDayAs: currentDate) } ?? series.daily.last
             : nil
-        let currentValue = metric == .steps
-            ? currentStepPoint?.value
+        let currentValue = usesLatestTimelinePoint
+            ? currentTimelinePoint?.value
             : metricValue(for: metric, in: currentSleepRecord)
         let displayedValue = cardSelection == nil ? currentValue : selectedMetricPoint?.value
         let value = displayedValue.map(formatValue) ?? "—"
         let valueDateLabel = cardSelection == nil
-            ? (metric == .steps
-                ? currentStepPoint.map { selectionLabel(for: $0.date) } ?? "No real data"
+            ? (usesLatestTimelinePoint
+                ? currentTimelinePoint.map { selectionLabel(for: $0.date) } ?? "No real data"
                 : "Today")
             : selectedMetricPoint.map { selectionLabel(for: $0.date) } ?? "No real data"
 
@@ -605,14 +594,20 @@ struct RootView: View {
 
     private func populatedMetricChart(metric: MetricKind, series: MetricSeries, color: Color, title: String) -> some View {
         let plottedPoints = series.plotted
-        let morphPoints = morphingPoints(for: metric, target: series)
-        let domain = morphingDomain(for: metric, target: series)
+        let chartPoints = plottedPoints.enumerated().map { index, point in
+            PositionedMetricPoint(
+                id: index,
+                position: normalizedPosition(of: point, in: plottedPoints),
+                value: point.value
+            )
+        }
+        let domain = chartDomain(for: series.daily, metric: metric)
         let chartSelection = activeMetric == metric ? selectedDate : nil
         let showsAverageLevels = selectedRange.usesMonthlyAxis && chartSelection == nil
         let highlightedPoint = selectedPoint(in: plottedPoints, near: chartSelection) ?? plottedPoints.last!
         let highlightedPosition = normalizedPosition(of: highlightedPoint, in: plottedPoints)
         let highlightedValue = chartSelection == nil
-            ? (morphPoints.last?.value ?? highlightedPoint.value)
+            ? (chartPoints.last?.value ?? highlightedPoint.value)
             : highlightedPoint.value
         let firstDate = series.daily.first!.date
         let middleDate = series.daily[series.daily.count / 2].date
@@ -620,7 +615,7 @@ struct RootView: View {
         let averageLevels = adaptiveAverageLevels(from: series.daily, for: selectedRange)
         return VStack(spacing: 0) {
             Chart {
-                ForEach(morphPoints) { point in
+                ForEach(chartPoints) { point in
                     AreaMark(
                         x: .value("Position", point.position),
                         yStart: .value("Minimum", domain.lowerBound),
@@ -705,17 +700,13 @@ struct RootView: View {
                 .foregroundStyle(color.opacity(showsAverageLevels ? 0.3 : 1))
             }
             .chartYScale(domain: domain)
-            // Values and their y-domain interpolate together. Since both ends
-            // contain their respective series, every in-between frame remains
-            // vertically contained while the scale changes smoothly.
+            // Keep every metric inside its final range immediately. Range
+            // changes intentionally do not morph between incompatible scales.
             .chartPlotStyle { plot in
                 plot.clipped()
             }
-            // Every range uses the same fixed horizontal coordinates. Only the
-            // sampled y-values animate, so the curve morphs vertically without
-            // sliding or stretching sideways.
-            // Leave a small plot inset at both ends so clipping transient
-            // vertical overflow never shears the endpoint symbol horizontally.
+            // Leave a small plot inset at both ends so the endpoint symbol is
+            // never sheared by plot clipping.
             .chartXScale(domain: -0.02...1.02)
             .chartXSelection(
                 value: normalizedSelectionBinding(for: metric, selectableSeries: plottedPoints)
@@ -891,7 +882,7 @@ struct RootView: View {
 
     private func averageLevelLabel(_ value: Double, for metric: MetricKind) -> String {
         switch metric {
-        case .sleep:
+        case .sleep, .recovery:
             return "\(Int(value.rounded()))%"
         case .duration:
             return formatDuration(value)
@@ -954,83 +945,6 @@ struct RootView: View {
         return min(max(date.timeIntervalSince(firstDate) / duration, 0), 1)
     }
 
-    private func morphingPoints(for metric: MetricKind, target: MetricSeries) -> [MorphingMetricPoint] {
-        let sampleCount = 48
-        let targetValues = resampledValues(from: target.plotted, count: sampleCount)
-        guard !targetValues.isEmpty else { return [] }
-
-        let sourceValues: [Double]
-        if let chartMorphFromRange {
-            let sourceSeries = metricSeries(for: metric, range: chartMorphFromRange)
-            let sampledSource = resampledValues(from: sourceSeries.plotted, count: sampleCount)
-            sourceValues = sampledSource.count == targetValues.count ? sampledSource : targetValues
-        } else {
-            sourceValues = targetValues
-        }
-
-        let progress = Double(chartMorphProgress)
-        return targetValues.indices.map { index in
-            MorphingMetricPoint(
-                id: index,
-                position: Double(index) / Double(max(targetValues.count - 1, 1)),
-                value: sourceValues[index] + ((targetValues[index] - sourceValues[index]) * progress)
-            )
-        }
-    }
-
-    private func morphingDomain(for metric: MetricKind, target: MetricSeries) -> ClosedRange<Double> {
-        let targetDomain = chartDomain(for: target.daily, metric: metric)
-        guard let chartMorphFromRange else { return targetDomain }
-
-        let source = metricSeries(for: metric, range: chartMorphFromRange)
-        guard !source.daily.isEmpty else { return targetDomain }
-        let sourceDomain = chartDomain(for: source.daily, metric: metric)
-        let progress = Double(chartMorphProgress)
-
-        let lowerBound = interpolated(
-            sourceDomain.lowerBound,
-            targetDomain.lowerBound,
-            progress: progress
-        )
-        let upperBound = interpolated(
-            sourceDomain.upperBound,
-            targetDomain.upperBound,
-            progress: progress
-        )
-        return lowerBound...upperBound
-    }
-
-    private func interpolated(_ source: Double, _ target: Double, progress: Double) -> Double {
-        source + ((target - source) * progress)
-    }
-
-    private func resampledValues(from points: [MetricPoint], count: Int) -> [Double] {
-        guard count > 0, let first = points.first else { return [] }
-        guard points.count > 1, let last = points.last else {
-            return Array(repeating: first.value, count: count)
-        }
-
-        let span = last.date.timeIntervalSince(first.date)
-        guard span > 0 else { return Array(repeating: first.value, count: count) }
-
-        var upperIndex = 1
-        return (0..<count).map { index in
-            let position = Double(index) / Double(max(count - 1, 1))
-            let targetDate = first.date.addingTimeInterval(span * position)
-
-            while upperIndex < points.count - 1, points[upperIndex].date < targetDate {
-                upperIndex += 1
-            }
-
-            let lower = points[upperIndex - 1]
-            let upper = points[upperIndex]
-            let interval = upper.date.timeIntervalSince(lower.date)
-            guard interval > 0 else { return upper.value }
-            let localProgress = targetDate.timeIntervalSince(lower.date) / interval
-            return lower.value + ((upper.value - lower.value) * localProgress)
-        }
-    }
-
     private func selectedPoint(in series: [MetricPoint], near date: Date?) -> MetricPoint? {
         guard let date else { return series.last }
 
@@ -1077,7 +991,7 @@ struct RootView: View {
 
     private func yAxisLabel(_ value: Double, for metric: MetricKind) -> String {
         switch metric {
-        case .sleep:
+        case .sleep, .recovery:
             "\(Int(value.rounded()))%"
         case .duration:
             String(format: "%.1fh", value)
@@ -1095,7 +1009,7 @@ struct RootView: View {
         history.metricSeries(
             for: metric,
             range: requestedRange ?? selectedRange,
-            referenceDate: metric == .steps ? currentDate : referenceDate
+            referenceDate: (metric == .steps || metric == .recovery) ? currentDate : referenceDate
         )
     }
 
@@ -1103,6 +1017,7 @@ struct RootView: View {
         guard let record else { return nil }
         return switch metric {
         case .sleep: record.sleepScore
+        case .recovery: record.recoveryScore
         case .duration: record.sleepDurationMinutes.map { $0 / 60 }
         case .hrv: record.hrvRMSSDMilliseconds
         case .rhr: record.restingHeartRateBPM
@@ -1111,7 +1026,7 @@ struct RootView: View {
     }
 
     private func chartDomain(for points: [MetricPoint], metric: MetricKind) -> ClosedRange<Double> {
-        if metric == .sleep { return 0...100 }
+        if metric == .sleep || metric == .recovery { return 0...100 }
         let values = points.map(\.value)
         let low = values.min() ?? 0
         let high = values.max() ?? 1
@@ -1363,7 +1278,7 @@ struct MetricPoint: Identifiable {
     var id: Date { date }
 }
 
-private struct MorphingMetricPoint: Identifiable {
+private struct PositionedMetricPoint: Identifiable {
     let id: Int
     let position: Double
     let value: Double
@@ -1384,6 +1299,7 @@ struct MetricSeries {
 
 enum MetricKind: Hashable {
     case sleep
+    case recovery
     case duration
     case hrv
     case rhr

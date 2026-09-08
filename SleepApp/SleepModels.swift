@@ -8,6 +8,10 @@ extension Notification.Name {
 struct DailyHealthRecord: Codable, Hashable, Identifiable, Sendable {
     let dateKey: String
     let sleepScore: Double?
+    /// Display projection only. The store retains WHOOP's official target and
+    /// our independently derived score in separate tables/columns.
+    let recoveryScore: Double?
+    let recoveryScoreSource: String?
     let sleepDurationMinutes: Double?
     let hrvRMSSDMilliseconds: Double?
     let restingHeartRateBPM: Double?
@@ -37,6 +41,8 @@ struct DailyHealthRecord: Codable, Hashable, Identifiable, Sendable {
     init(
         dateKey: String,
         sleepScore: Double?,
+        recoveryScore: Double? = nil,
+        recoveryScoreSource: String? = nil,
         sleepDurationMinutes: Double?,
         hrvRMSSDMilliseconds: Double?,
         restingHeartRateBPM: Double?,
@@ -58,6 +64,8 @@ struct DailyHealthRecord: Codable, Hashable, Identifiable, Sendable {
     ) {
         self.dateKey = dateKey
         self.sleepScore = sleepScore
+        self.recoveryScore = recoveryScore
+        self.recoveryScoreSource = recoveryScoreSource
         self.sleepDurationMinutes = sleepDurationMinutes
         self.hrvRMSSDMilliseconds = hrvRMSSDMilliseconds
         self.restingHeartRateBPM = restingHeartRateBPM
@@ -101,6 +109,36 @@ struct DailyHealthRecord: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+struct OfficialMetricsSeed: Decodable, Sendable {
+    let formatVersion: Int
+    let source: String
+    let sourceArchive: String
+    let sourceManifestSHA256: String
+    let sourceDatabaseSHA256: String
+    let coverageStart: String
+    let coverageEnd: String
+    let daily: [OfficialDailyMetricSeed]
+}
+
+struct OfficialDailyMetricSeed: Decodable, Sendable {
+    let dateKey: String
+    let officialRecoveryScore: Double?
+    let officialSteps: Int?
+    let officialDayStrain: Double?
+    let dayStrainTarget: Double?
+    let stepsBaseline: Double?
+    let hrv: Double?
+    let hrvBaseline: Double?
+    let rhr: Double?
+    let rhrBaseline: Double?
+    let respiratoryRate: Double?
+    let respiratoryRateBaseline: Double?
+    let sleepPerformance: Double?
+    let sleepPerformanceBaseline: Double?
+    let sourceRecoverySHA256: String?
+    let sourceStrainSHA256: String?
+}
+
 struct DailyStepRecord: Hashable, Identifiable, Sendable {
     let dateKey: String
     let stepCount: Int
@@ -114,6 +152,27 @@ struct DailyStepRecord: Hashable, Identifiable, Sendable {
     let lastSampleAt: Date?
     let source: String
     let algorithmVersion: Int
+
+    var id: String { dateKey }
+
+    var date: Date {
+        let pieces = dateKey.split(separator: "-").compactMap { Int($0) }
+        guard pieces.count == 3 else { return .distantPast }
+        var components = DateComponents()
+        components.calendar = Calendar(identifier: .gregorian)
+        components.timeZone = .current
+        components.year = pieces[0]
+        components.month = pieces[1]
+        components.day = pieces[2]
+        components.hour = 12
+        return components.date ?? .distantPast
+    }
+}
+
+struct DailyRecoveryRecord: Hashable, Identifiable, Sendable {
+    let dateKey: String
+    let score: Double
+    let source: String
 
     var id: String { dateKey }
 
@@ -336,10 +395,238 @@ struct SleepScoreModelBundle: Decodable, Sendable {
     }
 }
 
+enum RecoveryScoreFeatureBuilder {
+    static let version = "whoop_local_recovery_features_v1"
+    static let featureCount = 169
+
+    static func features(
+        current: DailyHealthRecord,
+        history: [DailyHealthRecord],
+        stepsByDate: [String: Double]
+    ) -> [Double]? {
+        guard let currentNight = sleepNight(current),
+              let hrv = current.hrvRMSSDMilliseconds,
+              let rhr = current.restingHeartRateBPM,
+              let sleepScore = current.sleepScore else { return nil }
+        let eligible = history
+            .filter { $0.dateKey < current.dateKey && sleepNight($0) != nil }
+            .sorted { $0.dateKey < $1.dateKey }
+        let sleepHistory = eligible.compactMap(sleepNight)
+        var values = SleepScoreFeatureBuilder.features(
+            current: currentNight,
+            history: sleepHistory
+        )
+        let currentSteps = stepsByDate[current.dateKey] ?? .nan
+        values.append(contentsOf: [hrv, rhr, currentSteps, sleepScore])
+
+        let recent = Array(eligible.reversed())
+        for lag in 1...7 {
+            let candidate = recent.indices.contains(lag - 1)
+                ? recent[lag - 1]
+                : current
+            values.append(contentsOf: [
+                candidate.hrvRMSSDMilliseconds ?? hrv,
+                candidate.restingHeartRateBPM ?? rhr,
+                stepsByDate[candidate.dateKey] ?? currentSteps,
+                candidate.sleepScore ?? sleepScore,
+                Double(candidate.dateKey == current.dateKey
+                    ? 0
+                    : dayGap(from: candidate.dateKey, to: current.dateKey) ?? 0)
+            ])
+        }
+
+        for window in [7, 14, 30, 60] {
+            let prior = Array(eligible.suffix(window))
+            appendStatistics(
+                current: hrv,
+                history: prior.compactMap(\.hrvRMSSDMilliseconds),
+                to: &values
+            )
+            appendStatistics(
+                current: rhr,
+                history: prior.compactMap(\.restingHeartRateBPM),
+                to: &values
+            )
+            appendStatistics(
+                current: currentSteps,
+                history: prior.compactMap { stepsByDate[$0.dateKey] },
+                to: &values
+            )
+            appendStatistics(
+                current: sleepScore,
+                history: prior.compactMap(\.sleepScore),
+                to: &values
+            )
+        }
+        guard values.count == featureCount else { return nil }
+        return values
+    }
+
+    private static func appendStatistics(
+        current: Double,
+        history: [Double],
+        to values: inout [Double]
+    ) {
+        let finite = history.filter(\.isFinite)
+        let mean = finite.isEmpty
+            ? current
+            : finite.reduce(0, +) / Double(finite.count)
+        let deviation = finite.isEmpty
+            ? 0
+            : sqrt(finite.map { pow($0 - mean, 2) }.reduce(0, +) / Double(finite.count))
+        values.append(contentsOf: [
+            mean,
+            deviation,
+            current - mean,
+            mean == 0 ? 1 : current / mean,
+            deviation == 0 ? 0 : (current - mean) / deviation
+        ])
+    }
+
+    private static func sleepNight(_ record: DailyHealthRecord) -> SleepScoreNight? {
+        guard let duration = record.sleepDurationMinutes,
+              let efficiency = record.sleepEfficiencyPercentage,
+              let start = record.sleepStartMinute,
+              let end = record.sleepEndMinute else { return nil }
+        return SleepScoreNight(
+            dateKey: record.dateKey,
+            durationMinutes: duration,
+            efficiencyPercentage: efficiency,
+            startMinute: start,
+            endMinute: end
+        )
+    }
+
+    private static func dayGap(from start: String, to end: String) -> Int? {
+        let calendar = Calendar(identifier: .gregorian)
+        func date(_ key: String) -> Date? {
+            let values = key.split(separator: "-").compactMap { Int($0) }
+            guard values.count == 3 else { return nil }
+            return calendar.date(from: DateComponents(
+                year: values[0], month: values[1], day: values[2], hour: 12
+            ))
+        }
+        guard let startDate = date(start), let endDate = date(end) else { return nil }
+        return calendar.dateComponents([.day], from: startDate, to: endDate).day
+    }
+}
+
+struct RecoveryScoreModelBundle: Decodable, Sendable {
+    struct RidgeModel: Decodable, Sendable {
+        let imputerMedians: [Double]
+        let means: [Double]
+        let scales: [Double]
+        let coefficients: [Double]
+        let intercept: Double
+
+        func predict(_ input: [Double]) -> Double? {
+            guard input.count == imputerMedians.count,
+                  input.count == means.count,
+                  input.count == scales.count,
+                  input.count == coefficients.count else { return nil }
+            return input.indices.reduce(intercept) { prediction, index in
+                let value = input[index].isFinite ? input[index] : imputerMedians[index]
+                let standardized = (value - means[index]) / max(scales[index], 1e-12)
+                return prediction + standardized * coefficients[index]
+            }
+        }
+    }
+
+    struct Prediction: Sendable {
+        let score: Double
+        let confidence: Double
+        let hrvComponent: Double
+        let rhrComponent: Double
+        let sleepComponent: Double
+        let stepsComponent: Double
+        let hrvBaseline: Double?
+        let rhrBaseline: Double?
+        let sleepBaseline: Double?
+        let stepsBaseline: Double?
+    }
+
+    let version: String
+    let featureVersion: String
+    let featureCount: Int
+    let boostedWeight: Double
+    let imputerMedians: [Double]
+    let boostedModel: SleepScoreModelBundle.GradientBoostedModel
+    let ridgeModel: RidgeModel
+
+    func prediction(_ input: [Double]) -> Prediction? {
+        guard featureVersion == RecoveryScoreFeatureBuilder.version,
+              featureCount == RecoveryScoreFeatureBuilder.featureCount,
+              input.count == featureCount,
+              imputerMedians.count == featureCount else { return nil }
+        let prepared = input.indices.map {
+            input[$0].isFinite ? input[$0] : imputerMedians[$0]
+        }
+        guard let full = score(prepared) else { return nil }
+        func component(_ indices: [Int]) -> Double {
+            var neutral = prepared
+            for index in indices where neutral.indices.contains(index) {
+                neutral[index] = imputerMedians[index]
+            }
+            return full - (score(neutral) ?? full)
+        }
+        return Prediction(
+            score: min(99, max(0, full)),
+            confidence: input[52].isFinite ? 0.90 : 0.82,
+            hrvComponent: component(Self.hrvIndices),
+            rhrComponent: component(Self.rhrIndices),
+            sleepComponent: component(Self.sleepIndices),
+            stepsComponent: component(Self.stepsIndices),
+            hrvBaseline: prepared.indices.contains(129) ? prepared[129] : nil,
+            rhrBaseline: prepared.indices.contains(134) ? prepared[134] : nil,
+            sleepBaseline: prepared.indices.contains(144) ? prepared[144] : nil,
+            stepsBaseline: prepared.indices.contains(139) ? prepared[139] : nil
+        )
+    }
+
+    private func score(_ prepared: [Double]) -> Double? {
+        guard let boosted = boostedModel.predict(prepared),
+              let ridge = ridgeModel.predict(prepared) else { return nil }
+        return boostedWeight * boosted + (1 - boostedWeight) * ridge
+    }
+
+    private static let hrvIndices = featureIndices(
+        current: [50], lagOffset: 54, rollingOffset: 89
+    )
+    private static let rhrIndices = featureIndices(
+        current: [51], lagOffset: 55, rollingOffset: 94
+    )
+    private static let stepsIndices = featureIndices(
+        current: [52], lagOffset: 56, rollingOffset: 99
+    )
+    private static let sleepIndices = featureIndices(
+        current: Array(0..<50) + [53], lagOffset: 57, rollingOffset: 104
+    )
+
+    private static func featureIndices(
+        current: [Int],
+        lagOffset: Int,
+        rollingOffset: Int
+    ) -> [Int] {
+        var indices = current
+        for lag in 0..<7 { indices.append(lagOffset + lag * 5) }
+        for window in 0..<4 {
+            indices.append(contentsOf: (rollingOffset + window * 20)..<(rollingOffset + window * 20 + 5))
+        }
+        return indices
+    }
+
+    static func load(from bundle: Bundle = .main) -> RecoveryScoreModelBundle? {
+        guard let url = bundle.url(forResource: "whoop-recovery-model", withExtension: "json"),
+              let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(Self.self, from: data)
+    }
+}
+
 @MainActor
 final class HealthHistoryModel: ObservableObject {
     @Published private(set) var records: [DailyHealthRecord] = []
     @Published private(set) var stepRecords: [DailyStepRecord] = []
+    @Published private(set) var recoveryRecords: [DailyRecoveryRecord] = []
     @Published private(set) var isLoading = true
     @Published private(set) var errorMessage: String?
 
@@ -379,10 +666,9 @@ final class HealthHistoryModel: ObservableObject {
         dateCache[record.dateKey] = record.date
     }
 
-    /// Chart construction is intentionally cached outside `View.body`.
-    /// SwiftUI evaluates the chart repeatedly during a range morph; date
-    /// parsing, filtering and bucket medians only need to run when history,
-    /// range, metric, or the reference day changes.
+    /// Chart construction is intentionally cached outside `View.body` because
+    /// date parsing, filtering and bucket medians only need to run when
+    /// history, range, metric, or the reference day changes.
     func metricSeries(
         for metric: MetricKind,
         range: HealthRange,
@@ -403,6 +689,12 @@ final class HealthHistoryModel: ObservableObject {
                 if let cutoff, date < calendar.startOfDay(for: cutoff) { return nil }
                 return MetricPoint(date: date, value: Double(record.stepCount))
             }
+        } else if metric == .recovery {
+            daily = recoveryRecords.compactMap { record in
+                let date = cachedDate(dateKey: record.dateKey, fallback: record.date)
+                if let cutoff, date < calendar.startOfDay(for: cutoff) { return nil }
+                return MetricPoint(date: date, value: record.score)
+            }
         } else {
             daily = records.compactMap { record -> MetricPoint? in
                 let date = cachedDate(for: record)
@@ -410,6 +702,7 @@ final class HealthHistoryModel: ObservableObject {
                 let value: Double?
                 switch metric {
                 case .sleep: value = record.sleepScore
+                case .recovery: value = nil
                 case .duration: value = record.sleepDurationMinutes.map { $0 / 60 }
                 case .hrv: value = record.hrvRMSSDMilliseconds
                 case .rhr: value = record.restingHeartRateBPM
@@ -484,27 +777,35 @@ final class HealthHistoryModel: ObservableObject {
         let store = store
         store.loadDailyHealthRecords { [weak self] result in
             store.loadDailyStepRecords { stepResult in
-                Task { @MainActor in
-                    guard let self, generation == self.reloadGeneration else { return }
-                    var errors: [String] = []
-                    switch result {
-                    case .success(let records):
-                        self.records = records
-                    case .failure(let error):
-                        errors.append(error.localizedDescription)
+                store.loadDailyRecoveryRecords { recoveryResult in
+                    Task { @MainActor in
+                        guard let self, generation == self.reloadGeneration else { return }
+                        var errors: [String] = []
+                        switch result {
+                        case .success(let records):
+                            self.records = records
+                        case .failure(let error):
+                            errors.append(error.localizedDescription)
+                        }
+                        switch stepResult {
+                        case .success(let records):
+                            self.stepRecords = records
+                        case .failure(let error):
+                            errors.append(error.localizedDescription)
+                        }
+                        switch recoveryResult {
+                        case .success(let records):
+                            self.recoveryRecords = records
+                        case .failure(let error):
+                            errors.append(error.localizedDescription)
+                        }
+                        // Preserve every last known-good dataset through a
+                        // transient read failure instead of blanking its chart.
+                        self.seriesCache.removeAll(keepingCapacity: true)
+                        self.dateCache.removeAll(keepingCapacity: true)
+                        self.errorMessage = errors.isEmpty ? nil : errors.joined(separator: "\n")
+                        self.isLoading = false
                     }
-                    switch stepResult {
-                    case .success(let records):
-                        self.stepRecords = records
-                    case .failure(let error):
-                        errors.append(error.localizedDescription)
-                    }
-                    // Preserve either last known-good dataset through a
-                    // transient read failure instead of blanking its chart.
-                    self.seriesCache.removeAll(keepingCapacity: true)
-                    self.dateCache.removeAll(keepingCapacity: true)
-                    self.errorMessage = errors.isEmpty ? nil : errors.joined(separator: "\n")
-                    self.isLoading = false
                 }
             }
         }

@@ -403,7 +403,7 @@ final class WhoopSleepStateTests: XCTestCase {
         var database: OpaquePointer?
         XCTAssertEqual(sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READONLY, nil), SQLITE_OK)
         defer { if let database { sqlite3_close(database) } }
-        XCTAssertEqual(scalarInt(database, sql: "PRAGMA user_version"), 8)
+        XCTAssertEqual(scalarInt(database, sql: "PRAGMA user_version"), 9)
         XCTAssertEqual(scalarInt(
             database,
             sql: "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('whoop_decode_result','whoop_ppg_packet','whoop_store_metadata')"
@@ -428,6 +428,10 @@ final class WhoopSleepStateTests: XCTestCase {
             database,
             sql: "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='whoop_daily_step_metric'"
         ), 1)
+        XCTAssertEqual(scalarInt(
+            database,
+            sql: "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('whoop_official_daily_metric','whoop_daily_recovery_metric')"
+        ), 2)
     }
 
     func testVersion18DecoderPreservesMotionFieldsAndRejectsCorruption() {
@@ -631,8 +635,172 @@ final class WhoopSleepStateTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: temporary.path + "-wal"))
         XCTAssertFalse(FileManager.default.fileExists(atPath: temporary.path + "-shm"))
         XCTAssertTrue(FileManager.default.fileExists(
-            atPath: backupDirectory.appendingPathComponent("sleep-v7-before-v8.sqlite3").path
+            atPath: backupDirectory.appendingPathComponent("sleep-v7-before-v9.sqlite3").path
         ))
+    }
+
+    func testOfficialMetricsSeedPreservesTargetsBaselinesAndProvenance() throws {
+        let json = """
+        {
+          "formatVersion": 1,
+          "source": "whoop_private_ios_api",
+          "sourceArchive": "private-api-example",
+          "sourceManifestSHA256": "manifest-sha",
+          "sourceDatabaseSHA256": "database-sha",
+          "coverageStart": "2025-10-15",
+          "coverageEnd": "2026-09-07",
+          "daily": [{
+            "dateKey": "2026-08-31",
+            "officialRecoveryScore": 91,
+            "officialSteps": 7493,
+            "officialDayStrain": 12.4,
+            "dayStrainTarget": 13.2,
+            "stepsBaseline": 8100,
+            "hrv": 82.5,
+            "hrvBaseline": 77.2,
+            "rhr": 48,
+            "rhrBaseline": 50.1,
+            "respiratoryRate": 14.2,
+            "respiratoryRateBaseline": 14.0,
+            "sleepPerformance": 96,
+            "sleepPerformanceBaseline": 91,
+            "sourceRecoverySHA256": "recovery-sha",
+            "sourceStrainSHA256": "strain-sha"
+          }]
+        }
+        """
+
+        let seed = try JSONDecoder().decode(OfficialMetricsSeed.self, from: Data(json.utf8))
+
+        XCTAssertEqual(seed.daily.count, 1)
+        XCTAssertEqual(seed.daily[0].officialRecoveryScore, 91)
+        XCTAssertEqual(seed.daily[0].officialSteps, 7_493)
+        XCTAssertEqual(seed.daily[0].hrvBaseline, 77.2)
+        XCTAssertEqual(seed.daily[0].sourceStrainSHA256, "strain-sha")
+    }
+
+    func testRecoveryFeaturesArePastOnlyAndComplete() throws {
+        func record(_ date: String, hrv: Double, rhr: Double, score: Double) -> DailyHealthRecord {
+            DailyHealthRecord(
+                dateKey: date,
+                sleepScore: score,
+                sleepDurationMinutes: 480,
+                hrvRMSSDMilliseconds: hrv,
+                restingHeartRateBPM: rhr,
+                sleepID: date,
+                cycleID: nil,
+                source: "test",
+                sourceArchive: nil,
+                sourceUpdatedAt: date,
+                sleepStartAt: nil,
+                sleepEndAt: nil,
+                sleepStartMinute: 1_410,
+                sleepEndMinute: 420,
+                sleepNeedMinutes: nil,
+                sleepConsistencyPercentage: nil,
+                sleepEfficiencyPercentage: 95,
+                sleepSufficiencyPercentage: nil
+            )
+        }
+        let current = record("2026-09-07", hrv: 80, rhr: 48, score: 96)
+        let past = record("2026-09-06", hrv: 70, rhr: 51, score: 90)
+        let future = record("2026-09-08", hrv: 1, rhr: 200, score: 1)
+
+        let features = try XCTUnwrap(RecoveryScoreFeatureBuilder.features(
+            current: current,
+            history: [past, future],
+            stepsByDate: ["2026-09-06": 8_000, "2026-09-07": 10_000]
+        ))
+
+        XCTAssertEqual(features.count, RecoveryScoreFeatureBuilder.featureCount)
+        XCTAssertEqual(features[50], 80)
+        XCTAssertEqual(features[51], 48)
+        XCTAssertEqual(features[52], 10_000)
+        XCTAssertEqual(features[54], 70)
+        XCTAssertEqual(features[55], 51)
+        XCTAssertEqual(features[89], 70)
+    }
+
+    func testSerializedRecoveryModelBlendsAndBoundsPrediction() throws {
+        let count = RecoveryScoreFeatureBuilder.featureCount
+        let zeros = Array(repeating: 0.0, count: count)
+        let ones = Array(repeating: 1.0, count: count)
+        let payload: [String: Any] = [
+            "version": "synthetic-recovery",
+            "featureVersion": RecoveryScoreFeatureBuilder.version,
+            "featureCount": count,
+            "boostedWeight": 0.7,
+            "imputerMedians": zeros,
+            "boostedModel": [
+                "initialPrediction": 80.0, "learningRate": 0.1, "trees": []
+            ],
+            "ridgeModel": [
+                "imputerMedians": zeros, "means": zeros, "scales": ones,
+                "coefficients": zeros, "intercept": 20.0
+            ]
+        ]
+        let model = try JSONDecoder().decode(
+            RecoveryScoreModelBundle.self,
+            from: JSONSerialization.data(withJSONObject: payload)
+        )
+        var features = zeros
+        features[52] = .nan
+
+        let prediction = try XCTUnwrap(model.prediction(features))
+
+        XCTAssertEqual(prediction.score, 62, accuracy: 0.0001)
+        XCTAssertEqual(prediction.confidence, 0.82)
+    }
+
+    func testPrivateRecoveryModelMatchesPythonExporterWhenAvailable() throws {
+        guard let model = RecoveryScoreModelBundle.load() else { return }
+        var features = model.imputerMedians
+        features[50] += 10
+        features[51] -= 2
+        features[52] = .nan
+        features[53] += 3
+
+        let prediction = try XCTUnwrap(model.prediction(features))
+
+        XCTAssertEqual(model.version, "whoop5_local_recovery_v1_gbt_ridge")
+        XCTAssertEqual(prediction.score, 64.61710245284407, accuracy: 0.0000001)
+        XCTAssertEqual(prediction.confidence, 0.82)
+    }
+
+    func testOfficialStepsOverrideOverlappingLocalDayAndJoinLocalTail() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("sleep.sqlite3")
+        let store = WhoopStore(databaseURL: databaseURL, runBackgroundDecoding: false)
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open_v2(databaseURL.path, &database, SQLITE_OPEN_READWRITE, nil), SQLITE_OK)
+        defer { if let database { sqlite3_close(database) } }
+        XCTAssertEqual(sqlite3_exec(database, """
+            INSERT INTO whoop_official_daily_metric
+                (date_key, official_recovery_score, official_steps,
+                 source_archive, source_manifest_sha256, imported_at)
+            VALUES ('2026-08-31', 91, 7493, 'archive', 'manifest', 0);
+            INSERT INTO whoop_daily_step_metric
+                (date_key, peripheral_id, step_count, sample_count, span_seconds,
+                 coverage_fraction, gap_seconds, counter_wrap_count, rejected_delta_count,
+                 source, algorithm_version, derived_at)
+            VALUES
+                ('2026-08-31', 'strap', 7000, 1, 1, 1, 0, 0, 0, 'local', 1, 0),
+                ('2026-09-01', 'strap', 8123, 1, 1, 1, 0, 0, 0, 'local', 1, 0);
+            """, nil, nil, nil), SQLITE_OK)
+
+        let records: [DailyStepRecord] = try await withCheckedThrowingContinuation { continuation in
+            store.loadDailyStepRecords { continuation.resume(with: $0) }
+        }
+
+        XCTAssertEqual(records.map(\.stepCount), [7_493, 8_123])
+        XCTAssertEqual(records.map(\.source), ["whoop_private_ios_api", "local"])
+        let recovery: [DailyRecoveryRecord] = try await withCheckedThrowingContinuation { continuation in
+            store.loadDailyRecoveryRecords { continuation.resume(with: $0) }
+        }
+        XCTAssertEqual(recovery.map(\.score), [91])
+        XCTAssertEqual(recovery.map(\.source), ["whoop_private_ios_api"])
     }
 
     func testSleepScoreFeaturesCaptureDurationEfficiencyAndRecentTiming() {

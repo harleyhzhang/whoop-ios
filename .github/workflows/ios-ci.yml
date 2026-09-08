@@ -18,6 +18,9 @@ jobs:
     env:
       WHOOP_HISTORY_SEED_PATH: /tmp/missing-whoop-history.json
       WHOOP_SCORE_MODEL_PATH: /tmp/missing-whoop-score-model.json
+      WHOOP_RECOVERY_MODEL_PATH: /tmp/missing-whoop-recovery-model.json
+      WHOOP_OFFICIAL_METRICS_PATH: /tmp/missing-whoop-official-metrics.json
+      WHOOP_OFFICIAL_ARCHIVE_PATH: /tmp/missing-whoop-official-archive.sqlite3
 
     steps:
       - name: Check out source
@@ -32,7 +35,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if git ls-files | grep -E '(^|/)(sleep\.sqlite3|whoop-history\.json|whoop-score-model\.json)$'; then
+          if git ls-files | grep -E '(^|/)(sleep\.sqlite3|whoop-history\.json|whoop-score-model\.json|whoop-recovery-model\.json|whoop-official-metrics\.json|whoop-official-archive\.sqlite3)$'; then
             echo "Private WHOOP runtime data must not be committed."
             exit 1
           fi
