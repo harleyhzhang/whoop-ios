@@ -1,7 +1,9 @@
 name: iOS CI
 
 on:
-  push:
+  # Hosted macOS runners are an explicit fallback. Normal verification runs
+  # locally via Tools/verify_local.sh so ordinary pushes consume no Actions.
+  workflow_dispatch:
 
 permissions:
   contents: read

@@ -1,11 +1,19 @@
 # WHOOP iOS
 
-[![iOS CI](https://github.com/harleyhzhang/whoop-ios/actions/workflows/ios-ci.yml/badge.svg)](https://github.com/harleyhzhang/whoop-ios/actions/workflows/ios-ci.yml)
+[![Manual iOS CI](https://github.com/harleyhzhang/whoop-ios/actions/workflows/ios-ci.yml/badge.svg)](https://github.com/harleyhzhang/whoop-ios/actions/workflows/ios-ci.yml)
 
 WHOOP iOS is an unofficial, native, offline-first personal iPhone client. It is
 intended to operate a personally owned WHOOP 5 directly,
 preserve the underlying data, and calculate transparent sleep and recovery
 metrics locally without depending on a WHOOP membership.
+
+## Local verification
+
+Run `Tools/verify_local.sh` before merging code changes. It rejects committed
+private runtime data, runs the unit tests, builds the Release configuration for
+the iOS Simulator, and runs Xcode's static analyzer. The GitHub Actions workflow
+is retained only as a manually dispatched fallback so pushes do not consume
+hosted macOS runner minutes.
 
 ## Product target
 
