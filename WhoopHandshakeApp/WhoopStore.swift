@@ -180,7 +180,9 @@ struct WhoopStepCounterSample: Sendable, Equatable {
 }
 
 struct WhoopStepDaySummary: Sendable, Equatable {
-    static let algorithmVersion = 1
+    /// Version 2 changes the day boundary from civil midnight to the latest
+    /// published wake. Counter math is otherwise unchanged.
+    static let algorithmVersion = 2
     /// A deliberately permissive physiological ceiling. Values above it are
     /// treated as counter resets/corruption rather than tens of thousands of
     /// fabricated steps; ordinary walk/run deltas are far below this bound.
@@ -255,6 +257,34 @@ struct WhoopStepDaySummary: Sendable, Equatable {
             firstSampleAt: first.timestamp,
             lastSampleAt: last.timestamp
         )
+    }
+}
+
+struct WhoopWakeBoundary: Sendable, Equatable {
+    let dateKey: String
+    let wokeAt: Date
+}
+
+enum WhoopPhysiologicalDay {
+    /// A day starts only when a completed sleep is published. Until then,
+    /// including after civil midnight and throughout sleep, movement remains
+    /// part of the preceding wake-to-sleep day.
+    static func dateKey(
+        for sampleAt: Date,
+        publishedWakes: [WhoopWakeBoundary],
+        civilFallback: String
+    ) -> String {
+        var lower = 0
+        var upper = publishedWakes.count
+        while lower < upper {
+            let middle = lower + (upper - lower) / 2
+            if publishedWakes[middle].wokeAt <= sampleAt {
+                lower = middle + 1
+            } else {
+                upper = middle
+            }
+        }
+        return lower > 0 ? publishedWakes[lower - 1].dateKey : civilFallback
     }
 }
 
@@ -397,6 +427,7 @@ final class WhoopStore: @unchecked Sendable {
     /// measurable source of CPU and allocator churn during history offloads.
     private var cachedStatements: [String: OpaquePointer] = [:]
     private var pendingStepDateKeys: Set<String> = []
+    private var cachedPublishedWakeBoundaries: [WhoopWakeBoundary]?
     private var nextDeliverySequence: Int64 = 1
     private static let logger = Logger(subsystem: "com.clintonst.sideload.sleep", category: "WhoopStore")
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
@@ -878,6 +909,7 @@ final class WhoopStore: @unchecked Sendable {
             importBundledHistory()
             importBundledOfficialMetrics()
             backfillLocalSleepScoresIfNeeded()
+            rebuildWakeAnchoredStepDaysIfNeeded()
             rebuildRecoveryMetricsIfNeeded()
         }
     }
@@ -1394,6 +1426,50 @@ final class WhoopStore: @unchecked Sendable {
         )
     }
 
+    private static func parseISO8601(_ value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        if let date = formatter.date(from: value) { return date }
+        formatter.formatOptions.insert(.withFractionalSeconds)
+        return formatter.date(from: value)
+    }
+
+    private func publishedWakeBoundaries(database: OpaquePointer) -> [WhoopWakeBoundary] {
+        if let cachedPublishedWakeBoundaries { return cachedPublishedWakeBoundaries }
+        let sql = """
+            SELECT date_key, sleep_end_at
+            FROM daily_health_metric
+            WHERE sleep_end_at IS NOT NULL
+            ORDER BY date_key ASC
+            """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return [] }
+        defer { sqlite3_finalize(statement) }
+        var boundaries: [WhoopWakeBoundary] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let dateKey = textColumn(statement, 0),
+                  let rawWake = textColumn(statement, 1),
+                  let wokeAt = Self.parseISO8601(rawWake) else { continue }
+            boundaries.append(WhoopWakeBoundary(dateKey: dateKey, wokeAt: wokeAt))
+        }
+        let sorted = boundaries.sorted { $0.wokeAt < $1.wokeAt }
+        cachedPublishedWakeBoundaries = sorted
+        return sorted
+    }
+
+    private func physiologicalStepDateKey(
+        for sampleAt: Date,
+        utcOffsetSeconds: Int,
+        database: OpaquePointer
+    ) -> String {
+        let fallback = Self.dateKey(for: sampleAt, utcOffsetSeconds: utcOffsetSeconds)
+        return WhoopPhysiologicalDay.dateKey(
+            for: sampleAt,
+            publishedWakes: publishedWakeBoundaries(database: database),
+            civilFallback: fallback
+        )
+    }
+
     private func addColumnIfNeeded(
         table: String,
         column: String,
@@ -1641,6 +1717,7 @@ final class WhoopStore: @unchecked Sendable {
         bind(record.sleepEfficiencyPercentage, to: 18, in: statement)
         bind(record.sleepSufficiencyPercentage, to: 19, in: statement)
         guard sqlite3_step(statement) == SQLITE_DONE else { return false }
+        cachedPublishedWakeBoundaries = nil
         if record.source == "whoop_api", let sleepJSON = record.sourceSleepPayloadJSON {
             return upsertWhoopAPISource(
                 dateKey: record.dateKey,
@@ -2299,6 +2376,144 @@ final class WhoopStore: @unchecked Sendable {
         return result == SQLITE_DONE ? dateKeys : nil
     }
 
+    /// One-time correction for data written by the old civil-midnight policy.
+    /// Official daily totals stay untouched; only the local raw-sample
+    /// projection is reassigned and rebuilt from retained evidence.
+    private func rebuildWakeAnchoredStepDaysIfNeeded() {
+        guard let database,
+              metadataValue(database: database, key: "wake-anchored-step-days") != "2"
+        else { return }
+        let boundaries = publishedWakeBoundaries(database: database)
+        guard !boundaries.isEmpty, execute("BEGIN IMMEDIATE") else { return }
+        guard execute("DELETE FROM whoop_daily_step_metric") else {
+            execute("ROLLBACK")
+            return
+        }
+        for (index, boundary) in boundaries.enumerated() {
+            let upperBound = boundaries.indices.contains(index + 1)
+                ? boundaries[index + 1].wokeAt.timeIntervalSince1970
+                : nil
+            guard assignStepSamples(
+                to: boundary.dateKey,
+                from: boundary.wokeAt.timeIntervalSince1970,
+                until: upperBound,
+                database: database
+            ) else {
+                execute("ROLLBACK")
+                return
+            }
+        }
+        guard let dateKeys = allStoredStepDateKeys(database: database),
+              rebuildDailySteps(for: dateKeys, database: database),
+              setMetadataValue(
+                  database: database,
+                  key: "wake-anchored-step-days",
+                  value: "2"
+              ),
+              execute("COMMIT") else {
+            execute("ROLLBACK")
+            return
+        }
+        pendingStepDateKeys.removeAll(keepingCapacity: true)
+        rebuildRecoveryMetricsIfNeeded(force: true)
+        if !dateKeys.isEmpty { publishStepUpdate() }
+    }
+
+    /// Re-buckets the newly published day's post-wake samples atomically with
+    /// its sleep metrics. Samples before this wake—including after midnight and
+    /// during the just-finished sleep—remain on the preceding day.
+    private func assignStepsToPublishedDay(
+        _ record: DailyHealthRecord,
+        database: OpaquePointer
+    ) -> Bool {
+        guard let wakeRaw = record.sleepEndAt,
+              let wokeAt = Self.parseISO8601(wakeRaw) else { return true }
+        // This helper normally runs inside the caller's transaction. Do not
+        // retain a boundary that could disappear if a later write rolls back.
+        defer { cachedPublishedWakeBoundaries = nil }
+        let boundaries = publishedWakeBoundaries(database: database)
+        let upperBound = boundaries
+            .filter { $0.wokeAt > wokeAt }
+            .map(\.wokeAt)
+            .min()?
+            .timeIntervalSince1970
+        let lowerBound = wokeAt.timeIntervalSince1970
+        guard let oldDateKeys = stepDateKeys(
+            from: lowerBound,
+            until: upperBound,
+            database: database
+        ), assignStepSamples(
+            to: record.dateKey,
+            from: lowerBound,
+            until: upperBound,
+            database: database
+        ) else { return false }
+
+        let affectedDateKeys = oldDateKeys.union([record.dateKey])
+        for dateKey in affectedDateKeys {
+            guard deleteLocalStepMetric(dateKey: dateKey, database: database) else {
+                return false
+            }
+        }
+        guard rebuildDailySteps(for: affectedDateKeys, database: database) else {
+            return false
+        }
+        pendingStepDateKeys.subtract(affectedDateKeys)
+        return true
+    }
+
+    private func stepDateKeys(
+        from lowerBound: TimeInterval,
+        until upperBound: TimeInterval?,
+        database: OpaquePointer
+    ) -> Set<String>? {
+        let sql = """
+            SELECT DISTINCT step_date_key
+            FROM whoop_historical_sample
+            WHERE step_motion_counter IS NOT NULL AND sample_at >= ?
+              AND (? IS NULL OR sample_at < ?)
+              AND step_date_key IS NOT NULL
+            """
+        guard let statement = cachedStatement(database: database, sql: sql) else { return nil }
+        sqlite3_bind_double(statement, 1, lowerBound)
+        bind(upperBound, to: 2, in: statement)
+        bind(upperBound, to: 3, in: statement)
+        var dateKeys: Set<String> = []
+        var result = sqlite3_step(statement)
+        while result == SQLITE_ROW {
+            if let dateKey = textColumn(statement, 0) { dateKeys.insert(dateKey) }
+            result = sqlite3_step(statement)
+        }
+        return result == SQLITE_DONE ? dateKeys : nil
+    }
+
+    private func assignStepSamples(
+        to dateKey: String,
+        from lowerBound: TimeInterval,
+        until upperBound: TimeInterval?,
+        database: OpaquePointer
+    ) -> Bool {
+        let sql = """
+            UPDATE whoop_historical_sample
+            SET step_date_key = ?
+            WHERE step_motion_counter IS NOT NULL AND sample_at >= ?
+              AND (? IS NULL OR sample_at < ?)
+            """
+        guard let statement = cachedStatement(database: database, sql: sql) else { return false }
+        bind(dateKey, to: 1, in: statement)
+        sqlite3_bind_double(statement, 2, lowerBound)
+        bind(upperBound, to: 3, in: statement)
+        bind(upperBound, to: 4, in: statement)
+        return sqlite3_step(statement) == SQLITE_DONE
+    }
+
+    private func deleteLocalStepMetric(dateKey: String, database: OpaquePointer) -> Bool {
+        let sql = "DELETE FROM whoop_daily_step_metric WHERE date_key = ?"
+        guard let statement = cachedStatement(database: database, sql: sql) else { return false }
+        bind(dateKey, to: 1, in: statement)
+        return sqlite3_step(statement) == SQLITE_DONE
+    }
+
     private func rebuildDailySteps(for dateKeys: Set<String>, database: OpaquePointer) -> Bool {
         guard !dateKeys.isEmpty else { return true }
         let selectSQL = """
@@ -2499,9 +2714,10 @@ final class WhoopStore: @unchecked Sendable {
             database: database,
             sampleAt: sample.sampleAt
         )
-        let stepDateKey = Self.dateKey(
+        let stepDateKey = physiologicalStepDateKey(
             for: sample.sampleAt,
-            utcOffsetSeconds: utcOffsetSeconds
+            utcOffsetSeconds: utcOffsetSeconds,
+            database: database
         )
         let sql = """
             INSERT INTO whoop_historical_sample
@@ -3088,7 +3304,7 @@ final class WhoopStore: @unchecked Sendable {
             // a newer partial chunk invalidates it until the next COMPLETE.
             let coherentHistory = allowAutomaticFinalization
                 && completedOffloadCoversLatestHistory(database: database)
-            var newest: DailyHealthRecord?
+            var publishable: [DailyHealthRecord] = []
             for candidate in candidates
                 where coherentHistory
                     && candidate.meetsEvidenceGates
@@ -3096,8 +3312,17 @@ final class WhoopStore: @unchecked Sendable {
                 guard shouldDerive(candidate: candidate, database: database) else { continue }
                 let record = derivedRecord(for: candidate, now: now)
                 guard record.hasCompletePrimarySleepMetrics else { continue }
-                if upsertLocalDailyHealthRecord(record, database: database) {
-                    newest = record
+                publishable.append(record)
+            }
+            var newest: DailyHealthRecord?
+            if !publishable.isEmpty, execute("BEGIN IMMEDIATE") {
+                let succeeded = publishable.allSatisfy {
+                    upsertLocalDailyHealthRecord($0, database: database)
+                }
+                if succeeded, execute("COMMIT") {
+                    newest = publishable.last
+                } else {
+                    execute("ROLLBACK")
                 }
             }
             if newest != nil { rebuildRecoveryMetricsIfNeeded(force: true) }
@@ -3818,7 +4043,9 @@ final class WhoopStore: @unchecked Sendable {
         bind(record.sleepConsistencyPercentage, to: 17, in: statement)
         bind(record.sleepEfficiencyPercentage, to: 18, in: statement)
         bind(record.sleepSufficiencyPercentage, to: 19, in: statement)
-        return sqlite3_step(statement) == SQLITE_DONE
+        guard sqlite3_step(statement) == SQLITE_DONE else { return false }
+        cachedPublishedWakeBoundaries = nil
+        return assignStepsToPublishedDay(record, database: database)
     }
 
     /// Score-model backfills must not erase a previously valid HRV or RHR if
@@ -3853,7 +4080,9 @@ final class WhoopStore: @unchecked Sendable {
         bind(record.sleepNeedMinutes, to: 11, in: statement)
         bind(record.sleepSufficiencyPercentage, to: 12, in: statement)
         bind(record.dateKey, to: 13, in: statement)
-        return sqlite3_step(statement) == SQLITE_DONE
+        let succeeded = sqlite3_step(statement) == SQLITE_DONE
+        if succeeded { cachedPublishedWakeBoundaries = nil }
+        return succeeded
     }
 
     static let dateKeyFormatter: DateFormatter = {

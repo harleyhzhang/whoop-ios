@@ -16,8 +16,17 @@ struct RootView: View {
     @ObservedObject var whoopCollector: WhoopHandshakeProbe
     @StateObject private var history = HealthHistoryModel()
 
+    private var publishedDay: PublishedDashboardDay {
+        PublishedDashboardDay(
+            healthRecords: history.records,
+            stepRecords: history.stepRecords,
+            recoveryRecords: history.recoveryRecords,
+            isWakePending: sleepMetricsArePending
+        )
+    }
+
     private var referenceDate: Date {
-        sleepMetricsArePending ? currentDate : (currentSleepRecord?.date ?? currentDate)
+        sleepMetricsArePending ? currentDate : (publishedDay.date ?? currentDate)
     }
 
     /// A range is offered only when the history is long enough to mean anything
@@ -35,13 +44,8 @@ struct RootView: View {
         }
     }
 
-    private var todayRecord: DailyHealthRecord? {
-        history.records.last { Calendar.current.isDate($0.date, inSameDayAs: currentDate) }
-    }
-
     private var currentSleepRecord: DailyHealthRecord? {
-        guard !sleepMetricsArePending else { return nil }
-        return todayRecord ?? history.latestRecord
+        publishedDay.health
     }
 
     private var sleepMetricsArePending: Bool {
@@ -501,17 +505,11 @@ struct RootView: View {
     }
 
     private var summarySteps: String {
-        let record = history.stepRecords.last {
-            Calendar.current.isDate($0.date, inSameDayAs: currentDate)
-        } ?? history.stepRecords.last
-        return record.map { formatSteps(Double($0.stepCount)) } ?? "—"
+        publishedDay.steps.map { formatSteps(Double($0.stepCount)) } ?? "—"
     }
 
     private var summaryRecovery: String {
-        let record = history.recoveryRecords.last {
-            Calendar.current.isDate($0.date, inSameDayAs: currentDate)
-        } ?? history.recoveryRecords.last
-        return record.map { "\(Int($0.score.rounded()))%" } ?? "—"
+        publishedDay.recovery.map { "\(Int($0.score.rounded()))%" } ?? "—"
     }
 
     private var summaryRHR: String {
@@ -527,23 +525,23 @@ struct RootView: View {
         color: Color,
         formatValue: @escaping (Double) -> String
     ) -> some View {
-        let cardSelection = activeMetric == metric ? selectedDate : nil
+        let cardSelection = !sleepMetricsArePending && activeMetric == metric
+            ? selectedDate
+            : nil
         let selectedMetricPoint: MetricPoint? = cardSelection.flatMap {
             self.selectedPoint(in: series.plotted, near: $0)
         }
-        let usesLatestTimelinePoint = metric == .steps || metric == .recovery
-        let currentTimelinePoint = usesLatestTimelinePoint
-            ? series.daily.last { Calendar.current.isDate($0.date, inSameDayAs: currentDate) } ?? series.daily.last
-            : nil
-        let currentValue = usesLatestTimelinePoint
-            ? currentTimelinePoint?.value
-            : metricValue(for: metric, in: currentSleepRecord)
-        let displayedValue = cardSelection == nil ? currentValue : selectedMetricPoint?.value
+        let currentValue: Double? = switch metric {
+        case .steps: publishedDay.steps.map { Double($0.stepCount) }
+        case .recovery: publishedDay.recovery?.score
+        default: metricValue(for: metric, in: publishedDay.health)
+        }
+        let displayedValue = sleepMetricsArePending
+            ? nil
+            : (cardSelection == nil ? currentValue : selectedMetricPoint?.value)
         let value = displayedValue.map(formatValue) ?? "—"
         let valueDateLabel = cardSelection == nil
-            ? (usesLatestTimelinePoint
-                ? currentTimelinePoint.map { selectionLabel(for: $0.date) } ?? "No real data"
-                : "Today")
+            ? publishedDay.date.map { selectionLabel(for: $0) } ?? "Today"
             : selectedMetricPoint.map { selectionLabel(for: $0.date) } ?? "No real data"
 
         return VStack(alignment: .leading, spacing: 7) {
