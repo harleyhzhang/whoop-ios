@@ -18,6 +18,9 @@
   layer may reuse compatible NOOP packages after license and integration review.
 - Verify UI changes by building for an iPhone simulator and, when requested,
   installing on Harley's paired development iPhone.
+- Run `Tools/verify_local.sh` before merging code changes. Hosted iOS CI is a
+  manual fallback only; do not trigger it unless local verification is blocked
+  or Harley explicitly requests a hosted run.
 - Do not add an app-side manual sync control for the hosted replica or for
   memory. Memory reads are initiated from the Mac side. The dashboard's Process
   control is not a sync button: it finalizes a night already collected on the
