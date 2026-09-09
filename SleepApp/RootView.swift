@@ -238,9 +238,13 @@ struct RootView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .whoopDailyHealthUpdated)) { notification in
             currentDate = .now
-            // Show the finished night on the next frame; the full reload behind it
-            // only has to agree, not to be waited for.
-            if let record = notification.object as? DailyHealthRecord {
+            guard let update = notification.object as? WhoopHealthHistoryUpdate else {
+                history.reload()
+                return
+            }
+            // Show a finished night on the next frame. The atomic reload behind
+            // it verifies all three metric families from one database generation.
+            if case .dayPublished(let record) = update {
                 withAnimation(.smooth(duration: 0.42)) {
                     history.merge(record)
                 }
