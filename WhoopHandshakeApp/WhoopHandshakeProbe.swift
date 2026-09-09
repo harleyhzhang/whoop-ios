@@ -281,7 +281,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
                    record.sleepID != self.lastFinalizedSleepID {
                     self.lastFinalizedSleepID = record.sleepID
                     WhoopNotificationManager.shared.sendMorningSummary(for: record)
-                    NotificationCenter.default.post(name: .whoopDailyHealthUpdated, object: record)
+                    WhoopHealthHistoryEvents.post(.dayPublished(record))
                 }
             }
         }
@@ -356,7 +356,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
                     self.pendingSleep = nil
                     self.isProcessingSleep = false
                     AppHaptics.success()
-                    NotificationCenter.default.post(name: .whoopDailyHealthUpdated, object: record)
+                    WhoopHealthHistoryEvents.post(.dayPublished(record))
                     self.refreshSleepSnapshot(force: true)
 
                 case .failure(.historyStillLoading):

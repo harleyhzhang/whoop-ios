@@ -492,7 +492,9 @@ The workflow is safe to rerun because identity travels with the data:
 - official daily rows upsert by civil date but retain source archive and
   response/manifest hashes;
 - local Steps rebuild only from stored historical samples and carry an
-  algorithm version;
+  algorithm version; version 2 assigns samples to wake-anchored days, so
+  movement after midnight but before the next completed sleep remains on the
+  preceding day and existing civil-day projections rebuild from raw counters;
 - local Recovery rows rebuild when the model version changes and retain their
   complete input vector; and
 - a failed SQLite transaction rolls back instead of marking the import or
@@ -706,6 +708,9 @@ Then verify behavior, not only row counts:
 
 - the app launches without a sample-data fallback;
 - the compact summary reads Sleep, Duration, Steps, Recovery, and RHR;
+- a detected or processing sleep makes every current-day headline—Sleep,
+  Duration, Steps, Recovery, RHR, and HRV—an em dash until the wake is manually
+  or automatically published;
 - Steps appears as `Steps`, with no `Beta` label, and spans the official/local
   boundary without duplicate days;
 - Recovery follows Steps, historical dates show exact official targets, and

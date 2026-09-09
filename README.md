@@ -95,7 +95,10 @@ discipline, and the limits of historical recovery.
   motion access. The store retains the counter, cadence-like byte, motion-class
   byte, civil-date offset, source packet, sample/span coverage, missing seconds,
   wrap count, rejected deltas, source, and algorithm version. The UI title is
-  simply `Steps`.
+  simply `Steps`. Local days are wake-anchored rather than midnight-anchored:
+  movement after midnight and before the next completed sleep remains part of
+  the preceding day. Publishing the wake atomically opens the next day and
+  re-buckets already-collected post-wake samples from retained counters.
 - A `Recovery` trend card follows Steps. Historical points use 316 exact
   official scores. Future points use
   a versioned 70% gradient-boosting / 30% ridge model over independently
@@ -220,9 +223,11 @@ discipline, and the limits of historical recovery.
   the dashboard continues showing the latest completed night. As soon as the
   band detects sleep, the compact card says only `Sleep detected`—never a
   provisional duration—and remains visible through waking and processing.
-  While the band reports sleep—or the interim `up` state inside the same
-  night—the four sleep-derived metrics show dashes and Process is unavailable;
-  after waking the `Process` control remains until the night is stored or
+  From detection until manual or automatic processing atomically publishes the
+  wake, every current-day value—Sleep, Duration, Steps, Recovery, RHR, and
+  HRV—shows an em dash. One shared published-day projection owns all six values,
+  so no card can independently fall back to a stale timeline point. Process
+  remains available as the manual wake assertion until storage succeeds or
   automatic processing wins.
   The automatic path still requires at least three hours of detected sleep,
   50% observed-session coverage, thirty minutes of banked wake data, and thirty

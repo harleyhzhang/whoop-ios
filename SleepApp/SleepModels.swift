@@ -5,6 +5,18 @@ extension Notification.Name {
     static let whoopDailyHealthUpdated = Notification.Name("whoopDailyHealthUpdated")
 }
 
+enum WhoopHealthHistoryUpdate: Sendable {
+    case dayPublished(DailyHealthRecord)
+    case projectionsChanged
+}
+
+@MainActor
+enum WhoopHealthHistoryEvents {
+    static func post(_ update: WhoopHealthHistoryUpdate) {
+        NotificationCenter.default.post(name: .whoopDailyHealthUpdated, object: update)
+    }
+}
+
 struct DailyHealthRecord: Codable, Hashable, Identifiable, Sendable {
     let dateKey: String
     let sleepScore: Double?
@@ -188,6 +200,47 @@ struct DailyRecoveryRecord: Hashable, Identifiable, Sendable {
         components.hour = 12
         return components.date ?? .distantPast
     }
+}
+
+/// One coherent, wake-published dashboard day. A detected or processing sleep
+/// is the boundary between days, so no metric may independently fall back to a
+/// stale or provisional timeline point while that boundary is unpublished.
+struct PublishedDashboardDay: Sendable {
+    let health: DailyHealthRecord?
+    let steps: DailyStepRecord?
+    let recovery: DailyRecoveryRecord?
+
+    init(
+        healthRecords: [DailyHealthRecord],
+        stepRecords: [DailyStepRecord],
+        recoveryRecords: [DailyRecoveryRecord],
+        isWakePending: Bool
+    ) {
+        guard !isWakePending,
+              let health = healthRecords.last,
+              let steps = stepRecords.last(where: { $0.dateKey == health.dateKey }),
+              let recovery = recoveryRecords.last(where: { $0.dateKey == health.dateKey }) else {
+            self.health = nil
+            self.steps = nil
+            self.recovery = nil
+            return
+        }
+
+        self.health = health
+        self.steps = steps
+        self.recovery = recovery
+    }
+
+    var date: Date? { health?.date }
+}
+
+/// One database-generation of every history family consumed by the dashboard.
+/// The store constructs this inside one SQLite read transaction so a write can
+/// never land between the health, step, and recovery queries.
+struct DashboardHistorySnapshot: Sendable {
+    let healthRecords: [DailyHealthRecord]
+    let stepRecords: [DailyStepRecord]
+    let recoveryRecords: [DailyRecoveryRecord]
 }
 
 struct SleepScoreNight: Sendable, Equatable {
@@ -775,38 +828,23 @@ final class HealthHistoryModel: ObservableObject {
         let generation = reloadGeneration
         isLoading = true
         let store = store
-        store.loadDailyHealthRecords { [weak self] result in
-            store.loadDailyStepRecords { stepResult in
-                store.loadDailyRecoveryRecords { recoveryResult in
-                    Task { @MainActor in
-                        guard let self, generation == self.reloadGeneration else { return }
-                        var errors: [String] = []
-                        switch result {
-                        case .success(let records):
-                            self.records = records
-                        case .failure(let error):
-                            errors.append(error.localizedDescription)
-                        }
-                        switch stepResult {
-                        case .success(let records):
-                            self.stepRecords = records
-                        case .failure(let error):
-                            errors.append(error.localizedDescription)
-                        }
-                        switch recoveryResult {
-                        case .success(let records):
-                            self.recoveryRecords = records
-                        case .failure(let error):
-                            errors.append(error.localizedDescription)
-                        }
-                        // Preserve every last known-good dataset through a
-                        // transient read failure instead of blanking its chart.
-                        self.seriesCache.removeAll(keepingCapacity: true)
-                        self.dateCache.removeAll(keepingCapacity: true)
-                        self.errorMessage = errors.isEmpty ? nil : errors.joined(separator: "\n")
-                        self.isLoading = false
-                    }
+        store.loadDashboardHistory { [weak self] result in
+            Task { @MainActor in
+                guard let self, generation == self.reloadGeneration else { return }
+                switch result {
+                case .success(let snapshot):
+                    self.records = snapshot.healthRecords
+                    self.stepRecords = snapshot.stepRecords
+                    self.recoveryRecords = snapshot.recoveryRecords
+                    self.errorMessage = nil
+                case .failure(let error):
+                    // Preserve every last known-good dataset through a
+                    // transient read failure instead of blanking its charts.
+                    self.errorMessage = error.localizedDescription
                 }
+                self.seriesCache.removeAll(keepingCapacity: true)
+                self.dateCache.removeAll(keepingCapacity: true)
+                self.isLoading = false
             }
         }
     }

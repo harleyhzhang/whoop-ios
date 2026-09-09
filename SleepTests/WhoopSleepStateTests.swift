@@ -3,6 +3,119 @@ import SQLite3
 @testable import Sleep
 
 final class WhoopSleepStateTests: XCTestCase {
+    func testPendingWakeSuppressesEveryDashboardMetric() {
+        let health = dailyHealthRecord(dateKey: "2026-09-08")
+        let day = PublishedDashboardDay(
+            healthRecords: [health],
+            stepRecords: [dailyStepRecord(dateKey: health.dateKey, stepCount: 8_432)],
+            recoveryRecords: [DailyRecoveryRecord(
+                dateKey: health.dateKey,
+                score: 82,
+                source: "synthetic"
+            )],
+            isWakePending: true
+        )
+
+        XCTAssertNil(day.health)
+        XCTAssertNil(day.steps)
+        XCTAssertNil(day.recovery)
+        XCTAssertNil(day.date)
+    }
+
+    func testPublishedDashboardMetricsShareOneDayKey() throws {
+        let health = dailyHealthRecord(dateKey: "2026-09-08")
+        let day = PublishedDashboardDay(
+            healthRecords: [health],
+            stepRecords: [
+                dailyStepRecord(dateKey: health.dateKey, stepCount: 8_432),
+                dailyStepRecord(dateKey: "2026-09-09", stepCount: 17),
+            ],
+            recoveryRecords: [
+                DailyRecoveryRecord(dateKey: health.dateKey, score: 82, source: "synthetic"),
+                DailyRecoveryRecord(dateKey: "2026-09-09", score: 91, source: "synthetic"),
+            ],
+            isWakePending: false
+        )
+
+        XCTAssertEqual(try XCTUnwrap(day.health).dateKey, health.dateKey)
+        XCTAssertEqual(try XCTUnwrap(day.steps).dateKey, health.dateKey)
+        XCTAssertEqual(try XCTUnwrap(day.recovery).dateKey, health.dateKey)
+    }
+
+    func testPublishedDashboardWaitsForEveryMetricFamily() {
+        let health = dailyHealthRecord(dateKey: "2026-09-08")
+        let day = PublishedDashboardDay(
+            healthRecords: [health],
+            stepRecords: [dailyStepRecord(dateKey: health.dateKey, stepCount: 8_432)],
+            recoveryRecords: [],
+            isWakePending: false
+        )
+
+        XCTAssertNil(day.health)
+        XCTAssertNil(day.steps)
+        XCTAssertNil(day.recovery)
+    }
+
+    func testDashboardHistoryLoadsEveryMetricFamilyInOneSnapshot() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("sleep.sqlite3")
+        let store = WhoopStore(databaseURL: databaseURL, runBackgroundDecoding: false)
+        defer { store.shutdownForTesting() }
+
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(databaseURL.path, &database), SQLITE_OK)
+        guard let database else { throw XCTSkip("Could not open SQLite fixture") }
+        XCTAssertEqual(sqlite3_exec(database, """
+            INSERT INTO daily_health_metric
+                (date_key, sleep_score, sleep_duration_minutes,
+                 hrv_rmssd_milliseconds, resting_heart_rate_bpm,
+                 source, source_updated_at, imported_at)
+            VALUES ('2026-09-09', 88, 480, 64, 52,
+                    'synthetic', '2026-09-09T12:00:00Z', 0);
+            INSERT INTO whoop_official_daily_metric
+                (date_key, official_recovery_score, official_steps,
+                 source_archive, source_manifest_sha256, imported_at)
+            VALUES ('2026-09-09', 81, 5432, 'synthetic', 'synthetic', 0);
+            """, nil, nil, nil), SQLITE_OK)
+        sqlite3_close(database)
+
+        let snapshot = try await dashboardSnapshot(store: store)
+
+        XCTAssertEqual(snapshot.healthRecords.map(\.dateKey), ["2026-09-09"])
+        XCTAssertEqual(snapshot.stepRecords.map(\.dateKey), ["2026-09-09"])
+        XCTAssertEqual(snapshot.recoveryRecords.map(\.dateKey), ["2026-09-09"])
+        XCTAssertEqual(snapshot.stepRecords.first?.stepCount, 5_432)
+        XCTAssertEqual(snapshot.recoveryRecords.first?.score, 81)
+    }
+
+    func testPhysiologicalDayDoesNotRollAtMidnightBeforeWake() {
+        let firstWake = Date(timeIntervalSince1970: 1_000)
+        let nextWake = Date(timeIntervalSince1970: 100_000)
+        let boundaries = [
+            WhoopWakeBoundary(dateKey: "2026-09-08", wokeAt: firstWake),
+            WhoopWakeBoundary(dateKey: "2026-09-09", wokeAt: nextWake),
+        ]
+
+        XCTAssertEqual(
+            WhoopPhysiologicalDay.dateKey(
+                for: nextWake.addingTimeInterval(-1),
+                publishedWakes: boundaries,
+                civilFallback: "2026-09-09"
+            ),
+            "2026-09-08"
+        )
+        XCTAssertEqual(
+            WhoopPhysiologicalDay.dateKey(
+                for: nextWake,
+                publishedWakes: boundaries,
+                civilFallback: "2026-09-09"
+            ),
+            "2026-09-09"
+        )
+    }
+
     func testReconnectPolicyBacksOffAndCapsAtOneMinute() {
         XCTAssertEqual(WhoopReconnectPolicy.delaySeconds(forAttempt: 0), 2)
         XCTAssertEqual(WhoopReconnectPolicy.delaySeconds(forAttempt: 1), 4)
@@ -643,6 +756,56 @@ final class WhoopSleepStateTests: XCTestCase {
         XCTAssertEqual(record.algorithmVersion, WhoopStepDaySummary.algorithmVersion)
     }
 
+    func testStepMaterializationUsesPublishedWakeInsteadOfMidnight() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("sleep.sqlite3")
+        let store = WhoopStore(databaseURL: databaseURL, runBackgroundDecoding: false)
+        defer { store.shutdownForTesting() }
+
+        let parser = ISO8601DateFormatter()
+        let firstWake = try XCTUnwrap(parser.date(from: "2027-01-14T15:00:00Z"))
+        let nextWake = try XCTUnwrap(parser.date(from: "2027-01-15T15:00:00Z"))
+        try insertWakeBoundary(dateKey: "2027-01-14", wokeAt: firstWake, databaseURL: databaseURL)
+        try insertWakeBoundary(dateKey: "2027-01-15", wokeAt: nextWake, databaseURL: databaseURL)
+
+        let peripheral = UUID()
+        let samples: [(TimeInterval, UInt16)] = [
+            (firstWake.timeIntervalSince1970 + 100, 100),
+            // 2 a.m. local civil time: still Jan 14's physiological day.
+            (nextWake.timeIntervalSince1970 - 8 * 60 * 60, 150),
+            (nextWake.timeIntervalSince1970, 150),
+            (nextWake.timeIntervalSince1970 + 100, 160),
+        ]
+        for (timestamp, counter) in samples {
+            let result = try await append(
+                version18Frame(
+                    timestamp: UInt32(timestamp),
+                    sleepState: 0,
+                    stepCounter: counter
+                ),
+                store: store,
+                peripheral: peripheral,
+                sessionID: nil
+            )
+            XCTAssertTrue(result.success)
+        }
+        let completion = try await append(
+            metadataFrame(type: 3),
+            store: store,
+            peripheral: peripheral,
+            sessionID: nil
+        )
+        XCTAssertTrue(completion.success)
+
+        let records: [DailyStepRecord] = try await withCheckedThrowingContinuation { continuation in
+            store.loadDailyStepRecords { continuation.resume(with: $0) }
+        }
+        XCTAssertEqual(records.map(\.dateKey), ["2027-01-14", "2027-01-15"])
+        XCTAssertEqual(records.map(\.stepCount), [50, 10])
+    }
+
     func testMotionBackfillRebuildsPreviouslyDecodedDaysAfterRestart() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -721,6 +884,54 @@ final class WhoopSleepStateTests: XCTestCase {
         XCTAssertEqual(scalarInt(snapshot, sql: "PRAGMA user_version"), 6)
         XCTAssertEqual(scalarInt(snapshot, sql: "SELECT COUNT(*) FROM evidence"), 1)
         XCTAssertEqual(scalarText(snapshot, sql: "PRAGMA quick_check"), "ok")
+    }
+
+    func testHistoricalInsertReleasesCachedTimezoneReaderForCheckpoint() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("sleep.sqlite3")
+        let store = WhoopStore(databaseURL: databaseURL, runBackgroundDecoding: false)
+        defer { store.shutdownForTesting() }
+
+        let packet = version18Frame(
+            timestamp: UInt32(Date().timeIntervalSince1970),
+            sleepState: 0,
+            stepCounter: 100
+        )
+        let persisted = try await append(
+            packet,
+            store: store,
+            peripheral: UUID(),
+            sessionID: nil
+        )
+        XCTAssertTrue(persisted.success)
+
+        var checkpointConnection: OpaquePointer?
+        XCTAssertEqual(
+            sqlite3_open_v2(
+                databaseURL.path,
+                &checkpointConnection,
+                SQLITE_OPEN_READWRITE,
+                nil
+            ),
+            SQLITE_OK
+        )
+        guard let checkpointConnection else { throw XCTSkip("Could not open checkpoint fixture") }
+        defer { sqlite3_close(checkpointConnection) }
+        var logFrames: Int32 = 0
+        var checkpointedFrames: Int32 = 0
+        XCTAssertEqual(
+            sqlite3_wal_checkpoint_v2(
+                checkpointConnection,
+                nil,
+                SQLITE_CHECKPOINT_TRUNCATE,
+                &logFrames,
+                &checkpointedFrames
+            ),
+            SQLITE_OK,
+            "A cached SELECT must not retain a reader after packet persistence finishes"
+        )
     }
 
     func testMigrationSnapshotRemovesStaleTemporarySidecars() throws {
@@ -1138,6 +1349,62 @@ final class WhoopSleepStateTests: XCTestCase {
         )
     }
 
+    private func dailyHealthRecord(dateKey: String) -> DailyHealthRecord {
+        DailyHealthRecord(
+            dateKey: dateKey,
+            sleepScore: 88,
+            sleepDurationMinutes: 480,
+            hrvRMSSDMilliseconds: 64,
+            restingHeartRateBPM: 52,
+            sleepID: "synthetic-\(dateKey)",
+            cycleID: nil,
+            source: "synthetic",
+            sourceArchive: nil,
+            sourceUpdatedAt: "2026-09-09T12:00:00Z"
+        )
+    }
+
+    private func dailyStepRecord(dateKey: String, stepCount: Int) -> DailyStepRecord {
+        DailyStepRecord(
+            dateKey: dateKey,
+            stepCount: stepCount,
+            sampleCount: 2,
+            spanSeconds: 2,
+            coverageFraction: 1,
+            gapSeconds: 0,
+            counterWrapCount: 0,
+            rejectedDeltaCount: 0,
+            firstSampleAt: nil,
+            lastSampleAt: nil,
+            source: "synthetic",
+            algorithmVersion: WhoopStepDaySummary.algorithmVersion
+        )
+    }
+
+    private func insertWakeBoundary(
+        dateKey: String,
+        wokeAt: Date,
+        databaseURL: URL
+    ) throws {
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(databaseURL.path, &database), SQLITE_OK)
+        guard let database else { throw XCTSkip("Could not open SQLite fixture") }
+        defer { sqlite3_close(database) }
+        let sql = """
+            INSERT INTO daily_health_metric
+            (date_key, source, source_updated_at, imported_at, sleep_end_at)
+            VALUES (?, 'synthetic', '2027-01-15T12:00:00Z', 0, ?)
+            """
+        var statement: OpaquePointer?
+        XCTAssertEqual(sqlite3_prepare_v2(database, sql, -1, &statement, nil), SQLITE_OK)
+        guard let statement else { throw XCTSkip("Could not prepare SQLite fixture") }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, dateKey, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        let wake = ISO8601DateFormatter().string(from: wokeAt)
+        sqlite3_bind_text(statement, 2, wake, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        XCTAssertEqual(sqlite3_step(statement), SQLITE_DONE)
+    }
+
     private func row(at timestamp: TimeInterval, state: Int) -> WhoopStore.HistoricalRow {
         WhoopStore.HistoricalRow(
             timestamp: timestamp,
@@ -1286,6 +1553,16 @@ final class WhoopSleepStateTests: XCTestCase {
                 continuation.resume(returning: $0)
             }
         }
+    }
+
+    private func dashboardSnapshot(store: WhoopStore) async throws -> DashboardHistorySnapshot {
+        let result: Result<DashboardHistorySnapshot, Error> = await withCheckedContinuation {
+            continuation in
+            store.loadDashboardHistory {
+                continuation.resume(returning: $0)
+            }
+        }
+        return try result.get()
     }
 
     private func scalarInt(_ database: OpaquePointer?, sql: String) -> Int64 {
