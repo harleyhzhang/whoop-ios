@@ -616,8 +616,7 @@ struct RootView: View {
         let averageOpacity = chartSelection == nil ? averageLevelOpacity : 0
         let longRangeStyle = longRangeStyleProgress
         let lineOpacity = interpolated(1, 0.3, progress: longRangeStyle)
-        let areaTopOpacity = interpolated(0.26, 0.07, progress: longRangeStyle)
-        let areaBottomOpacity = interpolated(0.015, 0.004, progress: longRangeStyle)
+        let areaOpacity = interpolated(0.26, 0.07, progress: longRangeStyle)
         let highlightedPoint = selectedPoint(in: plottedPoints, near: chartSelection) ?? plottedPoints.last!
         let highlightedPosition = normalizedPosition(of: highlightedPoint, in: plottedPoints)
         let highlightedValue = chartSelection == nil
@@ -643,13 +642,14 @@ struct RootView: View {
                     .foregroundStyle(
                         LinearGradient(
                             colors: [
-                                color.opacity(areaTopOpacity),
-                                color.opacity(areaBottomOpacity)
+                                color,
+                                color.opacity(0.015 / 0.26)
                             ],
                             startPoint: .top,
                             endPoint: .bottom
                         )
                     )
+                    .opacity(areaOpacity)
 
                     LineMark(
                         x: .value("Position", point.position),
@@ -657,7 +657,11 @@ struct RootView: View {
                     )
                     .interpolationMethod(.monotone)
                     .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
-                    .foregroundStyle(color.opacity(lineOpacity))
+                    // Swift Charts uses foreground style to group an unkeyed
+                    // line into a series. Keep that identity stable while the
+                    // dedicated mark opacity participates in the animation.
+                    .foregroundStyle(color)
+                    .opacity(lineOpacity)
                 }
 
                 if averageOpacity > 0.001 {
@@ -716,7 +720,8 @@ struct RootView: View {
                     y: .value(title, highlightedValue)
                 )
                 .symbolSize(48)
-                .foregroundStyle(color.opacity(lineOpacity))
+                .foregroundStyle(color)
+                .opacity(lineOpacity)
             }
             .chartYScale(domain: domain)
             // The colored curve and its y-domain morph together between every
