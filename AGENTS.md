@@ -18,6 +18,22 @@
   layer may reuse compatible NOOP packages after license and integration review.
 - Verify UI changes by building for an iPhone simulator and, when requested,
   installing on Harley's paired development iPhone.
+- Before every physical-phone install, run `Tools/phone_install_policy.sh`
+  against the last installed commit recorded in the private install-state file.
+  Follow its result; do not substitute an ad hoc full container copy:
+  - `none`: do not reinstall.
+  - `fast`: for presentation-only changes, verify a recent known-good full
+    backup exists, install the exact merged build in place, confirm the data-
+    container UUID is unchanged, launch it, and confirm the process plus
+    database/WAL modification times advance. Do not transfer the 1+ GB database.
+  - `full`: for storage, schema, migration, model, collector, lifecycle, bundle-
+    identity, build-system, or unclassified production changes, take coherent
+    suspended pre- and post-install snapshots and validate standalone SQLite
+    images. Prefer a wired CoreDevice connection for these large transfers.
+  The classifier fails closed to `full` when its baseline or classification is
+  uncertain. After successful verification, update the private install-state
+  file with the exact installed commit, data-container UUID, verification mode,
+  and latest known-good full backup. Never commit that state file.
 - Run `Tools/verify_local.sh` before merging code changes. Hosted iOS CI is a
   manual fallback only; do not trigger it unless local verification is blocked
   or Harley explicitly requests a hosted run.
