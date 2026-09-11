@@ -617,6 +617,7 @@ struct RootView: View {
         let longRangeStyle = longRangeStyleProgress
         let lineOpacity = interpolated(1, 0.3, progress: longRangeStyle)
         let areaOpacity = interpolated(0.26, 0.07, progress: longRangeStyle)
+        let markerSymbolArea: CGFloat = 48
         let highlightedPoint = selectedPoint(in: plottedPoints, near: chartSelection) ?? plottedPoints.last!
         let requestedHighlightPosition = normalizedPosition(of: highlightedPoint, in: plottedPoints)
         // The colored trend is drawn through the resampled morph points, not
@@ -694,6 +695,9 @@ struct RootView: View {
                                 .tracking(-0.35)
                                 .foregroundStyle(Color.white.opacity(averageOpacity))
                         }
+                        // Average levels remain visually above the passive
+                        // endpoint if the two happen to intersect.
+                        .zIndex(3)
                     }
                 }
 
@@ -719,16 +723,26 @@ struct RootView: View {
                         .foregroundStyle(Color.secondary.opacity(0.5))
                 }
 
-                // Keep the endpoint visually continuous with the trend. A
-                // single same-color mark avoids the dark cutout/halo that made
-                // the old stacked symbols look separated from the line.
+                // Erase only the trend directly beneath the marker before its
+                // translucent color is composited. Matching the mask and dot
+                // sizes keeps the line connected at the edge without the dark
+                // overlap or the halo created by an oversized cutout.
                 PointMark(
                     x: .value("Position", highlightedPosition),
                     y: .value(title, highlightedValue)
                 )
-                .symbolSize(48)
+                .symbolSize(markerSymbolArea)
+                .foregroundStyle(Color(uiColor: .secondarySystemGroupedBackground))
+                .zIndex(1)
+
+                PointMark(
+                    x: .value("Position", highlightedPosition),
+                    y: .value(title, highlightedValue)
+                )
+                .symbolSize(markerSymbolArea)
                 .foregroundStyle(color)
                 .opacity(lineOpacity)
+                .zIndex(2)
             }
             .chartYScale(domain: domain)
             // The colored curve and its y-domain morph together between every
