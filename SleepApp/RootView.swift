@@ -702,6 +702,27 @@ struct RootView: View {
                 }
 
                 if chartSelection != nil {
+                    if let historicalRange = ChartSelectionDimming.historicalRange(
+                        around: highlightedPosition,
+                        for: selectedRange
+                    ) {
+                        RectangleMark(
+                            xStart: .value(
+                                "Dimmed history start",
+                                historicalRange.lowerBound
+                            ),
+                            xEnd: .value(
+                                "Dimmed history end",
+                                historicalRange.upperBound
+                            ),
+                            yStart: .value("Dimmed history minimum", domain.lowerBound),
+                            yEnd: .value("Dimmed history maximum", domain.upperBound)
+                        )
+                        .foregroundStyle(
+                            Color(uiColor: .secondarySystemGroupedBackground).opacity(0.58)
+                        )
+                    }
+
                     RectangleMark(
                         xStart: .value(
                             "Dimmed future start",
@@ -1444,6 +1465,19 @@ enum ChartPointAlignment {
         points.min {
             abs($0.position - requestedPosition) < abs($1.position - requestedPosition)
         }
+    }
+}
+
+enum ChartSelectionDimming {
+    private static let plotLowerBound = -0.02
+    private static let selectionGap = 0.002
+
+    static func historicalRange(
+        around selectedPosition: Double,
+        for range: HealthRange
+    ) -> ClosedRange<Double>? {
+        guard range.usesMonthlyAxis else { return nil }
+        return plotLowerBound...max(selectedPosition - selectionGap, 0)
     }
 }
 

@@ -38,6 +38,29 @@ final class WhoopSleepStateTests: XCTestCase {
         )
     }
 
+    func testLongRangeSelectionDimsHistoryBeforeHoveredPoint() throws {
+        let yearRange = try XCTUnwrap(
+            ChartSelectionDimming.historicalRange(around: 0.6, for: .year)
+        )
+        let allRange = try XCTUnwrap(
+            ChartSelectionDimming.historicalRange(around: 0.6, for: .all)
+        )
+
+        XCTAssertEqual(yearRange.lowerBound, -0.02)
+        XCTAssertEqual(yearRange.upperBound, 0.598)
+        XCTAssertEqual(allRange, yearRange)
+        XCTAssertNil(ChartSelectionDimming.historicalRange(around: 0.6, for: .week))
+        XCTAssertNil(ChartSelectionDimming.historicalRange(around: 0.6, for: .month))
+    }
+
+    func testLongRangeSelectionHistoryDimmingPreservesEndpointGap() throws {
+        let range = try XCTUnwrap(
+            ChartSelectionDimming.historicalRange(around: 0, for: .all)
+        )
+
+        XCTAssertEqual(range, -0.02...0)
+    }
+
     func testPendingWakeSuppressesEveryDashboardMetric() {
         let health = dailyHealthRecord(dateKey: "2026-09-08")
         let day = PublishedDashboardDay(
