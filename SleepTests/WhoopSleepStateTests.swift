@@ -38,27 +38,24 @@ final class WhoopSleepStateTests: XCTestCase {
         )
     }
 
-    func testLongRangeSelectionDimsHistoryBeforeHoveredPoint() throws {
-        let yearRange = try XCTUnwrap(
-            ChartSelectionDimming.historicalRange(around: 0.6, for: .year)
-        )
-        let allRange = try XCTUnwrap(
-            ChartSelectionDimming.historicalRange(around: 0.6, for: .all)
+    func testLongRangeScrubbingRestoresOpaqueHistory() {
+        let opacity = ChartContentOpacity.resolve(
+            longRangeStyleProgress: 1,
+            isScrubbing: true
         )
 
-        XCTAssertEqual(yearRange.lowerBound, -0.02)
-        XCTAssertEqual(yearRange.upperBound, 0.598)
-        XCTAssertEqual(allRange, yearRange)
-        XCTAssertNil(ChartSelectionDimming.historicalRange(around: 0.6, for: .week))
-        XCTAssertNil(ChartSelectionDimming.historicalRange(around: 0.6, for: .month))
+        XCTAssertEqual(opacity.line, 1)
+        XCTAssertEqual(opacity.area, 0.26)
     }
 
-    func testLongRangeSelectionHistoryDimmingPreservesEndpointGap() throws {
-        let range = try XCTUnwrap(
-            ChartSelectionDimming.historicalRange(around: 0, for: .all)
+    func testPassiveLongRangeChartRemainsTranslucent() {
+        let opacity = ChartContentOpacity.resolve(
+            longRangeStyleProgress: 1,
+            isScrubbing: false
         )
 
-        XCTAssertEqual(range, -0.02...0)
+        XCTAssertEqual(opacity.line, 0.3, accuracy: 0.000_001)
+        XCTAssertEqual(opacity.area, 0.07, accuracy: 0.000_001)
     }
 
     func testPendingWakeSuppressesEveryDashboardMetric() {

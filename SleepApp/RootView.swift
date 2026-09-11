@@ -615,8 +615,12 @@ struct RootView: View {
         let chartSelection = activeMetric == metric ? selectedDate : nil
         let averageOpacity = chartSelection == nil ? averageLevelOpacity : 0
         let longRangeStyle = longRangeStyleProgress
-        let lineOpacity = interpolated(1, 0.3, progress: longRangeStyle)
-        let areaOpacity = interpolated(0.26, 0.07, progress: longRangeStyle)
+        let contentOpacity = ChartContentOpacity.resolve(
+            longRangeStyleProgress: longRangeStyle,
+            isScrubbing: chartSelection != nil
+        )
+        let lineOpacity = contentOpacity.line
+        let areaOpacity = contentOpacity.area
         let markerSymbolArea: CGFloat = 48
         let highlightedPoint = selectedPoint(in: plottedPoints, near: chartSelection) ?? plottedPoints.last!
         let requestedHighlightPosition = normalizedPosition(of: highlightedPoint, in: plottedPoints)
@@ -702,27 +706,9 @@ struct RootView: View {
                 }
 
                 if chartSelection != nil {
-                    if let historicalRange = ChartSelectionDimming.historicalRange(
-                        around: highlightedPosition,
-                        for: selectedRange
-                    ) {
-                        RectangleMark(
-                            xStart: .value(
-                                "Dimmed history start",
-                                historicalRange.lowerBound
-                            ),
-                            xEnd: .value(
-                                "Dimmed history end",
-                                historicalRange.upperBound
-                            ),
-                            yStart: .value("Dimmed history minimum", domain.lowerBound),
-                            yEnd: .value("Dimmed history maximum", domain.upperBound)
-                        )
-                        .foregroundStyle(
-                            Color(uiColor: .secondarySystemGroupedBackground).opacity(0.58)
-                        )
-                    }
-
+                    // Scrubbing restores the base chart to full strength. This
+                    // is the only dimming overlay, so history stays opaque and
+                    // only the future to the right of the marker is subdued.
                     RectangleMark(
                         xStart: .value(
                             "Dimmed future start",
@@ -1468,16 +1454,23 @@ enum ChartPointAlignment {
     }
 }
 
-enum ChartSelectionDimming {
-    private static let plotLowerBound = -0.02
-    private static let selectionGap = 0.002
+struct ChartContentOpacity: Equatable {
+    let line: Double
+    let area: Double
 
-    static func historicalRange(
-        around selectedPosition: Double,
-        for range: HealthRange
-    ) -> ClosedRange<Double>? {
-        guard range.usesMonthlyAxis else { return nil }
-        return plotLowerBound...max(selectedPosition - selectionGap, 0)
+    static func resolve(
+        longRangeStyleProgress: Double,
+        isScrubbing: Bool
+    ) -> ChartContentOpacity {
+        if isScrubbing {
+            return ChartContentOpacity(line: 1, area: 0.26)
+        }
+
+        let progress = min(max(longRangeStyleProgress, 0), 1)
+        return ChartContentOpacity(
+            line: 1 + ((0.3 - 1) * progress),
+            area: 0.26 + ((0.07 - 0.26) * progress)
+        )
     }
 }
 
