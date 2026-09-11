@@ -1001,13 +1001,19 @@ struct RootView: View {
 
     private func morphingPoints(for metric: MetricKind, target: MetricSeries) -> [MorphingMetricPoint] {
         let sampleCount = 48
-        let targetValues = resampledValues(from: target.plotted, count: sampleCount)
+        let targetValues = ChartCurveSampler.resampledValues(
+            from: target.plotted,
+            count: sampleCount
+        )
         guard !targetValues.isEmpty else { return [] }
 
         let sourceValues: [Double]
         if let chartMorphFromRange {
             let sourceSeries = metricSeries(for: metric, range: chartMorphFromRange)
-            let sampledSource = resampledValues(from: sourceSeries.plotted, count: sampleCount)
+            let sampledSource = ChartCurveSampler.resampledValues(
+                from: sourceSeries.plotted,
+                count: sampleCount
+            )
             sourceValues = sampledSource.count == targetValues.count ? sampledSource : targetValues
         } else {
             sourceValues = targetValues
@@ -1075,33 +1081,6 @@ struct RootView: View {
     private func smoothStep(_ rawValue: Double) -> Double {
         let value = min(max(rawValue, 0), 1)
         return value * value * (3 - (2 * value))
-    }
-
-    private func resampledValues(from points: [MetricPoint], count: Int) -> [Double] {
-        guard count > 0, let first = points.first else { return [] }
-        guard points.count > 1, let last = points.last else {
-            return Array(repeating: first.value, count: count)
-        }
-
-        let span = last.date.timeIntervalSince(first.date)
-        guard span > 0 else { return Array(repeating: first.value, count: count) }
-
-        var upperIndex = 1
-        return (0..<count).map { index in
-            let position = Double(index) / Double(max(count - 1, 1))
-            let targetDate = first.date.addingTimeInterval(span * position)
-
-            while upperIndex < points.count - 1, points[upperIndex].date < targetDate {
-                upperIndex += 1
-            }
-
-            let lower = points[upperIndex - 1]
-            let upper = points[upperIndex]
-            let interval = upper.date.timeIntervalSince(lower.date)
-            guard interval > 0 else { return upper.value }
-            let localProgress = targetDate.timeIntervalSince(lower.date) / interval
-            return interpolated(lower.value, upper.value, progress: localProgress)
-        }
     }
 
     private func selectedPoint(in series: [MetricPoint], near date: Date?) -> MetricPoint? {
@@ -1435,6 +1414,83 @@ struct MetricPoint: Identifiable {
     let value: Double
 
     var id: Date { date }
+}
+
+enum ChartCurveSampler {
+    /// Resample a shape-preserving cubic curve onto the fixed topology used by
+    /// range morphing. Unlike linear resampling followed by rounded joins, the
+    /// sparse Week points produce one continuous curve without overshooting a
+    /// neighboring value interval.
+    static func resampledValues(from points: [MetricPoint], count: Int) -> [Double] {
+        guard count > 0, let first = points.first else { return [] }
+        guard points.count > 1 else {
+            return Array(repeating: first.value, count: count)
+        }
+
+        let offsets = points.map { $0.date.timeIntervalSince(first.date) }
+        guard let span = offsets.last, span > 0 else {
+            return Array(repeating: first.value, count: count)
+        }
+
+        var widths: [Double] = []
+        var slopes: [Double] = []
+        widths.reserveCapacity(points.count - 1)
+        slopes.reserveCapacity(points.count - 1)
+
+        for index in 0..<(points.count - 1) {
+            let width = offsets[index + 1] - offsets[index]
+            widths.append(width)
+            slopes.append(
+                width > 0 ? (points[index + 1].value - points[index].value) / width : 0
+            )
+        }
+
+        var tangents = Array(repeating: 0.0, count: points.count)
+        tangents[0] = slopes[0]
+        tangents[points.count - 1] = slopes[slopes.count - 1]
+
+        if points.count > 2 {
+            for index in 1..<(points.count - 1) {
+                let before = slopes[index - 1]
+                let after = slopes[index]
+                guard before != 0, after != 0, before.sign == after.sign else { continue }
+
+                let previousWidth = widths[index - 1]
+                let nextWidth = widths[index]
+                let previousWeight = (2 * nextWidth) + previousWidth
+                let nextWeight = nextWidth + (2 * previousWidth)
+                tangents[index] = (previousWeight + nextWeight)
+                    / ((previousWeight / before) + (nextWeight / after))
+            }
+        }
+
+        var upperIndex = 1
+        return (0..<count).map { index in
+            let position = Double(index) / Double(max(count - 1, 1))
+            let targetOffset = span * position
+
+            while upperIndex < points.count - 1, offsets[upperIndex] < targetOffset {
+                upperIndex += 1
+            }
+
+            let lowerIndex = upperIndex - 1
+            let width = widths[lowerIndex]
+            guard width > 0 else { return points[upperIndex].value }
+
+            let progress = (targetOffset - offsets[lowerIndex]) / width
+            let squared = progress * progress
+            let cubed = squared * progress
+            let lowerBasis = (2 * cubed) - (3 * squared) + 1
+            let lowerTangentBasis = cubed - (2 * squared) + progress
+            let upperBasis = (-2 * cubed) + (3 * squared)
+            let upperTangentBasis = cubed - squared
+
+            return (lowerBasis * points[lowerIndex].value)
+                + (lowerTangentBasis * width * tangents[lowerIndex])
+                + (upperBasis * points[upperIndex].value)
+                + (upperTangentBasis * width * tangents[upperIndex])
+        }
+    }
 }
 
 struct MorphingMetricPoint: Identifiable {

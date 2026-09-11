@@ -134,15 +134,19 @@ discipline, and the limits of historical recovery.
   card value agree. Chart selection snaps to rendered points, and a fixed
   normalized x-domain with slight endpoint padding prevents the plot width from
   changing while scrubbing or clipping the final dot.
-- Trend lines and area fills use restrained monotone interpolation for slightly
-  rounded corners without Catmull–Rom overshoot. Selection never splits or
-  recomputes the trend: it overlays a translucent future region after the
-  selected point, then adds the rule and dot, leaving line geometry, scales,
-  and layout unchanged while scrubbing.
-- Range changes replace the chart data and scale atomically; there is no curve
-  morph between incompatible ranges. The headline and current-card numbers use
-  a brief restrained digit pop while retaining the previous value underneath;
-  Reduce Motion remains immediate and direct chart scrubbing does not replay it.
+- Trend lines and area fills use a shape-preserving cubic sampler followed by
+  restrained monotone rendering. Sparse Week values form one continuous curve
+  instead of straight spans with rounded vertices, while extrema remain inside
+  neighboring value intervals. Selection never splits or recomputes the trend:
+  it overlays a translucent future region after the selected point, then adds
+  the rule and dot, leaving line geometry, scales, and layout unchanged while
+  scrubbing.
+- Range changes resample both curves onto the same 48 horizontal anchors, then
+  morph the values and y-domain together. Year/All average steps and passive
+  translucency remain independent opacity layers. The headline and current-card
+  numbers use a brief restrained digit pop while retaining the previous value
+  underneath; Reduce Motion remains immediate and direct chart scrubbing does
+  not replay the range transition.
 - Haptics follow a restrained interaction vocabulary: selection ticks occur
   only when the range or exact selected night changes; lightweight impacts
   accompany diagnostic navigation and rescanning; handshake initiation is
