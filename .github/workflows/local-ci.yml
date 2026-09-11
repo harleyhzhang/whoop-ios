@@ -21,7 +21,8 @@ concurrency:
 jobs:
   verify:
     name: Local quality gate
-    if: github.actor == 'harleyhzhang'
+    # Required jobs must not have an actor-level condition: GitHub treats a
+    # skipped job as successful for branch protection.
     runs-on: [self-hosted, macOS, ARM64, whoop-ci]
     timeout-minutes: 20
     env:
@@ -30,8 +31,9 @@ jobs:
       - name: Reject untrusted self-hosted execution
         env:
           TRUSTED_ACTOR: harleyhzhang
+          TRUSTED_DEPENDABOT_ACTOR: dependabot[bot]
         run: |
-          if [ "$GITHUB_ACTOR" != "$TRUSTED_ACTOR" ]; then
+          if [ "$GITHUB_ACTOR" != "$TRUSTED_ACTOR" ] && [ "$GITHUB_ACTOR" != "$TRUSTED_DEPENDABOT_ACTOR" ]; then
             echo "Refusing to execute pull-request code from $GITHUB_ACTOR on a personal Mac." >&2
             exit 1
           fi
