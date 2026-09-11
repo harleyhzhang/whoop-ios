@@ -1,0 +1,51 @@
+name: Local CI
+
+on:
+  # Use the trusted default-branch workflow definition for pull requests so a
+  # proposed workflow edit cannot reorder the self-hosted safety check.
+  pull_request_target:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: local-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Local quality gate
+    if: github.actor == 'harleyhzhang'
+    runs-on: [self-hosted, macOS, ARM64, whoop-ci]
+    timeout-minutes: 20
+    env:
+      PATH: /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+    steps:
+      - name: Reject untrusted self-hosted execution
+        env:
+          TRUSTED_ACTOR: harleyhzhang
+        run: |
+          if [ "$GITHUB_ACTOR" != "$TRUSTED_ACTOR" ]; then
+            echo "Refusing to execute pull-request code from $GITHUB_ACTOR on a personal Mac." >&2
+            exit 1
+          fi
+
+      - name: Check out trusted pull-request revision
+        if: github.event_name == 'pull_request_target'
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Check out source
+        if: github.event_name != 'pull_request_target'
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Run canonical verification
+        run: Tools/verify_local.sh

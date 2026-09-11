@@ -1,6 +1,49 @@
 import SwiftUI
 import UserNotifications
 
+@MainActor
+protocol WhoopNotificationScheduling: AnyObject {
+    func install(delegate: UNUserNotificationCenterDelegate)
+    func authorizationStatus() async -> UNAuthorizationStatus
+    func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool
+    func add(_ request: UNNotificationRequest) async throws
+    func removePendingNotificationRequests(withIdentifiers identifiers: [String])
+    func removeDeliveredNotifications(withIdentifiers identifiers: [String])
+}
+
+@MainActor
+final class SystemWhoopNotificationScheduler: WhoopNotificationScheduling {
+    private let center: UNUserNotificationCenter
+
+    init(center: UNUserNotificationCenter = .current()) {
+        self.center = center
+    }
+
+    func install(delegate: UNUserNotificationCenterDelegate) {
+        center.delegate = delegate
+    }
+
+    func authorizationStatus() async -> UNAuthorizationStatus {
+        await center.notificationSettings().authorizationStatus
+    }
+
+    func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool {
+        try await center.requestAuthorization(options: options)
+    }
+
+    func add(_ request: UNNotificationRequest) async throws {
+        try await center.add(request)
+    }
+
+    func removePendingNotificationRequests(withIdentifiers identifiers: [String]) {
+        center.removePendingNotificationRequests(withIdentifiers: identifiers)
+    }
+
+    func removeDeliveredNotifications(withIdentifiers identifiers: [String]) {
+        center.removeDeliveredNotifications(withIdentifiers: identifiers)
+    }
+}
+
 @main
 struct SleepApp: App {
     @StateObject private var whoopCollector = WhoopHandshakeProbe()
@@ -18,10 +61,14 @@ struct SleepApp: App {
 
 @MainActor
 final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate {
-    static let shared = WhoopNotificationManager()
+    static let shared = WhoopNotificationManager(
+        scheduler: SystemWhoopNotificationScheduler(),
+        defaults: .standard
+    )
 
-    private let center = UNUserNotificationCenter.current()
-    private let defaults = UserDefaults.standard
+    private let scheduler: WhoopNotificationScheduling
+    private let defaults: UserDefaults
+    private let now: () -> Date
     private var isConfigured = false
     private var pendingIdentifiers: Set<String> = []
     private var wristStateGeneration = 0
@@ -29,7 +76,7 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
     private static let notWornIdentifier = "whoop.not-worn.30-minutes"
     private static let notWornDelay: TimeInterval = 30 * 60
 
-    private enum Key {
+    enum Key {
         static let lastMorningSleepID = "WhoopNotifications.lastMorningSleepID"
         static let lastMorningDateKey = "WhoopNotifications.lastMorningDateKey"
         static let lastBatteryLevel = "WhoopNotifications.lastBatteryLevel"
@@ -40,32 +87,39 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
         static let notWornReminderScheduled = "WhoopNotifications.notWornReminderScheduled"
     }
 
-    private override init() {
+    init(
+        scheduler: WhoopNotificationScheduling,
+        defaults: UserDefaults,
+        now: @escaping () -> Date = Date.init
+    ) {
+        self.scheduler = scheduler
+        self.defaults = defaults
+        self.now = now
         super.init()
     }
 
     func configure() {
         guard !isConfigured else { return }
         isConfigured = true
-        center.delegate = self
+        scheduler.install(delegate: self)
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let settings = await center.notificationSettings()
-            guard settings.authorizationStatus == .notDetermined else { return }
-            _ = try? await center.requestAuthorization(options: [.alert, .sound])
+            guard await scheduler.authorizationStatus() == .notDetermined else { return }
+            _ = try? await scheduler.requestAuthorization(options: [.alert, .sound])
         }
 
         #if DEBUG
-        scheduleDebugNotificationIfRequested()
+            scheduleDebugNotificationIfRequested()
         #endif
     }
 
     func sendMorningSummary(for record: DailyHealthRecord) {
         guard record.source.hasPrefix(WhoopStore.localSourcePrefix),
-              Calendar.current.isDateInToday(record.date),
-              let sleepID = record.sleepID,
-              defaults.string(forKey: Key.lastMorningDateKey) != record.dateKey,
-              defaults.string(forKey: Key.lastMorningSleepID) != sleepID else { return }
+            Calendar.current.isDate(record.date, inSameDayAs: now()),
+            let sleepID = record.sleepID,
+            defaults.string(forKey: Key.lastMorningDateKey) != record.dateKey,
+            defaults.string(forKey: Key.lastMorningSleepID) != sleepID
+        else { return }
 
         let score = record.sleepScore.map { "\(Int($0.rounded()))%" } ?? "—"
         let duration = record.sleepDurationMinutes.map(Self.formatDuration) ?? "—"
@@ -87,7 +141,8 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
 
     func observeBatteryLevel(_ rawLevel: Int) {
         let level = min(max(rawLevel, 0), 100)
-        let previous = defaults.object(forKey: Key.lastBatteryLevel) != nil
+        let previous =
+            defaults.object(forKey: Key.lastBatteryLevel) != nil
             ? defaults.integer(forKey: Key.lastBatteryLevel)
             : nil
         var sentLow20 = defaults.bool(forKey: Key.sentLow20)
@@ -107,29 +162,30 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
         }
 
         if level == 100,
-           let previous,
-           previous < 100,
-           !fullChargeNotified {
+            let previous,
+            previous < 100,
+            !fullChargeNotified
+        {
             scheduleBatteryNotification(
                 identifier: "whoop.battery.charged",
                 title: "WHOOP fully charged",
                 body: "Battery reached 100%.",
-                successKey: Key.fullChargeNotified
+                successPreference: Key.fullChargeNotified
             )
         } else if level <= 10, !sentLow10 {
             scheduleBatteryNotification(
                 identifier: "whoop.battery.low.10",
                 title: "WHOOP battery at \(level)%",
                 body: "Charge now to avoid missing data.",
-                successKey: Key.sentLow10,
-                additionalSuccessKey: Key.sentLow20
+                successPreference: Key.sentLow10,
+                additionalSuccessPreference: Key.sentLow20
             )
         } else if level <= 20, !sentLow20 {
             scheduleBatteryNotification(
                 identifier: "whoop.battery.low.20",
                 title: "WHOOP battery at \(level)%",
                 body: "Charge before tonight.",
-                successKey: Key.sentLow20
+                successPreference: Key.sentLow20
             )
         }
 
@@ -146,17 +202,18 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
         if isWorn {
             defaults.removeObject(forKey: Key.notWornSince)
             defaults.set(false, forKey: Key.notWornReminderScheduled)
-            center.removePendingNotificationRequests(withIdentifiers: [Self.notWornIdentifier])
-            center.removeDeliveredNotifications(withIdentifiers: [Self.notWornIdentifier])
+            scheduler.removePendingNotificationRequests(withIdentifiers: [Self.notWornIdentifier])
+            scheduler.removeDeliveredNotifications(withIdentifiers: [Self.notWornIdentifier])
             return
         }
 
         guard !defaults.bool(forKey: Key.notWornReminderScheduled),
-              !pendingIdentifiers.contains(Self.notWornIdentifier) else { return }
+            !pendingIdentifiers.contains(Self.notWornIdentifier)
+        else { return }
 
         let startedAt = defaults.object(forKey: Key.notWornSince) as? Date ?? observedAt
         defaults.set(startedAt, forKey: Key.notWornSince)
-        let elapsed = max(0, Date().timeIntervalSince(startedAt))
+        let elapsed = max(0, now().timeIntervalSince(startedAt))
         let remainingDelay = max(1, Self.notWornDelay - elapsed)
 
         deliver(
@@ -167,7 +224,7 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
         ) { [weak self] succeeded in
             guard let self else { return }
             guard self.wristStateGeneration == generation else {
-                self.center.removePendingNotificationRequests(
+                self.scheduler.removePendingNotificationRequests(
                     withIdentifiers: [Self.notWornIdentifier]
                 )
                 return
@@ -182,15 +239,15 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
         identifier: String,
         title: String,
         body: String,
-        successKey: String,
-        additionalSuccessKey: String? = nil
+        successPreference: String,
+        additionalSuccessPreference: String? = nil
     ) {
         guard !pendingIdentifiers.contains(identifier) else { return }
         deliver(identifier: identifier, title: title, body: body) { [weak self] succeeded in
             guard succeeded, let self else { return }
-            self.defaults.set(true, forKey: successKey)
-            if let additionalSuccessKey {
-                self.defaults.set(true, forKey: additionalSuccessKey)
+            self.defaults.set(true, forKey: successPreference)
+            if let additionalSuccessPreference {
+                self.defaults.set(true, forKey: additionalSuccessPreference)
             }
         }
     }
@@ -214,7 +271,7 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
             guard let self else { return }
             let succeeded: Bool
             do {
-                try await center.add(request)
+                try await scheduler.add(request)
                 succeeded = true
             } catch {
                 succeeded = false
@@ -241,42 +298,42 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
     }
 
     #if DEBUG
-    private func scheduleDebugNotificationIfRequested() {
-        guard let kind = ProcessInfo.processInfo.environment["WHOOP_DEBUG_NOTIFICATION"] else { return }
-        switch kind {
-        case "morning":
-            deliver(
-                identifier: eventIdentifier("whoop.debug.morning"),
-                title: "Sleep ready",
-                body: "86% · 7h 42m · HRV 57 ms · RHR 54 BPM"
-            )
-        case "low20":
-            deliver(
-                identifier: eventIdentifier("whoop.debug.low20"),
-                title: "WHOOP battery at 20%",
-                body: "Charge before tonight."
-            )
-        case "low10":
-            deliver(
-                identifier: eventIdentifier("whoop.debug.low10"),
-                title: "WHOOP battery at 10%",
-                body: "Charge now to avoid missing data."
-            )
-        case "charged":
-            deliver(
-                identifier: eventIdentifier("whoop.debug.charged"),
-                title: "WHOOP fully charged",
-                body: "Battery reached 100%."
-            )
-        case "notWorn":
-            deliver(
-                identifier: eventIdentifier("whoop.debug.not-worn"),
-                title: "Your WHOOP is off your wrist",
-                body: "It’s been off for 30 minutes. Put it back on to keep collecting data."
-            )
-        default:
-            break
+        private func scheduleDebugNotificationIfRequested() {
+            guard let kind = ProcessInfo.processInfo.environment["WHOOP_DEBUG_NOTIFICATION"] else { return }
+            switch kind {
+            case "morning":
+                deliver(
+                    identifier: eventIdentifier("whoop.debug.morning"),
+                    title: "Sleep ready",
+                    body: "86% · 7h 42m · HRV 57 ms · RHR 54 BPM"
+                )
+            case "low20":
+                deliver(
+                    identifier: eventIdentifier("whoop.debug.low20"),
+                    title: "WHOOP battery at 20%",
+                    body: "Charge before tonight."
+                )
+            case "low10":
+                deliver(
+                    identifier: eventIdentifier("whoop.debug.low10"),
+                    title: "WHOOP battery at 10%",
+                    body: "Charge now to avoid missing data."
+                )
+            case "charged":
+                deliver(
+                    identifier: eventIdentifier("whoop.debug.charged"),
+                    title: "WHOOP fully charged",
+                    body: "Battery reached 100%."
+                )
+            case "notWorn":
+                deliver(
+                    identifier: eventIdentifier("whoop.debug.not-worn"),
+                    title: "Your WHOOP is off your wrist",
+                    body: "It’s been off for 30 minutes. Put it back on to keep collecting data."
+                )
+            default:
+                break
+            }
         }
-    }
     #endif
 }

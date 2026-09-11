@@ -11,13 +11,12 @@ from __future__ import annotations
 import argparse
 import json
 import math
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
-from sklearn.ensemble import ExtraTreesRegressor
-from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.ensemble import ExtraTreesRegressor, GradientBoostingRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
@@ -32,7 +31,8 @@ RECENCY_WEIGHTS = (0.52, 0.27, 0.14, 0.07)
 
 def load_records(path: Path) -> list[dict[str, Any]]:
     with path.open(encoding="utf-8") as source:
-        return json.load(source)["records"]
+        payload = cast(dict[str, Any], json.load(source))
+    return cast(list[dict[str, Any]], payload["records"])
 
 
 def parse_instant(value: str) -> datetime:
@@ -41,7 +41,7 @@ def parse_instant(value: str) -> datetime:
 
 def local_zone(offset: str) -> timezone:
     if offset == "Z":
-        return timezone.utc
+        return UTC
     sign = 1 if offset[0] == "+" else -1
     hours, minutes = (int(part) for part in offset[1:].split(":"))
     return timezone(sign * timedelta(hours=hours, minutes=minutes))
@@ -63,14 +63,17 @@ def extract_nights(archive: Path) -> list[dict[str, Any]]:
             continue
         score = sleep["score"]
         stages = score["stage_summary"]
-        duration = sum(
-            stages[key]
-            for key in (
-                "total_light_sleep_time_milli",
-                "total_rem_sleep_time_milli",
-                "total_slow_wave_sleep_time_milli",
+        duration = (
+            sum(
+                stages[key]
+                for key in (
+                    "total_light_sleep_time_milli",
+                    "total_rem_sleep_time_milli",
+                    "total_slow_wave_sleep_time_milli",
+                )
             )
-        ) / 60_000
+            / 60_000
+        )
         need = sum(score["sleep_needed"].values()) / 60_000
         zone = local_zone(sleep["timezone_offset"])
         start = parse_instant(sleep["start"]).astimezone(zone)
@@ -106,8 +109,12 @@ def local_features(nights: list[dict[str, Any]], index: int) -> list[float]:
     for lag in range(1, 8):
         candidate = nights[index - lag] if index >= lag else None
         gap = (current["date"] - candidate["date"]).days if candidate else None
-        usable = candidate is not None and gap is not None and gap <= lag + 3
-        night = candidate if usable else current
+        if candidate is not None and gap is not None and gap <= lag + 3:
+            night = candidate
+            usable_gap = gap
+        else:
+            night = current
+            usable_gap = 0
         previous.append(night)
         values.extend(
             [
@@ -115,7 +122,7 @@ def local_features(nights: list[dict[str, Any]], index: int) -> list[float]:
                 night["efficiency"],
                 circular_distance(current["start_minute"], night["start_minute"]),
                 circular_distance(current["end_minute"], night["end_minute"]),
-                float(gap) if usable else 0.0,
+                float(usable_gap),
             ]
         )
 
@@ -139,7 +146,9 @@ def local_features(nights: list[dict[str, Any]], index: int) -> list[float]:
         for night in first_four
     ]
     values.extend(agreements)
-    values.append(sum(value * weight for value, weight in zip(agreements, RECENCY_WEIGHTS)))
+    values.append(
+        sum(value * weight for value, weight in zip(agreements, RECENCY_WEIGHTS, strict=False))
+    )
     if len(values) != 50:
         raise RuntimeError(f"Feature contract changed unexpectedly: {len(values)}")
     return [float(value) for value in values]
@@ -295,9 +304,7 @@ def main() -> None:
     targets = np.asarray([night["target"] for night in nights])
 
     current = np.minimum(99, inputs[:, 0] / 519 * 100)
-    observed, local_forest = chronological_predictions(
-        inputs, targets, lambda: models()[0]
-    )
+    observed, local_forest = chronological_predictions(inputs, targets, lambda: models()[0])
     _, local_svr = chronological_predictions(inputs, targets, lambda: models()[1])
     direct_prediction = FOREST_WEIGHT * local_forest + (1 - FOREST_WEIGHT) * local_svr
 
@@ -329,24 +336,26 @@ def main() -> None:
     )
     # Re-run only the prediction part of each chronological pillar model with
     # the independently predicted need and consistency inputs.
-    staged_prediction = []
+    staged_values: list[float] = []
     offset = 0
     starts = (180, 210, 240, 270)
     for position, start in enumerate(starts):
         end = starts[position + 1] if position + 1 < len(starts) else len(targets)
         count = end - start
         trained = pillar_model().fit(pillars[:start], targets[:start])
-        staged_prediction.extend(trained.predict(predicted_pillars[offset : offset + count]))
+        staged_values.extend(trained.predict(predicted_pillars[offset : offset + count]))
         offset += count
-    staged_prediction = np.asarray(staged_prediction)
+    staged_prediction = np.asarray(staged_values)
     local_ensemble = DIRECT_WEIGHT * direct_prediction + (1 - DIRECT_WEIGHT) * staged_prediction
+
+    local_validation = metrics(observed, local_ensemble)
 
     report = {
         "nights": len(nights),
         "dateRange": [nights[0]["date"].isoformat(), nights[-1]["date"].isoformat()],
         "currentFixed519AllNights": metrics(targets, current),
         "exactExportedPillarsForward": metrics(observed, exact_pillar_prediction),
-        "locallyAvailableFeaturesForward": metrics(observed, local_ensemble),
+        "locallyAvailableFeaturesForward": local_validation,
     }
     print(json.dumps(report, indent=2))
     if args.model_output:
@@ -355,7 +364,7 @@ def main() -> None:
             nights,
             inputs,
             targets,
-            report["locallyAvailableFeaturesForward"],
+            local_validation,
         )
         print(f"Wrote private model to {args.model_output}")
 

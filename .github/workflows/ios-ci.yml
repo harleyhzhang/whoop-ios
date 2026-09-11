@@ -26,48 +26,15 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
-      - name: Report toolchain
+      - name: Install pinned local tooling
         run: |
           xcodebuild -version
           xcrun --sdk iphonesimulator --show-sdk-version
+          brew bundle --file Brewfile
 
-      - name: Reject private runtime data
-        shell: bash
-        run: |
-          set -euo pipefail
-          if git ls-files | grep -E '(^|/)(sleep\.sqlite3|whoop-history\.json|whoop-score-model\.json|whoop-recovery-model\.json|whoop-official-metrics\.json|whoop-official-archive\.sqlite3)$'; then
-            echo "Private WHOOP runtime data must not be committed."
-            exit 1
-          fi
-
-      - name: Run unit tests
-        run: |
-          xcodebuild test -quiet \
-            -project Sleep.xcodeproj \
-            -scheme Sleep \
-            -configuration Debug \
-            -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=latest' \
-            -derivedDataPath "$RUNNER_TEMP/SleepDerivedData" \
-            -resultBundlePath "$RUNNER_TEMP/SleepTests.xcresult" \
-            CODE_SIGNING_ALLOWED=NO
-
-      - name: Build Release
-        run: |
-          xcodebuild build -quiet \
-            -project Sleep.xcodeproj \
-            -scheme Sleep \
-            -configuration Release \
-            -destination 'generic/platform=iOS Simulator' \
-            -derivedDataPath "$RUNNER_TEMP/SleepDerivedData" \
-            CODE_SIGNING_ALLOWED=NO
-
-      - name: Upload failing test result
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: SleepTests-${{ github.run_id }}
-          path: ${{ runner.temp }}/SleepTests.xcresult
-          if-no-files-found: ignore
-          retention-days: 7
+      - name: Run canonical verification
+        run: Tools/verify_local.sh

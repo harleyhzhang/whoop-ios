@@ -1,0 +1,6 @@
+brew "actionlint"
+brew "gitleaks"
+brew "jq"
+brew "shellcheck"
+brew "uv"
+brew "xcodegen"

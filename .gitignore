@@ -12,6 +12,11 @@ xcuserdata/
 *.key
 .env
 .env.*
+.venv/
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
 whoop-history.json
 whoop-score-model.json
 whoop-recovery-model.json

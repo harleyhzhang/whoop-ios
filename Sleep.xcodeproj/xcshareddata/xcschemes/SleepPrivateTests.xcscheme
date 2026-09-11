@@ -15,9 +15,9 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "9EB5F8D007CF094E489E734A"
-               BuildableName = "Sleep.app"
-               BlueprintName = "Sleep"
+               BlueprintIdentifier = "6132137A8CF73AB865D1CD06"
+               BuildableName = "SleepPrivateTests.xctest"
+               BlueprintName = "SleepPrivateTests"
                ReferencedContainer = "container:Sleep.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -32,9 +32,9 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "9EB5F8D007CF094E489E734A"
-            BuildableName = "Sleep.app"
-            BlueprintName = "Sleep"
+            BlueprintIdentifier = "6132137A8CF73AB865D1CD06"
+            BuildableName = "SleepPrivateTests.xctest"
+            BlueprintName = "SleepPrivateTests"
             ReferencedContainer = "container:Sleep.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
@@ -44,20 +44,9 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "9E8275851F9D82497491ACD0"
-               BuildableName = "SleepTests.xctest"
-               BlueprintName = "SleepTests"
-               ReferencedContainer = "container:Sleep.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
-         <TestableReference
-            skipped = "NO"
-            parallelizable = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "E3D4ECFBF7AA203F90DAA328"
-               BuildableName = "SleepUITests.xctest"
-               BlueprintName = "SleepUITests"
+               BlueprintIdentifier = "6132137A8CF73AB865D1CD06"
+               BuildableName = "SleepPrivateTests.xctest"
+               BlueprintName = "SleepPrivateTests"
                ReferencedContainer = "container:Sleep.xcodeproj">
             </BuildableReference>
          </TestableReference>
@@ -75,16 +64,15 @@
       debugDocumentVersioning = "YES"
       debugServiceExtension = "internal"
       allowLocationSimulation = "YES">
-      <BuildableProductRunnable
-         runnableDebuggingMode = "0">
+      <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "9EB5F8D007CF094E489E734A"
-            BuildableName = "Sleep.app"
-            BlueprintName = "Sleep"
+            BlueprintIdentifier = "6132137A8CF73AB865D1CD06"
+            BuildableName = "SleepPrivateTests.xctest"
+            BlueprintName = "SleepPrivateTests"
             ReferencedContainer = "container:Sleep.xcodeproj">
          </BuildableReference>
-      </BuildableProductRunnable>
+      </MacroExpansion>
       <CommandLineArguments>
       </CommandLineArguments>
    </LaunchAction>
@@ -94,18 +82,17 @@
       savedToolIdentifier = ""
       useCustomWorkingDirectory = "NO"
       debugDocumentVersioning = "YES">
-      <BuildableProductRunnable
-         runnableDebuggingMode = "0">
-         <BuildableReference
-            BuildableIdentifier = "primary"
-            BlueprintIdentifier = "9EB5F8D007CF094E489E734A"
-            BuildableName = "Sleep.app"
-            BlueprintName = "Sleep"
-            ReferencedContainer = "container:Sleep.xcodeproj">
-         </BuildableReference>
-      </BuildableProductRunnable>
       <CommandLineArguments>
       </CommandLineArguments>
+      <MacroExpansion>
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "6132137A8CF73AB865D1CD06"
+            BuildableName = "SleepPrivateTests.xctest"
+            BlueprintName = "SleepPrivateTests"
+            ReferencedContainer = "container:Sleep.xcodeproj">
+         </BuildableReference>
+      </MacroExpansion>
    </ProfileAction>
    <AnalyzeAction
       buildConfiguration = "Debug">

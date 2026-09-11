@@ -217,9 +217,10 @@ struct PublishedDashboardDay: Sendable {
         isWakePending: Bool
     ) {
         guard !isWakePending,
-              let health = healthRecords.last,
-              let steps = stepRecords.last(where: { $0.dateKey == health.dateKey }),
-              let recovery = recoveryRecords.last(where: { $0.dateKey == health.dateKey }) else {
+            let health = healthRecords.last,
+            let steps = stepRecords.last(where: { $0.dateKey == health.dateKey }),
+            let recovery = recoveryRecords.last(where: { $0.dateKey == health.dateKey })
+        else {
             self.health = nil
             self.steps = nil
             self.recovery = nil
@@ -256,7 +257,8 @@ enum SleepScoreFeatureBuilder {
     static let featureCount = 50
 
     static func features(current: SleepScoreNight, history: [SleepScoreNight]) -> [Double] {
-        let recent = history
+        let recent =
+            history
             .filter { $0.dateKey < current.dateKey }
             .sorted { $0.dateKey > $1.dateKey }
 
@@ -266,21 +268,24 @@ enum SleepScoreFeatureBuilder {
             sin(2 * .pi * current.startMinute / 1_440),
             cos(2 * .pi * current.startMinute / 1_440),
             sin(2 * .pi * current.endMinute / 1_440),
-            cos(2 * .pi * current.endMinute / 1_440)
+            cos(2 * .pi * current.endMinute / 1_440),
         ]
         var previous: [SleepScoreNight] = []
         for lag in 1...7 {
             let candidate = recent.indices.contains(lag - 1) ? recent[lag - 1] : nil
             let gap = candidate.flatMap { dayGap(from: $0.dateKey, to: current.dateKey) }
-            let usable = candidate != nil && gap != nil && gap! <= lag + 3
-            let night = usable ? candidate! : current
+            let usableCandidate =
+                candidate.flatMap { candidate in
+                    gap.map { ($0 <= lag + 3) ? candidate : nil }
+                } ?? nil
+            let night = usableCandidate ?? current
             previous.append(night)
             values.append(contentsOf: [
                 night.durationMinutes,
                 night.efficiencyPercentage,
                 circularMinuteDistance(current.startMinute, night.startMinute),
                 circularMinuteDistance(current.endMinute, night.endMinute),
-                usable ? Double(gap!) : 0
+                usableCandidate == nil ? 0 : Double(gap ?? 0),
             ])
         }
 
@@ -289,14 +294,17 @@ enum SleepScoreFeatureBuilder {
         let efficiencies = firstFour.map(\.efficiencyPercentage)
         values.append(contentsOf: [
             mean(durations), standardDeviation(durations),
-            mean(efficiencies), standardDeviation(efficiencies)
+            mean(efficiencies), standardDeviation(efficiencies),
         ])
 
         let agreements = firstFour.map { prior in
-            max(0, 100 * (1 - (
-                circularMinuteDistance(current.startMinute, prior.startMinute)
-                    + circularMinuteDistance(current.endMinute, prior.endMinute)
-            ) / 1_440))
+            max(
+                0,
+                100
+                    * (1
+                        - (circularMinuteDistance(current.startMinute, prior.startMinute)
+                            + circularMinuteDistance(current.endMinute, prior.endMinute)) / 1_440)
+            )
         }
         values.append(contentsOf: agreements)
         values.append(zip(agreements, [0.52, 0.27, 0.14, 0.07]).map(*).reduce(0, +))
@@ -327,9 +335,10 @@ enum SleepScoreFeatureBuilder {
     private static func date(from key: String) -> Date? {
         let components = key.split(separator: "-").compactMap { Int($0) }
         guard components.count == 3 else { return nil }
-        return Calendar(identifier: .gregorian).date(from: DateComponents(
-            year: components[0], month: components[1], day: components[2], hour: 12
-        ))
+        return Calendar(identifier: .gregorian).date(
+            from: DateComponents(
+                year: components[0], month: components[1], day: components[2], hour: 12
+            ))
     }
 }
 
@@ -354,7 +363,8 @@ struct SleepScoreModelBundle: Decodable, Sendable {
                 let left = childrenLeft[node]
                 if left == -1 { return values.indices.contains(node) ? values[node] : nil }
                 guard features.indices.contains(node), thresholds.indices.contains(node),
-                      input.indices.contains(features[node]), childrenRight.indices.contains(node) else {
+                    input.indices.contains(features[node]), childrenRight.indices.contains(node)
+                else {
                     return nil
                 }
                 node = input[features[node]] <= thresholds[node] ? left : childrenRight[node]
@@ -373,7 +383,8 @@ struct SleepScoreModelBundle: Decodable, Sendable {
 
         func predict(_ input: [Double]) -> Double? {
             guard input.count == means.count, means.count == scales.count,
-                  supportVectors.count == dualCoefficients.count else { return nil }
+                supportVectors.count == dualCoefficients.count
+            else { return nil }
             let standardized = zip(zip(input, means), scales).map { pair, scale in
                 (pair.0 - pair.1) / max(scale, 1e-12)
             }
@@ -413,24 +424,31 @@ struct SleepScoreModelBundle: Decodable, Sendable {
 
     func prediction(_ features: [Double]) -> Prediction? {
         guard featureVersion == SleepScoreFeatureBuilder.version,
-              features.count == SleepScoreFeatureBuilder.featureCount,
-              !trees.isEmpty,
-              let svrPrediction = svr.predict(features),
-              let need = needModel.predict(features), need > 0,
-              let consistency = consistencyModel.predict(features) else { return nil }
+            features.count == SleepScoreFeatureBuilder.featureCount,
+            !trees.isEmpty,
+            let svrPrediction = svr.predict(features),
+            let need = needModel.predict(features), need > 0,
+            let consistency = consistencyModel.predict(features)
+        else { return nil }
         let treePredictions = trees.compactMap { $0.predict(features) }
         guard treePredictions.count == trees.count else { return nil }
         let forestPrediction = treePredictions.reduce(0, +) / Double(treePredictions.count)
-        let directPrediction = extraTreesWeight * forestPrediction
+        let directPrediction =
+            extraTreesWeight * forestPrediction
             + (1 - extraTreesWeight) * svrPrediction
         let sufficiency = min(100, features[0] / need * 100)
-        guard let pillarPrediction = pillarSVR.predict([
-            sufficiency, consistency, features[1]
-        ]) else { return nil }
+        guard
+            let pillarPrediction = pillarSVR.predict([
+                sufficiency, consistency, features[1],
+            ])
+        else { return nil }
         return Prediction(
-            score: min(99, max(0,
-                directWeight * directPrediction + (1 - directWeight) * pillarPrediction
-            )),
+            score: min(
+                99,
+                max(
+                    0,
+                    directWeight * directPrediction + (1 - directWeight) * pillarPrediction
+                )),
             sleepNeedMinutes: need,
             consistencyPercentage: min(100, max(0, consistency)),
             sufficiencyPercentage: sufficiency
@@ -443,7 +461,8 @@ struct SleepScoreModelBundle: Decodable, Sendable {
 
     static func load(from bundle: Bundle = .main) -> SleepScoreModelBundle? {
         guard let url = bundle.url(forResource: "whoop-score-model", withExtension: "json"),
-              let data = try? Data(contentsOf: url) else { return nil }
+            let data = try? Data(contentsOf: url)
+        else { return nil }
         return try? JSONDecoder().decode(Self.self, from: data)
     }
 }
@@ -458,10 +477,12 @@ enum RecoveryScoreFeatureBuilder {
         stepsByDate: [String: Double]
     ) -> [Double]? {
         guard let currentNight = sleepNight(current),
-              let hrv = current.hrvRMSSDMilliseconds,
-              let rhr = current.restingHeartRateBPM,
-              let sleepScore = current.sleepScore else { return nil }
-        let eligible = history
+            let hrv = current.hrvRMSSDMilliseconds,
+            let rhr = current.restingHeartRateBPM,
+            let sleepScore = current.sleepScore
+        else { return nil }
+        let eligible =
+            history
             .filter { $0.dateKey < current.dateKey && sleepNight($0) != nil }
             .sorted { $0.dateKey < $1.dateKey }
         let sleepHistory = eligible.compactMap(sleepNight)
@@ -474,7 +495,8 @@ enum RecoveryScoreFeatureBuilder {
 
         let recent = Array(eligible.reversed())
         for lag in 1...7 {
-            let candidate = recent.indices.contains(lag - 1)
+            let candidate =
+                recent.indices.contains(lag - 1)
                 ? recent[lag - 1]
                 : current
             values.append(contentsOf: [
@@ -482,9 +504,10 @@ enum RecoveryScoreFeatureBuilder {
                 candidate.restingHeartRateBPM ?? rhr,
                 stepsByDate[candidate.dateKey] ?? currentSteps,
                 candidate.sleepScore ?? sleepScore,
-                Double(candidate.dateKey == current.dateKey
-                    ? 0
-                    : dayGap(from: candidate.dateKey, to: current.dateKey) ?? 0)
+                Double(
+                    candidate.dateKey == current.dateKey
+                        ? 0
+                        : dayGap(from: candidate.dateKey, to: current.dateKey) ?? 0),
             ])
         }
 
@@ -521,10 +544,12 @@ enum RecoveryScoreFeatureBuilder {
         to values: inout [Double]
     ) {
         let finite = history.filter(\.isFinite)
-        let mean = finite.isEmpty
+        let mean =
+            finite.isEmpty
             ? current
             : finite.reduce(0, +) / Double(finite.count)
-        let deviation = finite.isEmpty
+        let deviation =
+            finite.isEmpty
             ? 0
             : sqrt(finite.map { pow($0 - mean, 2) }.reduce(0, +) / Double(finite.count))
         values.append(contentsOf: [
@@ -532,15 +557,16 @@ enum RecoveryScoreFeatureBuilder {
             deviation,
             current - mean,
             mean == 0 ? 1 : current / mean,
-            deviation == 0 ? 0 : (current - mean) / deviation
+            deviation == 0 ? 0 : (current - mean) / deviation,
         ])
     }
 
     private static func sleepNight(_ record: DailyHealthRecord) -> SleepScoreNight? {
         guard let duration = record.sleepDurationMinutes,
-              let efficiency = record.sleepEfficiencyPercentage,
-              let start = record.sleepStartMinute,
-              let end = record.sleepEndMinute else { return nil }
+            let efficiency = record.sleepEfficiencyPercentage,
+            let start = record.sleepStartMinute,
+            let end = record.sleepEndMinute
+        else { return nil }
         return SleepScoreNight(
             dateKey: record.dateKey,
             durationMinutes: duration,
@@ -555,9 +581,10 @@ enum RecoveryScoreFeatureBuilder {
         func date(_ key: String) -> Date? {
             let values = key.split(separator: "-").compactMap { Int($0) }
             guard values.count == 3 else { return nil }
-            return calendar.date(from: DateComponents(
-                year: values[0], month: values[1], day: values[2], hour: 12
-            ))
+            return calendar.date(
+                from: DateComponents(
+                    year: values[0], month: values[1], day: values[2], hour: 12
+                ))
         }
         guard let startDate = date(start), let endDate = date(end) else { return nil }
         return calendar.dateComponents([.day], from: startDate, to: endDate).day
@@ -574,9 +601,10 @@ struct RecoveryScoreModelBundle: Decodable, Sendable {
 
         func predict(_ input: [Double]) -> Double? {
             guard input.count == imputerMedians.count,
-                  input.count == means.count,
-                  input.count == scales.count,
-                  input.count == coefficients.count else { return nil }
+                input.count == means.count,
+                input.count == scales.count,
+                input.count == coefficients.count
+            else { return nil }
             return input.indices.reduce(intercept) { prediction, index in
                 let value = input[index].isFinite ? input[index] : imputerMedians[index]
                 let standardized = (value - means[index]) / max(scales[index], 1e-12)
@@ -608,9 +636,10 @@ struct RecoveryScoreModelBundle: Decodable, Sendable {
 
     func prediction(_ input: [Double]) -> Prediction? {
         guard featureVersion == RecoveryScoreFeatureBuilder.version,
-              featureCount == RecoveryScoreFeatureBuilder.featureCount,
-              input.count == featureCount,
-              imputerMedians.count == featureCount else { return nil }
+            featureCount == RecoveryScoreFeatureBuilder.featureCount,
+            input.count == featureCount,
+            imputerMedians.count == featureCount
+        else { return nil }
         let prepared = input.indices.map {
             input[$0].isFinite ? input[$0] : imputerMedians[$0]
         }
@@ -638,7 +667,8 @@ struct RecoveryScoreModelBundle: Decodable, Sendable {
 
     private func score(_ prepared: [Double]) -> Double? {
         guard let boosted = boostedModel.predict(prepared),
-              let ridge = ridgeModel.predict(prepared) else { return nil }
+            let ridge = ridgeModel.predict(prepared)
+        else { return nil }
         return boostedWeight * boosted + (1 - boostedWeight) * ridge
     }
 
@@ -670,7 +700,8 @@ struct RecoveryScoreModelBundle: Decodable, Sendable {
 
     static func load(from bundle: Bundle = .main) -> RecoveryScoreModelBundle? {
         guard let url = bundle.url(forResource: "whoop-recovery-model", withExtension: "json"),
-              let data = try? Data(contentsOf: url) else { return nil }
+            let data = try? Data(contentsOf: url)
+        else { return nil }
         return try? JSONDecoder().decode(Self.self, from: data)
     }
 }
@@ -703,7 +734,8 @@ final class HealthHistoryModel: ObservableObject {
 
     var sourceSummary: String {
         guard let latestRecord else { return isLoading ? "Loading real history…" : "No real history imported" }
-        return "WHOOP API history · \(records.count) nights · through \(latestRecord.date.formatted(.dateTime.month(.abbreviated).day()))"
+        return
+            "WHOOP API history · \(records.count) nights · through \(latestRecord.date.formatted(.dateTime.month(.abbreviated).day()))"
     }
 
     /// Applies one freshly derived night without waiting for the full reload, so
@@ -791,11 +823,13 @@ final class HealthHistoryModel: ObservableObject {
     private func adaptiveBucketDays(for points: [MetricPoint]) -> Int {
         guard let first = points.first, let last = points.last else { return 7 }
         let calendar = Calendar.current
-        let span = max(1, (calendar.dateComponents(
-            [.day],
-            from: calendar.startOfDay(for: first.date),
-            to: calendar.startOfDay(for: last.date)
-        ).day ?? 0) + 1)
+        let span = max(
+            1,
+            (calendar.dateComponents(
+                [.day],
+                from: calendar.startOfDay(for: first.date),
+                to: calendar.startOfDay(for: last.date)
+            ).day ?? 0) + 1)
         return max(7, Int(ceil(Double(span) / 50)))
     }
 
@@ -804,9 +838,11 @@ final class HealthHistoryModel: ObservableObject {
         let calendar = Calendar.current
         let anchor = calendar.startOfDay(for: first.date)
         let grouped = Dictionary(grouping: points) {
-            max(0, (calendar.dateComponents(
-                [.day], from: anchor, to: calendar.startOfDay(for: $0.date)
-            ).day ?? 0) / bucketDays)
+            max(
+                0,
+                (calendar.dateComponents(
+                    [.day], from: anchor, to: calendar.startOfDay(for: $0.date)
+                ).day ?? 0) / bucketDays)
         }
         let finalBucket = grouped.keys.max()
         return grouped.keys.sorted().compactMap { key in
@@ -816,10 +852,12 @@ final class HealthHistoryModel: ObservableObject {
             if key == finalBucket { return bucket.last }
             let values = bucket.map(\.value).sorted()
             let middle = values.count / 2
-            let median = values.count.isMultiple(of: 2)
+            let median =
+                values.count.isMultiple(of: 2)
                 ? (values[middle - 1] + values[middle]) / 2
                 : values[middle]
-            return MetricPoint(date: bucket.last!.date, value: median)
+            guard let lastDate = bucket.last?.date else { return nil }
+            return MetricPoint(date: lastDate, value: median)
         }
     }
 

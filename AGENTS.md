@@ -37,6 +37,28 @@
 - Run `Tools/verify_local.sh` before merging code changes. Hosted iOS CI is a
   manual fallback only; do not trigger it unless local verification is blocked
   or Harley explicitly requests a hosted run.
+- Treat `project.yml` as the source of truth for Xcode targets and build
+  settings. Run `xcodegen generate` after changing it and commit the generated
+  `Sleep.xcodeproj`; the local gate rejects drift.
+- Format changed Swift with `xcrun swift-format format --configuration
+  .swift-format --in-place <files>`. Do not add force unwraps, force tries, or
+  implicitly unwrapped optionals. Swift and Clang warnings are errors, and Swift
+  strict concurrency stays at `complete`.
+- Every behavior change needs deterministic coverage at the lowest useful
+  layer. Protocol/parsing/scoring/storage policy belongs in unit tests;
+  user-visible critical paths belong in UI tests. Do not skip tests or make
+  private fixtures silently optional in the public suite. Private model
+  validation lives in `SleepPrivateTests` and runs explicitly through
+  `Tools/verify_private_models.sh`.
+- Keep framework callbacks and I/O adapters thin. Put deterministic decisions
+  in focused pure types that can be tested without Bluetooth, notifications,
+  the filesystem, or wall-clock time. Avoid adding more responsibilities to
+  `WhoopStore`, `WhoopHandshakeProbe`, or `RootView`; extract a cohesive file
+  when touching a separable concern. See `docs/architecture.md`.
+- A change is done only when relevant tests are added, formatting and generated
+  files are current, `Tools/verify_local.sh` passes without warnings/skips, and
+  privacy boundaries are preserved. Run `Tools/verify_sanitizers.sh` for risky
+  memory/concurrency/storage changes.
 - Do not add an app-side manual sync control for the hosted replica or for
   memory. Memory reads are initiated from the Mac side. The dashboard's Process
   control is not a sync button: it finalizes a night already collected on the
