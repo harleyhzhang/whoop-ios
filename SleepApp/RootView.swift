@@ -618,10 +618,17 @@ struct RootView: View {
         let lineOpacity = interpolated(1, 0.3, progress: longRangeStyle)
         let areaOpacity = interpolated(0.26, 0.07, progress: longRangeStyle)
         let highlightedPoint = selectedPoint(in: plottedPoints, near: chartSelection) ?? plottedPoints.last!
-        let highlightedPosition = normalizedPosition(of: highlightedPoint, in: plottedPoints)
-        let highlightedValue = chartSelection == nil
-            ? (chartPoints.last?.value ?? highlightedPoint.value)
-            : highlightedPoint.value
+        let requestedHighlightPosition = normalizedPosition(of: highlightedPoint, in: plottedPoints)
+        // The colored trend is drawn through the resampled morph points, not
+        // the original daily values. Snap the marker to the nearest one of
+        // those exact curve anchors so monotone smoothing can never leave the
+        // dot floating above or below the visible line.
+        let highlightedCurvePoint = ChartPointAlignment.nearestCurvePoint(
+            to: requestedHighlightPosition,
+            in: chartPoints
+        )
+        let highlightedPosition = highlightedCurvePoint?.position ?? requestedHighlightPosition
+        let highlightedValue = highlightedCurvePoint?.value ?? highlightedPoint.value
         let firstDate = series.daily.first!.date
         let middleDate = series.daily[series.daily.count / 2].date
         let monthTicks = monthlyAxisDates(in: series.daily)
@@ -1409,10 +1416,21 @@ struct MetricPoint: Identifiable {
     var id: Date { date }
 }
 
-private struct MorphingMetricPoint: Identifiable {
+struct MorphingMetricPoint: Identifiable {
     let id: Int
     let position: Double
     let value: Double
+}
+
+enum ChartPointAlignment {
+    static func nearestCurvePoint(
+        to requestedPosition: Double,
+        in points: [MorphingMetricPoint]
+    ) -> MorphingMetricPoint? {
+        points.min {
+            abs($0.position - requestedPosition) < abs($1.position - requestedPosition)
+        }
+    }
 }
 
 private struct AverageLevel: Identifiable {

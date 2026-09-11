@@ -3,6 +3,41 @@ import SQLite3
 @testable import Sleep
 
 final class WhoopSleepStateTests: XCTestCase {
+    func testChartMarkerSnapsToExactSmoothedCurveAnchor() throws {
+        let curve = [
+            MorphingMetricPoint(id: 0, position: 0, value: 40),
+            MorphingMetricPoint(id: 1, position: 0.25, value: 60),
+            MorphingMetricPoint(id: 2, position: 0.5, value: 45),
+            MorphingMetricPoint(id: 3, position: 0.75, value: 80),
+            MorphingMetricPoint(id: 4, position: 1, value: 70),
+        ]
+
+        let aligned = try XCTUnwrap(
+            ChartPointAlignment.nearestCurvePoint(to: 0.68, in: curve)
+        )
+
+        XCTAssertEqual(aligned.id, 3)
+        XCTAssertEqual(aligned.position, 0.75)
+        XCTAssertEqual(aligned.value, 80)
+    }
+
+    func testChartMarkerAlignmentPreservesCurveEndpoints() throws {
+        let curve = [
+            MorphingMetricPoint(id: 0, position: 0, value: 40),
+            MorphingMetricPoint(id: 1, position: 0.5, value: 60),
+            MorphingMetricPoint(id: 2, position: 1, value: 50),
+        ]
+
+        XCTAssertEqual(
+            try XCTUnwrap(ChartPointAlignment.nearestCurvePoint(to: 0, in: curve)).id,
+            0
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(ChartPointAlignment.nearestCurvePoint(to: 1, in: curve)).id,
+            2
+        )
+    }
+
     func testPendingWakeSuppressesEveryDashboardMetric() {
         let health = dailyHealthRecord(dateKey: "2026-09-08")
         let day = PublishedDashboardDay(
