@@ -15,9 +15,9 @@ import json
 import re
 import sqlite3
 import zlib
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator
-
+from typing import Any
 
 DAY_PATTERN = re.compile(r"(\d{4}-\d{2}-\d{2})-(recovery|strain)$")
 
@@ -168,11 +168,18 @@ def build(archive: Path, database_path: Path, metrics_path: Path) -> None:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    record["sequence"], record["category"], record["name"],
-                    record["method"], record["path"],
+                    record["sequence"],
+                    record["category"],
+                    record["name"],
+                    record["method"],
+                    record["path"],
                     json.dumps(record.get("query", {}), separators=(",", ":"), sort_keys=True),
-                    record["status"], record["fetched_at"], record["attempts"],
-                    record.get("content_type"), record["bytes"], actual,
+                    record["status"],
+                    record["fetched_at"],
+                    record["attempts"],
+                    record.get("content_type"),
+                    record["bytes"],
+                    actual,
                 ),
             )
 

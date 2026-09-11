@@ -6,9 +6,9 @@ struct HandshakeView: View {
 
     private var mockConnected: Bool {
         #if DEBUG
-        ProcessInfo.processInfo.environment["WHOOP_MOCK_CONNECTED"] == "1"
+            ProcessInfo.processInfo.environment["WHOOP_MOCK_CONNECTED"] == "1"
         #else
-        false
+            false
         #endif
     }
 
@@ -22,10 +22,11 @@ struct HandshakeView: View {
 
     private var batteryLevel: Int? {
         #if DEBUG
-        if let value = ProcessInfo.processInfo.environment["WHOOP_MOCK_BATTERY"],
-           let level = Int(value) {
-            return min(max(level, 0), 100)
-        }
+            if let value = ProcessInfo.processInfo.environment["WHOOP_MOCK_BATTERY"],
+                let level = Int(value)
+            {
+                return min(max(level, 0), 100)
+            }
         #endif
         return probe.batteryLevel
     }
@@ -42,7 +43,7 @@ struct HandshakeView: View {
 
     private var lastConnectedStatus: String {
         #if DEBUG
-        if mockConnected { return "Just now" }
+            if mockConnected { return "Just now" }
         #endif
 
         guard let date = probe.lastConnectedAt else { return "Not yet" }

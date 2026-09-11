@@ -7,14 +7,16 @@ enum WhoopFrameIntegrity {
     static func isValid(_ data: Data) -> Bool {
         let bytes = [UInt8](data)
         guard bytes.count >= 12,
-              bytes[0] == 0xAA,
-              Int(UInt16(bytes[2]) | (UInt16(bytes[3]) << 8)) + 8 == bytes.count else {
+            bytes[0] == 0xAA,
+            Int(UInt16(bytes[2]) | (UInt16(bytes[3]) << 8)) + 8 == bytes.count
+        else {
             return false
         }
         let expectedHeader = UInt16(bytes[6]) | (UInt16(bytes[7]) << 8)
         guard crc16Modbus(bytes[0..<6]) == expectedHeader else { return false }
         let payloadEnd = bytes.count - 4
-        let expected = UInt32(bytes[payloadEnd])
+        let expected =
+            UInt32(bytes[payloadEnd])
             | (UInt32(bytes[payloadEnd + 1]) << 8)
             | (UInt32(bytes[payloadEnd + 2]) << 16)
             | (UInt32(bytes[payloadEnd + 3]) << 24)
@@ -92,8 +94,9 @@ struct WhoopDecodedRealtime: Sendable {
     static func decodeWhoop5Realtime(_ data: Data) -> WhoopDecodedRealtime? {
         let bytes = [UInt8](data)
         guard bytes.count >= 22,
-              bytes[8] == 40,
-              WhoopFrameIntegrity.isValid(data) else { return nil }
+            bytes[8] == 40,
+            WhoopFrameIntegrity.isValid(data)
+        else { return nil }
         let count = min(Int(bytes[17]), (bytes.count - 22) / 2)
         var intervals: [UInt16] = []
         intervals.reserveCapacity(count)
@@ -102,7 +105,8 @@ struct WhoopDecodedRealtime: Sendable {
             let value = UInt16(bytes[offset]) | (UInt16(bytes[offset + 1]) << 8)
             if value > 0 { intervals.append(value) }
         }
-        let timestamp = UInt32(bytes[10])
+        let timestamp =
+            UInt32(bytes[10])
             | (UInt32(bytes[11]) << 8)
             | (UInt32(bytes[12]) << 16)
             | (UInt32(bytes[13]) << 24)
@@ -135,10 +139,12 @@ struct WhoopDecodedHistorical: Sendable {
     static func decode(_ data: Data) -> WhoopDecodedHistorical? {
         let bytes = [UInt8](data)
         guard bytes.count == 124,
-              bytes[8] == 47,
-              bytes[9] == 18,
-              WhoopFrameIntegrity.isValid(data) else { return nil }
-        let timestamp = UInt32(bytes[15])
+            bytes[8] == 47,
+            bytes[9] == 18,
+            WhoopFrameIntegrity.isValid(data)
+        else { return nil }
+        let timestamp =
+            UInt32(bytes[15])
             | (UInt32(bytes[16]) << 8)
             | (UInt32(bytes[17]) << 16)
             | (UInt32(bytes[18]) << 24)
@@ -300,11 +306,13 @@ struct WhoopDecodedPPG: Sendable, Equatable {
     static func decode(_ data: Data) -> WhoopDecodedPPG? {
         let bytes = [UInt8](data)
         guard bytes.count == 88,
-              bytes[8] == 47,
-              bytes[9] == 26,
-              bytes[21] != 0,
-              WhoopFrameIntegrity.isValid(data) else { return nil }
-        let timestamp = UInt32(bytes[15])
+            bytes[8] == 47,
+            bytes[9] == 26,
+            bytes[21] != 0,
+            WhoopFrameIntegrity.isValid(data)
+        else { return nil }
+        let timestamp =
+            UInt32(bytes[15])
             | (UInt32(bytes[16]) << 8)
             | (UInt32(bytes[17]) << 16)
             | (UInt32(bytes[18]) << 24)
@@ -473,18 +481,18 @@ final class WhoopStore: @unchecked Sendable {
         }
     }
 
-#if DEBUG
-    /// Test fixtures own temporary database directories. Close the SQLite
-    /// connection before a fixture removes that directory; relying on ARC's
-    /// end-of-scope timing can unlink live WAL files on slower simulators.
-    func shutdownForTesting() {
-        if DispatchQueue.getSpecific(key: queueSpecificKey) != nil {
-            closeDatabase()
-        } else {
-            queue.sync { closeDatabase() }
+    #if DEBUG
+        /// Test fixtures own temporary database directories. Close the SQLite
+        /// connection before a fixture removes that directory; relying on ARC's
+        /// end-of-scope timing can unlink live WAL files on slower simulators.
+        func shutdownForTesting() {
+            if DispatchQueue.getSpecific(key: queueSpecificKey) != nil {
+                closeDatabase()
+            } else {
+                queue.sync { closeDatabase() }
+            }
         }
-    }
-#endif
+    #endif
 
     private func closeDatabase() {
         for statement in cachedStatements.values {
@@ -510,17 +518,18 @@ final class WhoopStore: @unchecked Sendable {
         completion: @escaping @Sendable (WhoopPacketPersistenceResult) -> Void
     ) {
         queue.async { [self] in
-            completion(insert(
-                packet: packet,
-                peripheralID: peripheralID,
-                characteristicUUID: characteristicUUID,
-                frameType: frameType,
-                realtime: realtime,
-                historical: historical,
-                offloadSessionID: offloadSessionID,
-                deduplicateTransportRetries: deduplicateTransportRetries,
-                deliveredAt: deliveredAt
-            ))
+            completion(
+                insert(
+                    packet: packet,
+                    peripheralID: peripheralID,
+                    characteristicUUID: characteristicUUID,
+                    frameType: frameType,
+                    realtime: realtime,
+                    historical: historical,
+                    offloadSessionID: offloadSessionID,
+                    deduplicateTransportRetries: deduplicateTransportRetries,
+                    deliveredAt: deliveredAt
+                ))
         }
     }
 
@@ -542,7 +551,8 @@ final class WhoopStore: @unchecked Sendable {
                 """
             var statement: OpaquePointer?
             guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-                  let statement else {
+                let statement
+            else {
                 completion(nil)
                 return
             }
@@ -565,7 +575,8 @@ final class WhoopStore: @unchecked Sendable {
                 """
             var statement: OpaquePointer?
             guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-                  let statement else { return }
+                let statement
+            else { return }
             defer { sqlite3_finalize(statement) }
             sqlite3_bind_double(statement, 1, Date().timeIntervalSince1970)
             bind(reason, to: 2, in: statement)
@@ -581,11 +592,12 @@ final class WhoopStore: @unchecked Sendable {
         completion: @escaping @Sendable (WhoopSleepSnapshot) -> Void
     ) {
         queue.async { [self] in
-            completion(analyzeLatestSleep(
-                now: now,
-                manualEndAt: manualEndAt,
-                allowAutomaticFinalization: allowAutomaticFinalization
-            ))
+            completion(
+                analyzeLatestSleep(
+                    now: now,
+                    manualEndAt: manualEndAt,
+                    allowAutomaticFinalization: allowAutomaticFinalization
+                ))
         }
     }
 
@@ -698,8 +710,9 @@ final class WhoopStore: @unchecked Sendable {
 
     private func dailyHealthRecord(from statement: OpaquePointer) -> DailyHealthRecord? {
         guard let dateKey = textColumn(statement, 0),
-              let source = textColumn(statement, 9),
-              let sourceUpdatedAt = textColumn(statement, 11) else { return nil }
+            let source = textColumn(statement, 9),
+            let sourceUpdatedAt = textColumn(statement, 11)
+        else { return nil }
         return DailyHealthRecord(
             dateKey: dateKey,
             sleepScore: doubleColumn(statement, 1),
@@ -757,21 +770,23 @@ final class WhoopStore: @unchecked Sendable {
             var result = sqlite3_step(statement)
             while result == SQLITE_ROW {
                 if let dateKey = textColumn(statement, 0),
-                   let source = textColumn(statement, 10) {
-                    records.append(DailyStepRecord(
-                        dateKey: dateKey,
-                        stepCount: Int(sqlite3_column_int64(statement, 1)),
-                        sampleCount: Int(sqlite3_column_int64(statement, 2)),
-                        spanSeconds: Int(sqlite3_column_int64(statement, 3)),
-                        coverageFraction: sqlite3_column_double(statement, 4),
-                        gapSeconds: Int(sqlite3_column_int64(statement, 5)),
-                        counterWrapCount: Int(sqlite3_column_int64(statement, 6)),
-                        rejectedDeltaCount: Int(sqlite3_column_int64(statement, 7)),
-                        firstSampleAt: doubleColumn(statement, 8).map { Date(timeIntervalSince1970: $0) },
-                        lastSampleAt: doubleColumn(statement, 9).map { Date(timeIntervalSince1970: $0) },
-                        source: source,
-                        algorithmVersion: Int(sqlite3_column_int(statement, 11))
-                    ))
+                    let source = textColumn(statement, 10)
+                {
+                    records.append(
+                        DailyStepRecord(
+                            dateKey: dateKey,
+                            stepCount: Int(sqlite3_column_int64(statement, 1)),
+                            sampleCount: Int(sqlite3_column_int64(statement, 2)),
+                            spanSeconds: Int(sqlite3_column_int64(statement, 3)),
+                            coverageFraction: sqlite3_column_double(statement, 4),
+                            gapSeconds: Int(sqlite3_column_int64(statement, 5)),
+                            counterWrapCount: Int(sqlite3_column_int64(statement, 6)),
+                            rejectedDeltaCount: Int(sqlite3_column_int64(statement, 7)),
+                            firstSampleAt: doubleColumn(statement, 8).map { Date(timeIntervalSince1970: $0) },
+                            lastSampleAt: doubleColumn(statement, 9).map { Date(timeIntervalSince1970: $0) },
+                            source: source,
+                            algorithmVersion: Int(sqlite3_column_int(statement, 11))
+                        ))
                 }
                 result = sqlite3_step(statement)
             }
@@ -805,11 +820,13 @@ final class WhoopStore: @unchecked Sendable {
             var result = sqlite3_step(statement)
             while result == SQLITE_ROW {
                 if let dateKey = textColumn(statement, 0),
-                   let score = doubleColumn(statement, 1),
-                   let source = textColumn(statement, 2) {
-                    records.append(DailyRecoveryRecord(
-                        dateKey: dateKey, score: score, source: source
-                    ))
+                    let score = doubleColumn(statement, 1),
+                    let source = textColumn(statement, 2)
+                {
+                    records.append(
+                        DailyRecoveryRecord(
+                            dateKey: dateKey, score: score, source: source
+                        ))
                 }
                 result = sqlite3_step(statement)
             }
@@ -836,7 +853,8 @@ final class WhoopStore: @unchecked Sendable {
                 """
             var statement: OpaquePointer?
             guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-                  let statement else {
+                let statement
+            else {
                 completion(nil)
                 return
             }
@@ -856,12 +874,14 @@ final class WhoopStore: @unchecked Sendable {
 
     static func databaseDirectory() -> URL? {
         let fileManager = FileManager.default
-        guard let base = try? fileManager.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        ) else { return nil }
+        guard
+            let base = try? fileManager.url(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask,
+                appropriateFor: nil,
+                create: true
+            )
+        else { return nil }
         let directory = base.appendingPathComponent("Sleep", isDirectory: true)
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
@@ -879,12 +899,14 @@ final class WhoopStore: @unchecked Sendable {
             guard let directory = Self.databaseDirectory() else { return }
             url = directory.appendingPathComponent("sleep.sqlite3")
         }
-        guard sqlite3_open_v2(
-            url.path,
-            &database,
-            SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
-            nil
-        ) == SQLITE_OK else {
+        guard
+            sqlite3_open_v2(
+                url.path,
+                &database,
+                SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
+                nil
+            ) == SQLITE_OK
+        else {
             if let database { sqlite3_close(database) }
             database = nil
             return
@@ -895,7 +917,8 @@ final class WhoopStore: @unchecked Sendable {
         // immediate reopen fails `PRAGMA journal_mode=WAL` with SQLITE_BUSY and
         // leaves the store permanently unavailable.
         guard let openedDatabase = database,
-              sqlite3_busy_timeout(openedDatabase, 5_000) == SQLITE_OK else {
+            sqlite3_busy_timeout(openedDatabase, 5_000) == SQLITE_OK
+        else {
             if let database { sqlite3_close_v2(database) }
             database = nil
             return
@@ -904,26 +927,31 @@ final class WhoopStore: @unchecked Sendable {
             [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
             ofItemAtPath: url.path
         )
-        let configured = execute("PRAGMA journal_mode=WAL")
+        let configured =
+            execute("PRAGMA journal_mode=WAL")
             && execute("PRAGMA foreign_keys=ON")
             && execute("PRAGMA wal_autocheckpoint=1000")
             && execute("PRAGMA journal_size_limit=8388608")
         guard configured,
-              createPreMigrationSnapshotIfNeeded(databaseURL: url),
-              migrateSchema() else {
+            createPreMigrationSnapshotIfNeeded(databaseURL: url),
+            migrateSchema()
+        else {
             if let database { sqlite3_close(database) }
             database = nil
             return
         }
-        nextDeliverySequence = ((try? scalarInt(database!, sql: """
-            SELECT MAX(value) FROM (
-                SELECT COALESCE(MAX(delivery_sequence), 0) AS value FROM whoop_raw_packet
-                UNION ALL
-                SELECT COALESCE(MAX(last_sequence), 0) FROM whoop_offload_session
-                UNION ALL
-                SELECT COALESCE(MAX(completion_sequence), 0) FROM whoop_offload_session
-            )
-            """)) ?? 0) + 1
+        nextDeliverySequence =
+            ((try? scalarInt(
+                openedDatabase,
+                sql: """
+                    SELECT MAX(value) FROM (
+                        SELECT COALESCE(MAX(delivery_sequence), 0) AS value FROM whoop_raw_packet
+                        UNION ALL
+                        SELECT COALESCE(MAX(last_sequence), 0) FROM whoop_offload_session
+                        UNION ALL
+                        SELECT COALESCE(MAX(completion_sequence), 0) FROM whoop_offload_session
+                    )
+                    """)) ?? 0) + 1
         abandonInterruptedOffloads()
         recordTimeZoneObservation()
         _ = execute("PRAGMA optimize")
@@ -943,9 +971,10 @@ final class WhoopStore: @unchecked Sendable {
     /// Migration fails closed if the snapshot cannot be completed.
     private func createPreMigrationSnapshotIfNeeded(databaseURL: URL) -> Bool {
         guard let database,
-              let current = try? scalarInt(database, sql: "PRAGMA user_version"),
-              current > 0,
-              current < Self.schemaVersion else { return true }
+            let current = try? scalarInt(database, sql: "PRAGMA user_version"),
+            current > 0,
+            current < Self.schemaVersion
+        else { return true }
 
         let directory = databaseURL.deletingLastPathComponent()
             .appendingPathComponent("migration-backups", isDirectory: true)
@@ -962,14 +991,16 @@ final class WhoopStore: @unchecked Sendable {
                 try fileManager.removeItem(at: snapshotURL)
             }
         } catch {
-            Self.logger.error("Could not prepare migration backup directory: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error(
+                "Could not prepare migration backup directory: \(error.localizedDescription, privacy: .public)")
             return false
         }
 
         let temporaryURL = directory.appendingPathComponent(".migration-backup-in-progress.sqlite3")
         Self.removeSQLiteFiles(at: temporaryURL, fileManager: fileManager)
         guard Self.copySQLiteDatabase(source: database, destinationURL: temporaryURL),
-              Self.validSQLiteSnapshot(at: temporaryURL, expectedVersion: current) else {
+            Self.validSQLiteSnapshot(at: temporaryURL, expectedVersion: current)
+        else {
             Self.removeSQLiteFiles(at: temporaryURL, fileManager: fileManager)
             Self.logger.error("Refusing schema migration because its SQLite snapshot failed validation")
             return false
@@ -1003,12 +1034,14 @@ final class WhoopStore: @unchecked Sendable {
     /// Internal for a focused WAL-consistency regression test.
     static func copySQLiteDatabase(source: OpaquePointer, destinationURL: URL) -> Bool {
         var destination: OpaquePointer?
-        guard sqlite3_open_v2(
-            destinationURL.path,
-            &destination,
-            SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
-            nil
-        ) == SQLITE_OK, let destination else {
+        guard
+            sqlite3_open_v2(
+                destinationURL.path,
+                &destination,
+                SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
+                nil
+            ) == SQLITE_OK, let destination
+        else {
             if let destination { sqlite3_close(destination) }
             return false
         }
@@ -1030,30 +1063,35 @@ final class WhoopStore: @unchecked Sendable {
         guard FileManager.default.fileExists(atPath: url.path) else { return false }
         var snapshot: OpaquePointer?
         guard sqlite3_open_v2(url.path, &snapshot, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
-              let snapshot else {
+            let snapshot
+        else {
             if let snapshot { sqlite3_close(snapshot) }
             return false
         }
         defer { sqlite3_close(snapshot) }
         var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(
-            snapshot,
-            "SELECT (SELECT user_version FROM pragma_user_version), (SELECT quick_check FROM pragma_quick_check)",
-            -1,
-            &statement,
-            nil
-        ) == SQLITE_OK, let statement else { return false }
+        guard
+            sqlite3_prepare_v2(
+                snapshot,
+                "SELECT (SELECT user_version FROM pragma_user_version), (SELECT quick_check FROM pragma_quick_check)",
+                -1,
+                &statement,
+                nil
+            ) == SQLITE_OK, let statement
+        else { return false }
         defer { sqlite3_finalize(statement) }
         guard sqlite3_step(statement) == SQLITE_ROW,
-              sqlite3_column_int64(statement, 0) == expectedVersion,
-              let check = sqlite3_column_text(statement, 1) else { return false }
+            sqlite3_column_int64(statement, 0) == expectedVersion,
+            let check = sqlite3_column_text(statement, 1)
+        else { return false }
         return String(cString: check) == "ok"
     }
 
     private func migrateSchema() -> Bool {
         guard let database,
-              let current = try? scalarInt(database, sql: "PRAGMA user_version"),
-              current <= Self.schemaVersion else { return false }
+            let current = try? scalarInt(database, sql: "PRAGMA user_version"),
+            current <= Self.schemaVersion
+        else { return false }
         guard current < Self.schemaVersion else { return true }
         for version in (Int(current) + 1)...Self.schemaVersion {
             do {
@@ -1072,7 +1110,8 @@ final class WhoopStore: @unchecked Sendable {
     private func applyMigration(_ version: Int) -> Bool {
         switch version {
         case 1:
-            return execute("""
+            return execute(
+                """
                 CREATE TABLE IF NOT EXISTS whoop_raw_packet (
                     id TEXT PRIMARY KEY,
                     received_at REAL NOT NULL,
@@ -1082,133 +1121,154 @@ final class WhoopStore: @unchecked Sendable {
                     payload BLOB NOT NULL
                 )
                 """)
-            && execute("CREATE INDEX IF NOT EXISTS whoop_raw_packet_received_at ON whoop_raw_packet(received_at)")
-            && execute("""
-                CREATE TABLE IF NOT EXISTS heart_rate_sample (
-                    id TEXT PRIMARY KEY,
-                    source_packet_id TEXT NOT NULL,
-                    received_at REAL NOT NULL,
-                    device_timestamp INTEGER,
-                    heart_rate INTEGER NOT NULL,
-                    rr_intervals_json TEXT NOT NULL,
-                    source TEXT NOT NULL,
-                    FOREIGN KEY(source_packet_id) REFERENCES whoop_raw_packet(id)
+                && execute("CREATE INDEX IF NOT EXISTS whoop_raw_packet_received_at ON whoop_raw_packet(received_at)")
+                && execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS heart_rate_sample (
+                        id TEXT PRIMARY KEY,
+                        source_packet_id TEXT NOT NULL,
+                        received_at REAL NOT NULL,
+                        device_timestamp INTEGER,
+                        heart_rate INTEGER NOT NULL,
+                        rr_intervals_json TEXT NOT NULL,
+                        source TEXT NOT NULL,
+                        FOREIGN KEY(source_packet_id) REFERENCES whoop_raw_packet(id)
+                    )
+                    """)
+                && execute("CREATE INDEX IF NOT EXISTS heart_rate_sample_received_at ON heart_rate_sample(received_at)")
+                && execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS whoop_historical_sample (
+                        sample_at REAL PRIMARY KEY,
+                        source_packet_id TEXT NOT NULL,
+                        heart_rate INTEGER NOT NULL,
+                        rr_intervals_json TEXT NOT NULL,
+                        sleep_state INTEGER NOT NULL,
+                        FOREIGN KEY(source_packet_id) REFERENCES whoop_raw_packet(id)
+                    )
+                    """)
+                && execute(
+                    "CREATE INDEX IF NOT EXISTS whoop_historical_sample_sleep_state ON whoop_historical_sample(sleep_state, sample_at)"
                 )
-                """)
-            && execute("CREATE INDEX IF NOT EXISTS heart_rate_sample_received_at ON heart_rate_sample(received_at)")
-            && execute("""
-                CREATE TABLE IF NOT EXISTS whoop_historical_sample (
-                    sample_at REAL PRIMARY KEY,
-                    source_packet_id TEXT NOT NULL,
-                    heart_rate INTEGER NOT NULL,
-                    rr_intervals_json TEXT NOT NULL,
-                    sleep_state INTEGER NOT NULL,
-                    FOREIGN KEY(source_packet_id) REFERENCES whoop_raw_packet(id)
-                )
-                """)
-            && execute("CREATE INDEX IF NOT EXISTS whoop_historical_sample_sleep_state ON whoop_historical_sample(sleep_state, sample_at)")
-            && execute("""
-                CREATE TABLE IF NOT EXISTS whoop_packet_replay (
-                    signature BLOB PRIMARY KEY,
-                    first_packet_id TEXT NOT NULL,
-                    duplicate_count INTEGER NOT NULL DEFAULT 0,
-                    last_received_at REAL NOT NULL
-                )
-                """)
-            && execute("""
-                CREATE TABLE IF NOT EXISTS daily_health_metric (
-                    date_key TEXT PRIMARY KEY,
-                    sleep_score REAL,
-                    sleep_duration_minutes REAL,
-                    hrv_rmssd_milliseconds REAL,
-                    resting_heart_rate_bpm REAL,
-                    sleep_id TEXT,
-                    cycle_id INTEGER,
-                    source TEXT NOT NULL,
-                    source_archive TEXT,
-                    source_updated_at TEXT NOT NULL,
-                    imported_at REAL NOT NULL
-                )
-                """)
+                && execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS whoop_packet_replay (
+                        signature BLOB PRIMARY KEY,
+                        first_packet_id TEXT NOT NULL,
+                        duplicate_count INTEGER NOT NULL DEFAULT 0,
+                        last_received_at REAL NOT NULL
+                    )
+                    """)
+                && execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS daily_health_metric (
+                        date_key TEXT PRIMARY KEY,
+                        sleep_score REAL,
+                        sleep_duration_minutes REAL,
+                        hrv_rmssd_milliseconds REAL,
+                        resting_heart_rate_bpm REAL,
+                        sleep_id TEXT,
+                        cycle_id INTEGER,
+                        source TEXT NOT NULL,
+                        source_archive TEXT,
+                        source_updated_at TEXT NOT NULL,
+                        imported_at REAL NOT NULL
+                    )
+                    """)
         case 2:
             return addColumnIfNeeded(
                 table: "whoop_raw_packet",
                 column: "delivery_sequence",
                 declaration: "INTEGER"
             )
-            && addColumnIfNeeded(
-                table: "whoop_raw_packet",
-                column: "protocol_version",
-                declaration: "INTEGER"
-            )
-            && addColumnIfNeeded(
-                table: "whoop_raw_packet",
-                column: "crc_valid",
-                declaration: "INTEGER"
-            )
-            && execute("CREATE INDEX IF NOT EXISTS whoop_raw_packet_delivery_sequence ON whoop_raw_packet(delivery_sequence)")
-            && execute("""
-                CREATE TABLE IF NOT EXISTS whoop_decode_result (
-                    source_packet_id TEXT NOT NULL,
-                    decoder_version INTEGER NOT NULL,
-                    protocol_version INTEGER,
-                    stream TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    error TEXT,
-                    decoded_at REAL NOT NULL,
-                    PRIMARY KEY(source_packet_id, decoder_version),
-                    FOREIGN KEY(source_packet_id) REFERENCES whoop_raw_packet(id)
+                && addColumnIfNeeded(
+                    table: "whoop_raw_packet",
+                    column: "protocol_version",
+                    declaration: "INTEGER"
                 )
-                """)
-            && execute("CREATE INDEX IF NOT EXISTS whoop_decode_result_status ON whoop_decode_result(decoder_version, status)")
-            && execute("""
-                CREATE TABLE IF NOT EXISTS whoop_ppg_packet (
-                    source_packet_id TEXT PRIMARY KEY,
-                    sample_at REAL NOT NULL,
-                    channel INTEGER NOT NULL CHECK(channel BETWEEN 1 AND 255),
-                    sample_rate_hz REAL NOT NULL,
-                    samples_i16_le BLOB NOT NULL,
-                    FOREIGN KEY(source_packet_id) REFERENCES whoop_raw_packet(id)
+                && addColumnIfNeeded(
+                    table: "whoop_raw_packet",
+                    column: "crc_valid",
+                    declaration: "INTEGER"
                 )
-                """)
-            && execute("CREATE INDEX IF NOT EXISTS whoop_ppg_packet_sample_at ON whoop_ppg_packet(sample_at, channel)")
-            && execute("""
-                CREATE TABLE IF NOT EXISTS whoop_store_metadata (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
+                && execute(
+                    "CREATE INDEX IF NOT EXISTS whoop_raw_packet_delivery_sequence ON whoop_raw_packet(delivery_sequence)"
                 )
-                """)
+                && execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS whoop_decode_result (
+                        source_packet_id TEXT NOT NULL,
+                        decoder_version INTEGER NOT NULL,
+                        protocol_version INTEGER,
+                        stream TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        error TEXT,
+                        decoded_at REAL NOT NULL,
+                        PRIMARY KEY(source_packet_id, decoder_version),
+                        FOREIGN KEY(source_packet_id) REFERENCES whoop_raw_packet(id)
+                    )
+                    """)
+                && execute(
+                    "CREATE INDEX IF NOT EXISTS whoop_decode_result_status ON whoop_decode_result(decoder_version, status)"
+                )
+                && execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS whoop_ppg_packet (
+                        source_packet_id TEXT PRIMARY KEY,
+                        sample_at REAL NOT NULL,
+                        channel INTEGER NOT NULL CHECK(channel BETWEEN 1 AND 255),
+                        sample_rate_hz REAL NOT NULL,
+                        samples_i16_le BLOB NOT NULL,
+                        FOREIGN KEY(source_packet_id) REFERENCES whoop_raw_packet(id)
+                    )
+                    """)
+                && execute(
+                    "CREATE INDEX IF NOT EXISTS whoop_ppg_packet_sample_at ON whoop_ppg_packet(sample_at, channel)")
+                && execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS whoop_store_metadata (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL
+                    )
+                    """)
         case 3:
             return addColumnIfNeeded(
                 table: "whoop_raw_packet",
                 column: "offload_session_id",
                 declaration: "TEXT"
             )
-            && execute("""
-                CREATE TABLE IF NOT EXISTS whoop_offload_session (
-                    id TEXT PRIMARY KEY,
-                    peripheral_id TEXT NOT NULL,
-                    started_at REAL NOT NULL,
-                    completed_at REAL,
-                    first_sequence INTEGER,
-                    last_sequence INTEGER,
-                    completion_sequence INTEGER,
-                    completion_packet_id TEXT,
-                    status TEXT NOT NULL CHECK(status IN ('in_progress','complete','abandoned')),
-                    failure_reason TEXT,
-                    FOREIGN KEY(completion_packet_id) REFERENCES whoop_raw_packet(id)
+                && execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS whoop_offload_session (
+                        id TEXT PRIMARY KEY,
+                        peripheral_id TEXT NOT NULL,
+                        started_at REAL NOT NULL,
+                        completed_at REAL,
+                        first_sequence INTEGER,
+                        last_sequence INTEGER,
+                        completion_sequence INTEGER,
+                        completion_packet_id TEXT,
+                        status TEXT NOT NULL CHECK(status IN ('in_progress','complete','abandoned')),
+                        failure_reason TEXT,
+                        FOREIGN KEY(completion_packet_id) REFERENCES whoop_raw_packet(id)
+                    )
+                    """)
+                && execute(
+                    "CREATE INDEX IF NOT EXISTS whoop_offload_session_status ON whoop_offload_session(status, completed_at)"
                 )
-                """)
-            && execute("CREATE INDEX IF NOT EXISTS whoop_offload_session_status ON whoop_offload_session(status, completed_at)")
-            && execute("CREATE INDEX IF NOT EXISTS whoop_raw_packet_offload_session ON whoop_raw_packet(offload_session_id, delivery_sequence)")
-            && execute("""
-                UPDATE whoop_offload_session
-                SET status = 'abandoned', completed_at = strftime('%s','now'),
-                    failure_reason = 'app relaunched before completion'
-                WHERE status = 'in_progress'
-                """)
+                && execute(
+                    "CREATE INDEX IF NOT EXISTS whoop_raw_packet_offload_session ON whoop_raw_packet(offload_session_id, delivery_sequence)"
+                )
+                && execute(
+                    """
+                    UPDATE whoop_offload_session
+                    SET status = 'abandoned', completed_at = strftime('%s','now'),
+                        failure_reason = 'app relaunched before completion'
+                    WHERE status = 'in_progress'
+                    """)
         case 4:
-            return execute("""
+            return execute(
+                """
                 CREATE TABLE whoop_historical_sample_v4 (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     sample_at REAL NOT NULL,
@@ -1224,50 +1284,60 @@ final class WhoopStore: @unchecked Sendable {
                     FOREIGN KEY(source_packet_id) REFERENCES whoop_raw_packet(id)
                 )
                 """)
-            && execute("""
-                INSERT INTO whoop_historical_sample_v4
-                (sample_at, source_packet_id, peripheral_id, protocol_version,
-                 ordinal, heart_rate, rr_intervals_json, sleep_state, decoder_version)
-                SELECT h.sample_at, h.source_packet_id,
-                       COALESCE(p.peripheral_id, 'legacy-unknown'),
-                       COALESCE(p.protocol_version, 18), 0,
-                       h.heart_rate, h.rr_intervals_json, h.sleep_state, 1
-                FROM whoop_historical_sample h
-                LEFT JOIN whoop_raw_packet p ON p.id = h.source_packet_id
-                """)
-            && execute("DROP TABLE whoop_historical_sample")
-            && execute("ALTER TABLE whoop_historical_sample_v4 RENAME TO whoop_historical_sample")
-            && execute("CREATE INDEX whoop_historical_sample_sleep_state ON whoop_historical_sample(peripheral_id, sleep_state, sample_at)")
-            && execute("CREATE INDEX whoop_historical_sample_sample_at ON whoop_historical_sample(peripheral_id, sample_at)")
-            && execute("CREATE INDEX IF NOT EXISTS heart_rate_sample_source_time ON heart_rate_sample(source, device_timestamp, received_at)")
-            && execute("CREATE INDEX IF NOT EXISTS heart_rate_sample_source_received ON heart_rate_sample(source, received_at)")
+                && execute(
+                    """
+                    INSERT INTO whoop_historical_sample_v4
+                    (sample_at, source_packet_id, peripheral_id, protocol_version,
+                     ordinal, heart_rate, rr_intervals_json, sleep_state, decoder_version)
+                    SELECT h.sample_at, h.source_packet_id,
+                           COALESCE(p.peripheral_id, 'legacy-unknown'),
+                           COALESCE(p.protocol_version, 18), 0,
+                           h.heart_rate, h.rr_intervals_json, h.sleep_state, 1
+                    FROM whoop_historical_sample h
+                    LEFT JOIN whoop_raw_packet p ON p.id = h.source_packet_id
+                    """)
+                && execute("DROP TABLE whoop_historical_sample")
+                && execute("ALTER TABLE whoop_historical_sample_v4 RENAME TO whoop_historical_sample")
+                && execute(
+                    "CREATE INDEX whoop_historical_sample_sleep_state ON whoop_historical_sample(peripheral_id, sleep_state, sample_at)"
+                )
+                && execute(
+                    "CREATE INDEX whoop_historical_sample_sample_at ON whoop_historical_sample(peripheral_id, sample_at)"
+                )
+                && execute(
+                    "CREATE INDEX IF NOT EXISTS heart_rate_sample_source_time ON heart_rate_sample(source, device_timestamp, received_at)"
+                )
+                && execute(
+                    "CREATE INDEX IF NOT EXISTS heart_rate_sample_source_received ON heart_rate_sample(source, received_at)"
+                )
         case 5:
             return addColumnIfNeeded(
                 table: "daily_health_metric", column: "sleep_start_at", declaration: "TEXT"
             )
-            && addColumnIfNeeded(
-                table: "daily_health_metric", column: "sleep_end_at", declaration: "TEXT"
-            )
-            && addColumnIfNeeded(
-                table: "daily_health_metric", column: "sleep_start_minute", declaration: "REAL"
-            )
-            && addColumnIfNeeded(
-                table: "daily_health_metric", column: "sleep_end_minute", declaration: "REAL"
-            )
-            && addColumnIfNeeded(
-                table: "daily_health_metric", column: "sleep_need_minutes", declaration: "REAL"
-            )
-            && addColumnIfNeeded(
-                table: "daily_health_metric", column: "sleep_consistency_percentage", declaration: "REAL"
-            )
-            && addColumnIfNeeded(
-                table: "daily_health_metric", column: "sleep_efficiency_percentage", declaration: "REAL"
-            )
-            && addColumnIfNeeded(
-                table: "daily_health_metric", column: "sleep_sufficiency_percentage", declaration: "REAL"
-            )
+                && addColumnIfNeeded(
+                    table: "daily_health_metric", column: "sleep_end_at", declaration: "TEXT"
+                )
+                && addColumnIfNeeded(
+                    table: "daily_health_metric", column: "sleep_start_minute", declaration: "REAL"
+                )
+                && addColumnIfNeeded(
+                    table: "daily_health_metric", column: "sleep_end_minute", declaration: "REAL"
+                )
+                && addColumnIfNeeded(
+                    table: "daily_health_metric", column: "sleep_need_minutes", declaration: "REAL"
+                )
+                && addColumnIfNeeded(
+                    table: "daily_health_metric", column: "sleep_consistency_percentage", declaration: "REAL"
+                )
+                && addColumnIfNeeded(
+                    table: "daily_health_metric", column: "sleep_efficiency_percentage", declaration: "REAL"
+                )
+                && addColumnIfNeeded(
+                    table: "daily_health_metric", column: "sleep_sufficiency_percentage", declaration: "REAL"
+                )
         case 6:
-            return execute("""
+            return execute(
+                """
                 CREATE TABLE IF NOT EXISTS whoop_api_source_record (
                     date_key TEXT PRIMARY KEY,
                     sleep_payload_json TEXT NOT NULL,
@@ -1277,29 +1347,35 @@ final class WhoopStore: @unchecked Sendable {
                     FOREIGN KEY(date_key) REFERENCES daily_health_metric(date_key)
                 )
                 """)
-            && execute("""
-                CREATE TABLE IF NOT EXISTS whoop_api_numeric_metric (
-                    date_key TEXT NOT NULL,
-                    source_kind TEXT NOT NULL CHECK(source_kind IN ('sleep','recovery')),
-                    field_path TEXT NOT NULL,
-                    value REAL NOT NULL,
-                    PRIMARY KEY(date_key, source_kind, field_path),
-                    FOREIGN KEY(date_key) REFERENCES whoop_api_source_record(date_key)
+                && execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS whoop_api_numeric_metric (
+                        date_key TEXT NOT NULL,
+                        source_kind TEXT NOT NULL CHECK(source_kind IN ('sleep','recovery')),
+                        field_path TEXT NOT NULL,
+                        value REAL NOT NULL,
+                        PRIMARY KEY(date_key, source_kind, field_path),
+                        FOREIGN KEY(date_key) REFERENCES whoop_api_source_record(date_key)
+                    )
+                    """)
+                && execute(
+                    "CREATE INDEX IF NOT EXISTS whoop_api_numeric_metric_path ON whoop_api_numeric_metric(source_kind, field_path, date_key)"
                 )
-                """)
-            && execute("CREATE INDEX IF NOT EXISTS whoop_api_numeric_metric_path ON whoop_api_numeric_metric(source_kind, field_path, date_key)")
         case 7:
             // A travel-safe provenance timeline. Raw timestamps remain
             // absolute; this captures the local civil-time context needed to
             // reproduce timing consistency after the phone changes zones.
-            return execute("""
+            return execute(
+                """
                 CREATE TABLE IF NOT EXISTS whoop_time_zone_observation (
                     observed_at REAL PRIMARY KEY,
                     time_zone_identifier TEXT NOT NULL,
                     utc_offset_seconds INTEGER NOT NULL
                 )
                 """)
-            && execute("CREATE INDEX IF NOT EXISTS whoop_time_zone_observation_zone ON whoop_time_zone_observation(time_zone_identifier, observed_at)")
+                && execute(
+                    "CREATE INDEX IF NOT EXISTS whoop_time_zone_observation_zone ON whoop_time_zone_observation(time_zone_identifier, observed_at)"
+                )
         case 8:
             // Version-18 packets already contain these candidate motion
             // fields. Materialize them without replacing their immutable raw
@@ -1310,51 +1386,57 @@ final class WhoopStore: @unchecked Sendable {
                 column: "step_motion_counter",
                 declaration: "INTEGER"
             )
-            && addColumnIfNeeded(
-                table: "whoop_historical_sample",
-                column: "step_cadence_raw",
-                declaration: "INTEGER"
-            )
-            && addColumnIfNeeded(
-                table: "whoop_historical_sample",
-                column: "motion_class_raw",
-                declaration: "INTEGER"
-            )
-            && addColumnIfNeeded(
-                table: "whoop_historical_sample",
-                column: "step_utc_offset_seconds",
-                declaration: "INTEGER"
-            )
-            && addColumnIfNeeded(
-                table: "whoop_historical_sample",
-                column: "step_date_key",
-                declaration: "TEXT"
-            )
-            && execute("CREATE INDEX IF NOT EXISTS whoop_historical_sample_step_day ON whoop_historical_sample(step_date_key, peripheral_id, sample_at)")
-            && execute("""
-                CREATE TABLE IF NOT EXISTS whoop_daily_step_metric (
-                    date_key TEXT PRIMARY KEY,
-                    peripheral_id TEXT NOT NULL,
-                    step_count INTEGER NOT NULL CHECK(step_count >= 0),
-                    sample_count INTEGER NOT NULL CHECK(sample_count >= 0),
-                    span_seconds INTEGER NOT NULL CHECK(span_seconds >= 0),
-                    coverage_fraction REAL NOT NULL CHECK(coverage_fraction BETWEEN 0 AND 1),
-                    gap_seconds INTEGER NOT NULL CHECK(gap_seconds >= 0),
-                    counter_wrap_count INTEGER NOT NULL CHECK(counter_wrap_count >= 0),
-                    rejected_delta_count INTEGER NOT NULL CHECK(rejected_delta_count >= 0),
-                    first_sample_at REAL,
-                    last_sample_at REAL,
-                    source TEXT NOT NULL,
-                    algorithm_version INTEGER NOT NULL,
-                    derived_at REAL NOT NULL
+                && addColumnIfNeeded(
+                    table: "whoop_historical_sample",
+                    column: "step_cadence_raw",
+                    declaration: "INTEGER"
                 )
-            """)
-            && execute("CREATE INDEX IF NOT EXISTS whoop_daily_step_metric_last_sample ON whoop_daily_step_metric(last_sample_at)")
+                && addColumnIfNeeded(
+                    table: "whoop_historical_sample",
+                    column: "motion_class_raw",
+                    declaration: "INTEGER"
+                )
+                && addColumnIfNeeded(
+                    table: "whoop_historical_sample",
+                    column: "step_utc_offset_seconds",
+                    declaration: "INTEGER"
+                )
+                && addColumnIfNeeded(
+                    table: "whoop_historical_sample",
+                    column: "step_date_key",
+                    declaration: "TEXT"
+                )
+                && execute(
+                    "CREATE INDEX IF NOT EXISTS whoop_historical_sample_step_day ON whoop_historical_sample(step_date_key, peripheral_id, sample_at)"
+                )
+                && execute(
+                    """
+                        CREATE TABLE IF NOT EXISTS whoop_daily_step_metric (
+                            date_key TEXT PRIMARY KEY,
+                            peripheral_id TEXT NOT NULL,
+                            step_count INTEGER NOT NULL CHECK(step_count >= 0),
+                            sample_count INTEGER NOT NULL CHECK(sample_count >= 0),
+                            span_seconds INTEGER NOT NULL CHECK(span_seconds >= 0),
+                            coverage_fraction REAL NOT NULL CHECK(coverage_fraction BETWEEN 0 AND 1),
+                            gap_seconds INTEGER NOT NULL CHECK(gap_seconds >= 0),
+                            counter_wrap_count INTEGER NOT NULL CHECK(counter_wrap_count >= 0),
+                            rejected_delta_count INTEGER NOT NULL CHECK(rejected_delta_count >= 0),
+                            first_sample_at REAL,
+                            last_sample_at REAL,
+                            source TEXT NOT NULL,
+                            algorithm_version INTEGER NOT NULL,
+                            derived_at REAL NOT NULL
+                        )
+                    """)
+                && execute(
+                    "CREATE INDEX IF NOT EXISTS whoop_daily_step_metric_last_sample ON whoop_daily_step_metric(last_sample_at)"
+                )
         case 9:
             // WHOOP cloud targets remain independent of local predictions so
             // every model version can be backtested without overwriting its
             // answer key. The UI reads a COALESCE projection only at query time.
-            return execute("""
+            return execute(
+                """
                 CREATE TABLE IF NOT EXISTS whoop_official_daily_metric (
                     date_key TEXT PRIMARY KEY,
                     official_recovery_score REAL,
@@ -1377,28 +1459,35 @@ final class WhoopStore: @unchecked Sendable {
                     imported_at REAL NOT NULL
                 )
                 """)
-            && execute("CREATE INDEX IF NOT EXISTS whoop_official_daily_recovery ON whoop_official_daily_metric(official_recovery_score, date_key)")
-            && execute("CREATE INDEX IF NOT EXISTS whoop_official_daily_steps ON whoop_official_daily_metric(official_steps, date_key)")
-            && execute("""
-                CREATE TABLE IF NOT EXISTS whoop_daily_recovery_metric (
-                    date_key TEXT PRIMARY KEY,
-                    score REAL NOT NULL CHECK(score BETWEEN 0 AND 100),
-                    confidence REAL NOT NULL CHECK(confidence BETWEEN 0 AND 1),
-                    hrv_component REAL,
-                    rhr_component REAL,
-                    sleep_component REAL,
-                    steps_component REAL,
-                    hrv_baseline REAL,
-                    rhr_baseline REAL,
-                    sleep_baseline REAL,
-                    steps_baseline REAL,
-                    input_json TEXT NOT NULL,
-                    model_version TEXT NOT NULL,
-                    derived_at REAL NOT NULL,
-                    FOREIGN KEY(date_key) REFERENCES daily_health_metric(date_key)
+                && execute(
+                    "CREATE INDEX IF NOT EXISTS whoop_official_daily_recovery ON whoop_official_daily_metric(official_recovery_score, date_key)"
                 )
-                """)
-            && execute("CREATE INDEX IF NOT EXISTS whoop_daily_recovery_model ON whoop_daily_recovery_metric(model_version, date_key)")
+                && execute(
+                    "CREATE INDEX IF NOT EXISTS whoop_official_daily_steps ON whoop_official_daily_metric(official_steps, date_key)"
+                )
+                && execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS whoop_daily_recovery_metric (
+                        date_key TEXT PRIMARY KEY,
+                        score REAL NOT NULL CHECK(score BETWEEN 0 AND 100),
+                        confidence REAL NOT NULL CHECK(confidence BETWEEN 0 AND 1),
+                        hrv_component REAL,
+                        rhr_component REAL,
+                        sleep_component REAL,
+                        steps_component REAL,
+                        hrv_baseline REAL,
+                        rhr_baseline REAL,
+                        sleep_baseline REAL,
+                        steps_baseline REAL,
+                        input_json TEXT NOT NULL,
+                        model_version TEXT NOT NULL,
+                        derived_at REAL NOT NULL,
+                        FOREIGN KEY(date_key) REFERENCES daily_health_metric(date_key)
+                    )
+                    """)
+                && execute(
+                    "CREATE INDEX IF NOT EXISTS whoop_daily_recovery_model ON whoop_daily_recovery_metric(model_version, date_key)"
+                )
         default:
             return false
         }
@@ -1413,7 +1502,8 @@ final class WhoopStore: @unchecked Sendable {
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return }
+            let statement
+        else { return }
         defer { sqlite3_finalize(statement) }
         let zone = TimeZone.autoupdatingCurrent
         sqlite3_bind_double(statement, 1, now.timeIntervalSince1970)
@@ -1429,13 +1519,14 @@ final class WhoopStore: @unchecked Sendable {
             ORDER BY ABS(observed_at - ?)
             LIMIT 1
             """
-        let storedOffset: Int? = withCachedStatement(database: database, sql: sql) { statement in
-            sqlite3_bind_double(statement, 1, sampleAt.timeIntervalSince1970)
-            if sqlite3_step(statement) == SQLITE_ROW {
-                return Int(sqlite3_column_int(statement, 0))
-            }
-            return nil
-        } ?? nil
+        let storedOffset: Int? =
+            withCachedStatement(database: database, sql: sql) { statement in
+                sqlite3_bind_double(statement, 1, sampleAt.timeIntervalSince1970)
+                if sqlite3_step(statement) == SQLITE_ROW {
+                    return Int(sqlite3_column_int(statement, 0))
+                }
+                return nil
+            } ?? nil
         if let storedOffset { return storedOffset }
         return TimeZone.autoupdatingCurrent.secondsFromGMT(for: sampleAt)
     }
@@ -1469,13 +1560,15 @@ final class WhoopStore: @unchecked Sendable {
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return [] }
+            let statement
+        else { return [] }
         defer { sqlite3_finalize(statement) }
         var boundaries: [WhoopWakeBoundary] = []
         while sqlite3_step(statement) == SQLITE_ROW {
             guard let dateKey = textColumn(statement, 0),
-                  let rawWake = textColumn(statement, 1),
-                  let wokeAt = Self.parseISO8601(rawWake) else { continue }
+                let rawWake = textColumn(statement, 1),
+                let wokeAt = Self.parseISO8601(rawWake)
+            else { continue }
             boundaries.append(WhoopWakeBoundary(dateKey: dateKey, wokeAt: wokeAt))
         }
         let sorted = boundaries.sorted { $0.wokeAt < $1.wokeAt }
@@ -1504,7 +1597,8 @@ final class WhoopStore: @unchecked Sendable {
         guard let database else { return false }
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, "PRAGMA table_info(\(table))", -1, &statement, nil) == SQLITE_OK,
-              let statement else { return false }
+            let statement
+        else { return false }
         defer { sqlite3_finalize(statement) }
         while sqlite3_step(statement) == SQLITE_ROW {
             if textColumn(statement, 1) == column { return true }
@@ -1514,9 +1608,10 @@ final class WhoopStore: @unchecked Sendable {
 
     private func importBundledHistory() {
         guard let database,
-              let url = Bundle.main.url(forResource: "whoop-history", withExtension: "json"),
-              let data = try? Data(contentsOf: url),
-              let records = try? JSONDecoder().decode([DailyHealthRecord].self, from: data) else { return }
+            let url = Bundle.main.url(forResource: "whoop-history", withExtension: "json"),
+            let data = try? Data(contentsOf: url),
+            let records = try? JSONDecoder().decode([DailyHealthRecord].self, from: data)
+        else { return }
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         guard metadataValue(database: database, key: "bundled-history-sha256") != digest else {
             return
@@ -1526,15 +1621,20 @@ final class WhoopStore: @unchecked Sendable {
             execute("ROLLBACK")
             return
         }
-        guard setMetadataValue(
-            database: database,
-            key: "bundled-history-sha256",
-            value: digest
-        ) else {
+        guard
+            setMetadataValue(
+                database: database,
+                key: "bundled-history-sha256",
+                value: digest
+            )
+        else {
             execute("ROLLBACK")
             return
         }
-        guard execute("COMMIT") else { execute("ROLLBACK"); return }
+        guard execute("COMMIT") else {
+            execute("ROLLBACK")
+            return
+        }
     }
 
     /// Imports only the stable daily projection into the hot database while
@@ -1543,18 +1643,20 @@ final class WhoopStore: @unchecked Sendable {
     /// away fields that a future model may need.
     private func importBundledOfficialMetrics() {
         guard let database,
-              let metricsURL = Bundle.main.url(
+            let metricsURL = Bundle.main.url(
                 forResource: "whoop-official-metrics", withExtension: "json"
-              ),
-              let metricsData = try? Data(contentsOf: metricsURL),
-              let seed = try? JSONDecoder().decode(OfficialMetricsSeed.self, from: metricsData),
-              seed.formatVersion == 1 else { return }
+            ),
+            let metricsData = try? Data(contentsOf: metricsURL),
+            let seed = try? JSONDecoder().decode(OfficialMetricsSeed.self, from: metricsData),
+            seed.formatVersion == 1
+        else { return }
         let digest = SHA256.hash(data: metricsData).map { String(format: "%02x", $0) }.joined()
         if metadataValue(database: database, key: "bundled-official-metrics-sha256") == digest {
             if let directory = Self.databaseDirectory(),
-               !FileManager.default.fileExists(
+                !FileManager.default.fileExists(
                     atPath: directory.appendingPathComponent("whoop-official-archive.sqlite3").path
-               ) {
+                )
+            {
                 _ = installBundledOfficialArchive(expectedSHA256: seed.sourceDatabaseSHA256)
             }
             return
@@ -1564,7 +1666,8 @@ final class WhoopStore: @unchecked Sendable {
             return
         }
         guard execute("BEGIN IMMEDIATE") else { return }
-        for record in seed.daily where !upsertOfficialDailyMetric(
+        for record in seed.daily
+        where !upsertOfficialDailyMetric(
             record,
             sourceArchive: seed.sourceArchive,
             sourceManifestSHA256: seed.sourceManifestSHA256,
@@ -1573,25 +1676,33 @@ final class WhoopStore: @unchecked Sendable {
             execute("ROLLBACK")
             return
         }
-        guard setMetadataValue(
-            database: database,
-            key: "bundled-official-metrics-sha256",
-            value: digest
-        ), setMetadataValue(
-            database: database,
-            key: "bundled-official-archive-sha256",
-            value: seed.sourceDatabaseSHA256
-        ) else {
+        guard
+            setMetadataValue(
+                database: database,
+                key: "bundled-official-metrics-sha256",
+                value: digest
+            ),
+            setMetadataValue(
+                database: database,
+                key: "bundled-official-archive-sha256",
+                value: seed.sourceDatabaseSHA256
+            )
+        else {
             execute("ROLLBACK")
             return
         }
-        guard execute("COMMIT") else { execute("ROLLBACK"); return }
+        guard execute("COMMIT") else {
+            execute("ROLLBACK")
+            return
+        }
     }
 
     private func installBundledOfficialArchive(expectedSHA256: String) -> Bool {
-        guard let source = Bundle.main.url(
-            forResource: "whoop-official-archive", withExtension: "sqlite3"
-        ), let directory = Self.databaseDirectory() else { return false }
+        guard
+            let source = Bundle.main.url(
+                forResource: "whoop-official-archive", withExtension: "sqlite3"
+            ), let directory = Self.databaseDirectory()
+        else { return false }
         let destination = directory.appendingPathComponent("whoop-official-archive.sqlite3")
         let fileManager = FileManager.default
 
@@ -1600,7 +1711,8 @@ final class WhoopStore: @unchecked Sendable {
             return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         }
         if fileManager.fileExists(atPath: destination.path),
-           fileDigest(destination) == expectedSHA256 {
+            fileDigest(destination) == expectedSHA256
+        {
             return true
         }
 
@@ -1624,7 +1736,8 @@ final class WhoopStore: @unchecked Sendable {
             return true
         } catch {
             try? fileManager.removeItem(at: temporary)
-            Self.logger.error("Could not install official response archive: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error(
+                "Could not install official response archive: \(error.localizedDescription, privacy: .public)")
             return false
         }
     }
@@ -1663,7 +1776,8 @@ final class WhoopStore: @unchecked Sendable {
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return false }
+            let statement
+        else { return false }
         defer { sqlite3_finalize(statement) }
         bind(record.dateKey, to: 1, in: statement)
         bind(record.officialRecoveryScore, to: 2, in: statement)
@@ -1721,7 +1835,8 @@ final class WhoopStore: @unchecked Sendable {
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return false }
+            let statement
+        else { return false }
         defer { sqlite3_finalize(statement) }
         bind(record.dateKey, to: 1, in: statement)
         bind(record.sleepScore, to: 2, in: statement)
@@ -1775,7 +1890,8 @@ final class WhoopStore: @unchecked Sendable {
             """
         var sourceStatement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sourceSQL, -1, &sourceStatement, nil) == SQLITE_OK,
-              let sourceStatement else { return false }
+            let sourceStatement
+        else { return false }
         bind(dateKey, to: 1, in: sourceStatement)
         bind(sleepJSON, to: 2, in: sourceStatement)
         bind(recoveryJSON, to: 3, in: sourceStatement)
@@ -1786,13 +1902,15 @@ final class WhoopStore: @unchecked Sendable {
         guard sourceSucceeded else { return false }
 
         var deleteStatement: OpaquePointer?
-        guard sqlite3_prepare_v2(
-            database,
-            "DELETE FROM whoop_api_numeric_metric WHERE date_key = ?",
-            -1,
-            &deleteStatement,
-            nil
-        ) == SQLITE_OK, let deleteStatement else { return false }
+        guard
+            sqlite3_prepare_v2(
+                database,
+                "DELETE FROM whoop_api_numeric_metric WHERE date_key = ?",
+                -1,
+                &deleteStatement,
+                nil
+            ) == SQLITE_OK, let deleteStatement
+        else { return false }
         bind(dateKey, to: 1, in: deleteStatement)
         let deleteSucceeded = sqlite3_step(deleteStatement) == SQLITE_DONE
         sqlite3_finalize(deleteStatement)
@@ -1803,15 +1921,18 @@ final class WhoopStore: @unchecked Sendable {
             (date_key, source_kind, field_path, value) VALUES (?, ?, ?, ?)
             """
         var metricStatement: OpaquePointer?
-        guard sqlite3_prepare_v2(
-            database, metricSQL, -1, &metricStatement, nil
-        ) == SQLITE_OK, let metricStatement else { return false }
+        guard
+            sqlite3_prepare_v2(
+                database, metricSQL, -1, &metricStatement, nil
+            ) == SQLITE_OK, let metricStatement
+        else { return false }
         defer { sqlite3_finalize(metricStatement) }
 
         for (kind, payload) in [("sleep", sleepJSON), ("recovery", recoveryJSON)] {
             guard let payload,
-                  let data = payload.data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: data) else { continue }
+                let data = payload.data(using: .utf8),
+                let object = try? JSONSerialization.jsonObject(with: data)
+            else { continue }
             var metrics: [(String, Double)] = []
             Self.flattenNumericJSON(object, path: "", into: &metrics)
             for (path, value) in metrics where !path.isEmpty {
@@ -1836,7 +1957,9 @@ final class WhoopStore: @unchecked Sendable {
         if let dictionary = value as? [String: Any] {
             for key in dictionary.keys.sorted() {
                 let childPath = path.isEmpty ? key : "\(path).\(key)"
-                flattenNumericJSON(dictionary[key]!, path: childPath, into: &output)
+                if let child = dictionary[key] {
+                    flattenNumericJSON(child, path: childPath, into: &output)
+                }
             }
         } else if let array = value as? [Any] {
             for (index, child) in array.enumerated() {
@@ -1896,7 +2019,8 @@ final class WhoopStore: @unchecked Sendable {
     ) throws -> Value {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else {
+            let statement
+        else {
             throw StoreError.queryFailed(errorMessage(database))
         }
         defer { sqlite3_finalize(statement) }
@@ -1929,7 +2053,8 @@ final class WhoopStore: @unchecked Sendable {
         }
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else {
+            let statement
+        else {
             Self.logger.error("SQLite prepare failed: \(self.errorMessage(database), privacy: .public)")
             return nil
         }
@@ -1961,7 +2086,8 @@ final class WhoopStore: @unchecked Sendable {
         guard execute("BEGIN IMMEDIATE") else {
             return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
         }
-        let registration: PacketSignatureRegistration = deduplicateTransportRetries
+        let registration: PacketSignatureRegistration =
+            deduplicateTransportRetries
             ? registerPacketSignature(
                 database: database,
                 signature: Self.packetSignature(
@@ -1975,29 +2101,35 @@ final class WhoopStore: @unchecked Sendable {
             : .new
         switch registration {
         case .duplicate(let canonicalPacketID):
-            guard decodePacketIfNeeded(
-                database: database,
-                packetID: canonicalPacketID,
-                packet: packet,
-                historical: historical
-            ) else {
+            guard
+                decodePacketIfNeeded(
+                    database: database,
+                    packetID: canonicalPacketID,
+                    packet: packet,
+                    historical: historical
+                )
+            else {
                 execute("ROLLBACK")
                 return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
             }
-            guard updateOffloadProgress(
-                database: database,
-                sessionID: offloadSessionID,
-                deliverySequence: deliverySequence,
-                packetID: canonicalPacketID,
-                packet: packet
-            ) else {
+            guard
+                updateOffloadProgress(
+                    database: database,
+                    sessionID: offloadSessionID,
+                    deliverySequence: deliverySequence,
+                    packetID: canonicalPacketID,
+                    packet: packet
+                )
+            else {
                 execute("ROLLBACK")
                 return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
             }
-            guard let materializedStepDays = materializePendingStepsIfNeeded(
-                for: packet,
-                database: database
-            ), execute("COMMIT") else {
+            guard
+                let materializedStepDays = materializePendingStepsIfNeeded(
+                    for: packet,
+                    database: database
+                ), execute("COMMIT")
+            else {
                 execute("ROLLBACK")
                 return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
             }
@@ -2009,48 +2141,57 @@ final class WhoopStore: @unchecked Sendable {
             execute("ROLLBACK")
             return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
         }
-        guard insertPacket(
-            database: database,
-            id: packetID,
-            receivedAt: receivedAt,
-            deliverySequence: deliverySequence,
-            offloadSessionID: offloadSessionID,
-            peripheralID: peripheralID.uuidString,
-            characteristicUUID: characteristicUUID,
-            frameType: frameType,
-            payload: packet
-        ) else {
+        guard
+            insertPacket(
+                database: database,
+                id: packetID,
+                receivedAt: receivedAt,
+                deliverySequence: deliverySequence,
+                offloadSessionID: offloadSessionID,
+                peripheralID: peripheralID.uuidString,
+                characteristicUUID: characteristicUUID,
+                frameType: frameType,
+                payload: packet
+            )
+        else {
             execute("ROLLBACK")
             return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
         }
         if let realtime,
-           !insertRealtime(database: database, packetID: packetID, receivedAt: receivedAt, realtime: realtime) {
+            !insertRealtime(database: database, packetID: packetID, receivedAt: receivedAt, realtime: realtime)
+        {
             execute("ROLLBACK")
             return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
         }
-        guard decodePacketIfNeeded(
-            database: database,
-            packetID: packetID,
-            packet: packet,
-            historical: historical
-        ) else {
+        guard
+            decodePacketIfNeeded(
+                database: database,
+                packetID: packetID,
+                packet: packet,
+                historical: historical
+            )
+        else {
             execute("ROLLBACK")
             return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
         }
-        guard updateOffloadProgress(
-            database: database,
-            sessionID: offloadSessionID,
-            deliverySequence: deliverySequence,
-            packetID: packetID,
-            packet: packet
-        ) else {
+        guard
+            updateOffloadProgress(
+                database: database,
+                sessionID: offloadSessionID,
+                deliverySequence: deliverySequence,
+                packetID: packetID,
+                packet: packet
+            )
+        else {
             execute("ROLLBACK")
             return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
         }
-        guard let materializedStepDays = materializePendingStepsIfNeeded(
-            for: packet,
-            database: database
-        ), execute("COMMIT") else {
+        guard
+            let materializedStepDays = materializePendingStepsIfNeeded(
+                for: packet,
+                database: database
+            ), execute("COMMIT")
+        else {
             execute("ROLLBACK")
             return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
         }
@@ -2078,21 +2219,23 @@ final class WhoopStore: @unchecked Sendable {
             SET duplicate_count = duplicate_count + 1, last_received_at = ?
             WHERE signature = ?
             """
-        let updated = withCachedStatement(database: database, sql: updateSQL) { update in
-            sqlite3_bind_double(update, 1, receivedAt)
-            bind(signature, to: 2, in: update)
-            return sqlite3_step(update) == SQLITE_DONE
-        } ?? false
+        let updated =
+            withCachedStatement(database: database, sql: updateSQL) { update in
+                sqlite3_bind_double(update, 1, receivedAt)
+                bind(signature, to: 2, in: update)
+                return sqlite3_step(update) == SQLITE_DONE
+            } ?? false
         guard updated else { return .failed }
         if sqlite3_changes(database) > 0 {
             let selectSQL = "SELECT first_packet_id FROM whoop_packet_replay WHERE signature = ?"
-            let existingPacketID: String? = withCachedStatement(
-                database: database, sql: selectSQL
-            ) { select in
-                bind(signature, to: 1, in: select)
-                guard sqlite3_step(select) == SQLITE_ROW else { return nil }
-                return textColumn(select, 0)
-            } ?? nil
+            let existingPacketID: String? =
+                withCachedStatement(
+                    database: database, sql: selectSQL
+                ) { select in
+                    bind(signature, to: 1, in: select)
+                    guard sqlite3_step(select) == SQLITE_ROW else { return nil }
+                    return textColumn(select, 0)
+                } ?? nil
             guard let packetID = existingPacketID else { return .failed }
             return .duplicate(packetID)
         }
@@ -2102,12 +2245,13 @@ final class WhoopStore: @unchecked Sendable {
             (signature, first_packet_id, duplicate_count, last_received_at)
             VALUES (?, ?, 0, ?)
             """
-        let inserted = withCachedStatement(database: database, sql: insertSQL) { insert in
-            bind(signature, to: 1, in: insert)
-            bind(packetID, to: 2, in: insert)
-            sqlite3_bind_double(insert, 3, receivedAt)
-            return sqlite3_step(insert) == SQLITE_DONE
-        } ?? false
+        let inserted =
+            withCachedStatement(database: database, sql: insertSQL) { insert in
+                bind(signature, to: 1, in: insert)
+                bind(packetID, to: 2, in: insert)
+                sqlite3_bind_double(insert, 3, receivedAt)
+                return sqlite3_step(insert) == SQLITE_DONE
+            } ?? false
         return inserted ? .new : .failed
     }
 
@@ -2174,7 +2318,8 @@ final class WhoopStore: @unchecked Sendable {
         packet: Data
     ) -> Bool {
         guard let sessionID else { return true }
-        let isCompletion = packet.count > 10
+        let isCompletion =
+            packet.count > 10
             && (packet[8] == 49 || packet[8] == 56)
             && packet[10] == 3
             && WhoopFrameIntegrity.isValid(packet)
@@ -2211,7 +2356,8 @@ final class WhoopStore: @unchecked Sendable {
     }
 
     private func abandonInterruptedOffloads() {
-        _ = execute("""
+        _ = execute(
+            """
             UPDATE whoop_offload_session
             SET status = 'abandoned', completed_at = strftime('%s','now'),
                 failure_reason = 'app relaunched before completion'
@@ -2249,7 +2395,8 @@ final class WhoopStore: @unchecked Sendable {
         } else {
             stream = "historical_unknown"
             status = WhoopFrameIntegrity.isValid(packet) ? "unsupported" : "rejected"
-            error = WhoopFrameIntegrity.isValid(packet)
+            error =
+                WhoopFrameIntegrity.isValid(packet)
                 ? "unsupported type-47 version \(protocolVersion), length \(packet.count)"
                 : "CRC mismatch"
         }
@@ -2327,7 +2474,8 @@ final class WhoopStore: @unchecked Sendable {
     /// large phone database remains responsive during migration.
     private func backfillVersion26PPG(cursor: Int64 = 0, batchSize: Int = 500) {
         guard let database,
-              metadataValue(database: database, key: "decoder-2-v26-backfill") != "complete" else {
+            metadataValue(database: database, key: "decoder-2-v26-backfill") != "complete"
+        else {
             return
         }
         let sql = """
@@ -2342,7 +2490,8 @@ final class WhoopStore: @unchecked Sendable {
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return }
+            let statement
+        else { return }
         sqlite3_bind_int64(statement, 1, cursor)
         sqlite3_bind_int(statement, 2, Int32(batchSize))
         var rows: [(Int64, String, Data)] = []
@@ -2363,12 +2512,14 @@ final class WhoopStore: @unchecked Sendable {
         }
         guard execute("BEGIN IMMEDIATE") else { return }
         for (_, packetID, payload) in rows {
-            guard decodePacketIfNeeded(
-                database: database,
-                packetID: packetID,
-                packet: payload,
-                historical: nil
-            ) else {
+            guard
+                decodePacketIfNeeded(
+                    database: database,
+                    packetID: packetID,
+                    packet: payload,
+                    historical: nil
+                )
+            else {
                 execute("ROLLBACK")
                 return
             }
@@ -2377,7 +2528,7 @@ final class WhoopStore: @unchecked Sendable {
             execute("ROLLBACK")
             return
         }
-        let nextCursor = rows.last!.0
+        guard let nextCursor = rows.last?.0 else { return }
         queue.asyncAfter(deadline: .now() + .milliseconds(25)) { [self] in
             backfillVersion26PPG(cursor: nextCursor, batchSize: batchSize)
         }
@@ -2388,7 +2539,8 @@ final class WhoopStore: @unchecked Sendable {
     /// so upgrading a phone-sized store cannot monopolize the store queue.
     private func backfillVersion18Motion(cursor: Int64 = 0, batchSize: Int = 1_000) {
         guard let database,
-              metadataValue(database: database, key: "decoder-3-v18-motion-backfill") != "complete" else {
+            metadataValue(database: database, key: "decoder-3-v18-motion-backfill") != "complete"
+        else {
             return
         }
         let sql = """
@@ -2403,7 +2555,8 @@ final class WhoopStore: @unchecked Sendable {
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return }
+            let statement
+        else { return }
         sqlite3_bind_int64(statement, 1, cursor)
         sqlite3_bind_int(statement, 2, Int32(batchSize))
         var rows: [(Int64, String, Data)] = []
@@ -2419,14 +2572,16 @@ final class WhoopStore: @unchecked Sendable {
             // If the app was suspended mid-backfill, packets decoded before
             // that restart no longer appear in `pendingStepDateKeys`.
             guard let changedDays = allStoredStepDateKeys(database: database),
-                  execute("BEGIN IMMEDIATE") else { return }
+                execute("BEGIN IMMEDIATE")
+            else { return }
             guard rebuildDailySteps(for: changedDays, database: database),
-                  setMetadataValue(
+                setMetadataValue(
                     database: database,
                     key: "decoder-3-v18-motion-backfill",
                     value: "complete"
-                  ),
-                  execute("COMMIT") else {
+                ),
+                execute("COMMIT")
+            else {
                 execute("ROLLBACK")
                 return
             }
@@ -2436,12 +2591,14 @@ final class WhoopStore: @unchecked Sendable {
         }
         guard execute("BEGIN IMMEDIATE") else { return }
         for (_, packetID, payload) in rows {
-            guard decodePacketIfNeeded(
-                database: database,
-                packetID: packetID,
-                packet: payload,
-                historical: nil
-            ) else {
+            guard
+                decodePacketIfNeeded(
+                    database: database,
+                    packetID: packetID,
+                    packet: payload,
+                    historical: nil
+                )
+            else {
                 execute("ROLLBACK")
                 return
             }
@@ -2450,7 +2607,7 @@ final class WhoopStore: @unchecked Sendable {
             execute("ROLLBACK")
             return
         }
-        let nextCursor = rows.last!.0
+        guard let nextCursor = rows.last?.0 else { return }
         queue.asyncAfter(deadline: .now() + .milliseconds(25)) { [self] in
             backfillVersion18Motion(cursor: nextCursor, batchSize: batchSize)
         }
@@ -2464,7 +2621,8 @@ final class WhoopStore: @unchecked Sendable {
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return nil }
+            let statement
+        else { return nil }
         defer { sqlite3_finalize(statement) }
         var dateKeys: Set<String> = []
         var result = sqlite3_step(statement)
@@ -2480,7 +2638,7 @@ final class WhoopStore: @unchecked Sendable {
     /// projection is reassigned and rebuilt from retained evidence.
     private func rebuildWakeAnchoredStepDaysIfNeeded() {
         guard let database,
-              metadataValue(database: database, key: "wake-anchored-step-days") != "2"
+            metadataValue(database: database, key: "wake-anchored-step-days") != "2"
         else { return }
         let boundaries = publishedWakeBoundaries(database: database)
         guard !boundaries.isEmpty, execute("BEGIN IMMEDIATE") else { return }
@@ -2489,27 +2647,31 @@ final class WhoopStore: @unchecked Sendable {
             return
         }
         for (index, boundary) in boundaries.enumerated() {
-            let upperBound = boundaries.indices.contains(index + 1)
+            let upperBound =
+                boundaries.indices.contains(index + 1)
                 ? boundaries[index + 1].wokeAt.timeIntervalSince1970
                 : nil
-            guard assignStepSamples(
-                to: boundary.dateKey,
-                from: boundary.wokeAt.timeIntervalSince1970,
-                until: upperBound,
-                database: database
-            ) else {
+            guard
+                assignStepSamples(
+                    to: boundary.dateKey,
+                    from: boundary.wokeAt.timeIntervalSince1970,
+                    until: upperBound,
+                    database: database
+                )
+            else {
                 execute("ROLLBACK")
                 return
             }
         }
         guard let dateKeys = allStoredStepDateKeys(database: database),
-              rebuildDailySteps(for: dateKeys, database: database),
-              setMetadataValue(
-                  database: database,
-                  key: "wake-anchored-step-days",
-                  value: "2"
-              ),
-              execute("COMMIT") else {
+            rebuildDailySteps(for: dateKeys, database: database),
+            setMetadataValue(
+                database: database,
+                key: "wake-anchored-step-days",
+                value: "2"
+            ),
+            execute("COMMIT")
+        else {
             execute("ROLLBACK")
             return
         }
@@ -2526,27 +2688,32 @@ final class WhoopStore: @unchecked Sendable {
         database: OpaquePointer
     ) -> Bool {
         guard let wakeRaw = record.sleepEndAt,
-              let wokeAt = Self.parseISO8601(wakeRaw) else { return true }
+            let wokeAt = Self.parseISO8601(wakeRaw)
+        else { return true }
         // This helper normally runs inside the caller's transaction. Do not
         // retain a boundary that could disappear if a later write rolls back.
         defer { cachedPublishedWakeBoundaries = nil }
         let boundaries = publishedWakeBoundaries(database: database)
-        let upperBound = boundaries
+        let upperBound =
+            boundaries
             .filter { $0.wokeAt > wokeAt }
             .map(\.wokeAt)
             .min()?
             .timeIntervalSince1970
         let lowerBound = wokeAt.timeIntervalSince1970
-        guard let oldDateKeys = stepDateKeys(
-            from: lowerBound,
-            until: upperBound,
-            database: database
-        ), assignStepSamples(
-            to: record.dateKey,
-            from: lowerBound,
-            until: upperBound,
-            database: database
-        ) else { return false }
+        guard
+            let oldDateKeys = stepDateKeys(
+                from: lowerBound,
+                until: upperBound,
+                database: database
+            ),
+            assignStepSamples(
+                to: record.dateKey,
+                from: lowerBound,
+                until: upperBound,
+                database: database
+            )
+        else { return false }
 
         let affectedDateKeys = oldDateKeys.union([record.dateKey])
         for dateKey in affectedDateKeys {
@@ -2649,52 +2816,56 @@ final class WhoopStore: @unchecked Sendable {
             """
 
         for dateKey in dateKeys.sorted() {
-            let grouped: [String: [WhoopStepCounterSample]]? = withCachedStatement(
-                database: database, sql: selectSQL
-            ) { select in
-                bind(dateKey, to: 1, in: select)
-                var byPeripheral: [String: [WhoopStepCounterSample]] = [:]
-                var result = sqlite3_step(select)
-                while result == SQLITE_ROW {
-                    if let peripheralID = textColumn(select, 0) {
-                        byPeripheral[peripheralID, default: []].append(
-                            WhoopStepCounterSample(
-                                timestamp: sqlite3_column_double(select, 1),
-                                counter: UInt16(truncatingIfNeeded: sqlite3_column_int(select, 2))
+            let grouped: [String: [WhoopStepCounterSample]]? =
+                withCachedStatement(
+                    database: database, sql: selectSQL
+                ) { select in
+                    bind(dateKey, to: 1, in: select)
+                    var byPeripheral: [String: [WhoopStepCounterSample]] = [:]
+                    var result = sqlite3_step(select)
+                    while result == SQLITE_ROW {
+                        if let peripheralID = textColumn(select, 0) {
+                            byPeripheral[peripheralID, default: []].append(
+                                WhoopStepCounterSample(
+                                    timestamp: sqlite3_column_double(select, 1),
+                                    counter: UInt16(truncatingIfNeeded: sqlite3_column_int(select, 2))
+                                )
                             )
-                        )
+                        }
+                        result = sqlite3_step(select)
                     }
-                    result = sqlite3_step(select)
-                }
-                return result == SQLITE_DONE ? byPeripheral : nil
-            } ?? nil
+                    return result == SQLITE_DONE ? byPeripheral : nil
+                } ?? nil
             guard let byPeripheral = grouped else { return false }
             let candidates = byPeripheral.map { peripheralID, samples in
                 (peripheralID, WhoopStepDaySummary.summarize(samples))
             }
-            guard let chosen = candidates.max(by: { lhs, rhs in
-                if lhs.1.sampleCount == rhs.1.sampleCount {
-                    return (lhs.1.lastSampleAt ?? 0) < (rhs.1.lastSampleAt ?? 0)
-                }
-                return lhs.1.sampleCount < rhs.1.sampleCount
-            }) else { continue }
+            guard
+                let chosen = candidates.max(by: { lhs, rhs in
+                    if lhs.1.sampleCount == rhs.1.sampleCount {
+                        return (lhs.1.lastSampleAt ?? 0) < (rhs.1.lastSampleAt ?? 0)
+                    }
+                    return lhs.1.sampleCount < rhs.1.sampleCount
+                })
+            else { continue }
             let summary = chosen.1
-            let upserted = withCachedStatement(database: database, sql: upsertSQL) { upsert in
-                bind(dateKey, to: 1, in: upsert)
-                bind(chosen.0, to: 2, in: upsert)
-                sqlite3_bind_int64(upsert, 3, Int64(summary.stepCount))
-                sqlite3_bind_int64(upsert, 4, Int64(summary.sampleCount))
-                sqlite3_bind_int64(upsert, 5, Int64(summary.spanSeconds))
-                sqlite3_bind_double(upsert, 6, summary.coverageFraction)
-                sqlite3_bind_int64(upsert, 7, Int64(summary.gapSeconds))
-                sqlite3_bind_int64(upsert, 8, Int64(summary.counterWrapCount))
-                sqlite3_bind_int64(upsert, 9, Int64(summary.rejectedDeltaCount))
-                bind(summary.firstSampleAt, to: 10, in: upsert)
-                bind(summary.lastSampleAt, to: 11, in: upsert)
-                sqlite3_bind_int(upsert, 12, Int32(WhoopStepDaySummary.algorithmVersion))
-                sqlite3_bind_double(upsert, 13, Date().timeIntervalSince1970)
-                return sqlite3_step(upsert) == SQLITE_DONE
-            } ?? false
+            let upserted =
+                withCachedStatement(database: database, sql: upsertSQL) { upsert in
+                    bind(dateKey, to: 1, in: upsert)
+                    bind(chosen.0, to: 2, in: upsert)
+                    sqlite3_bind_int64(upsert, 3, Int64(summary.stepCount))
+                    sqlite3_bind_int64(upsert, 4, Int64(summary.sampleCount))
+                    sqlite3_bind_int64(upsert, 5, Int64(summary.spanSeconds))
+                    sqlite3_bind_double(upsert, 6, summary.coverageFraction)
+                    sqlite3_bind_int64(upsert, 7, Int64(summary.gapSeconds))
+                    sqlite3_bind_int64(upsert, 8, Int64(summary.counterWrapCount))
+                    sqlite3_bind_int64(upsert, 9, Int64(summary.rejectedDeltaCount))
+                    bind(summary.firstSampleAt, to: 10, in: upsert)
+                    bind(summary.lastSampleAt, to: 11, in: upsert)
+                    sqlite3_bind_int(upsert, 12, Int32(WhoopStepDaySummary.algorithmVersion))
+                    sqlite3_bind_double(upsert, 13, Date().timeIntervalSince1970)
+                    return sqlite3_step(upsert) == SQLITE_DONE
+                } ?? false
             guard upserted else { return false }
         }
         return true
@@ -2706,7 +2877,8 @@ final class WhoopStore: @unchecked Sendable {
         for packet: Data,
         database: OpaquePointer
     ) -> Set<String>? {
-        let isComplete = packet.count > 10
+        let isComplete =
+            packet.count > 10
             && (packet[8] == 49 || packet[8] == 56)
             && packet[10] == 3
             && WhoopFrameIntegrity.isValid(packet)
@@ -2732,7 +2904,8 @@ final class WhoopStore: @unchecked Sendable {
         let sql = "SELECT value FROM whoop_store_metadata WHERE key = ?"
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return nil }
+            let statement
+        else { return nil }
         defer { sqlite3_finalize(statement) }
         bind(key, to: 1, in: statement)
         guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
@@ -2750,7 +2923,8 @@ final class WhoopStore: @unchecked Sendable {
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return false }
+            let statement
+        else { return false }
         defer { sqlite3_finalize(statement) }
         bind(key, to: 1, in: statement)
         bind(value, to: 2, in: statement)
@@ -2848,22 +3022,23 @@ final class WhoopStore: @unchecked Sendable {
                 step_utc_offset_seconds = excluded.step_utc_offset_seconds,
                 step_date_key = excluded.step_date_key
             """
-        let succeeded = withCachedStatement(database: database, sql: sql) { statement in
-            sqlite3_bind_double(statement, 1, sample.sampleAt.timeIntervalSince1970)
-            bind(packetID, to: 2, in: statement)
-            sqlite3_bind_int(statement, 3, Int32(sample.heartRate))
-            let rrJSON = "[" + sample.rrIntervals.map(String.init).joined(separator: ",") + "]"
-            bind(rrJSON, to: 4, in: statement)
-            sqlite3_bind_int(statement, 5, Int32(sample.sleepState))
-            sqlite3_bind_int(statement, 6, Int32(Self.decoderVersion))
-            sqlite3_bind_int(statement, 7, Int32(sample.stepMotionCounter))
-            sqlite3_bind_int(statement, 8, Int32(sample.stepCadenceRaw))
-            sqlite3_bind_int(statement, 9, Int32(sample.motionClassRaw))
-            sqlite3_bind_int(statement, 10, Int32(utcOffsetSeconds))
-            bind(stepDateKey, to: 11, in: statement)
-            bind(packetID, to: 12, in: statement)
-            return sqlite3_step(statement) == SQLITE_DONE
-        } ?? false
+        let succeeded =
+            withCachedStatement(database: database, sql: sql) { statement in
+                sqlite3_bind_double(statement, 1, sample.sampleAt.timeIntervalSince1970)
+                bind(packetID, to: 2, in: statement)
+                sqlite3_bind_int(statement, 3, Int32(sample.heartRate))
+                let rrJSON = "[" + sample.rrIntervals.map(String.init).joined(separator: ",") + "]"
+                bind(rrJSON, to: 4, in: statement)
+                sqlite3_bind_int(statement, 5, Int32(sample.sleepState))
+                sqlite3_bind_int(statement, 6, Int32(Self.decoderVersion))
+                sqlite3_bind_int(statement, 7, Int32(sample.stepMotionCounter))
+                sqlite3_bind_int(statement, 8, Int32(sample.stepCadenceRaw))
+                sqlite3_bind_int(statement, 9, Int32(sample.motionClassRaw))
+                sqlite3_bind_int(statement, 10, Int32(utcOffsetSeconds))
+                bind(stepDateKey, to: 11, in: statement)
+                bind(packetID, to: 12, in: statement)
+                return sqlite3_step(statement) == SQLITE_DONE
+            } ?? false
         if succeeded { pendingStepDateKeys.insert(stepDateKey) }
         return succeeded
     }
@@ -2880,15 +3055,17 @@ final class WhoopStore: @unchecked Sendable {
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return }
+            let statement
+        else { return }
         defer { sqlite3_finalize(statement) }
         guard execute("BEGIN IMMEDIATE") else { return }
         var succeeded = true
         var stepResult = sqlite3_step(statement)
         while stepResult == SQLITE_ROW {
             guard let packetID = textColumn(statement, 0),
-                  let payload = dataColumn(statement, 1),
-                  let historical = WhoopDecodedHistorical.decode(payload) else {
+                let payload = dataColumn(statement, 1),
+                let historical = WhoopDecodedHistorical.decode(payload)
+            else {
                 stepResult = sqlite3_step(statement)
                 continue
             }
@@ -2900,7 +3077,10 @@ final class WhoopStore: @unchecked Sendable {
         }
         succeeded = succeeded && stepResult == SQLITE_DONE
         if succeeded {
-            guard execute("COMMIT") else { execute("ROLLBACK"); return }
+            guard execute("COMMIT") else {
+                execute("ROLLBACK")
+                return
+            }
         } else {
             execute("ROLLBACK")
         }
@@ -3028,7 +3208,8 @@ final class WhoopStore: @unchecked Sendable {
         var groups: [[HistoricalRow]] = []
         for row in asleepRows {
             if let last = groups.last?.last,
-               row.timestamp - last.timestamp <= maximumInterruptionSeconds {
+                row.timestamp - last.timestamp <= maximumInterruptionSeconds
+            {
                 groups[groups.count - 1].append(row)
             } else {
                 groups.append([row])
@@ -3067,17 +3248,19 @@ final class WhoopStore: @unchecked Sendable {
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return [] }
+            let statement
+        else { return [] }
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_double(statement, 1, cutoff)
 
         var rows: [HistoricalRow] = []
         while sqlite3_step(statement) == SQLITE_ROW {
-            rows.append(HistoricalRow(
-                timestamp: sqlite3_column_double(statement, 0),
-                heartRate: Int(sqlite3_column_int(statement, 1)),
-                sleepState: Int(sqlite3_column_int(statement, 2))
-            ))
+            rows.append(
+                HistoricalRow(
+                    timestamp: sqlite3_column_double(statement, 0),
+                    heartRate: Int(sqlite3_column_int(statement, 1)),
+                    sleepState: Int(sqlite3_column_int(statement, 2))
+                ))
         }
         return rows
     }
@@ -3088,7 +3271,7 @@ final class WhoopStore: @unchecked Sendable {
     /// formula forever merely because they fell outside the 48-hour live window.
     private func backfillLocalSleepScoresIfNeeded() {
         guard let database,
-              metadataValue(database: database, key: "local-sleep-score-backfill") != Self.localSource
+            metadataValue(database: database, key: "local-sleep-score-backfill") != Self.localSource
         else { return }
         let sql = """
             SELECT sample_at, heart_rate, sleep_state
@@ -3101,14 +3284,16 @@ final class WhoopStore: @unchecked Sendable {
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return }
+            let statement
+        else { return }
         var rows: [HistoricalRow] = []
         while sqlite3_step(statement) == SQLITE_ROW {
-            rows.append(HistoricalRow(
-                timestamp: sqlite3_column_double(statement, 0),
-                heartRate: Int(sqlite3_column_int(statement, 1)),
-                sleepState: Int(sqlite3_column_int(statement, 2))
-            ))
+            rows.append(
+                HistoricalRow(
+                    timestamp: sqlite3_column_double(statement, 0),
+                    heartRate: Int(sqlite3_column_int(statement, 1)),
+                    sleepState: Int(sqlite3_column_int(statement, 2))
+                ))
         }
         sqlite3_finalize(statement)
         guard let latest = rows.last, execute("BEGIN IMMEDIATE") else { return }
@@ -3129,17 +3314,22 @@ final class WhoopStore: @unchecked Sendable {
                 wakeSeconds: 0
             )
             guard candidate.meetsEvidenceGates,
-                  shouldDerive(candidate: candidate, database: database) else { continue }
-            guard updateLocalSleepScore(
-                derivedRecord(for: candidate, now: .now), database: database
-            ) else {
+                shouldDerive(candidate: candidate, database: database)
+            else { continue }
+            guard
+                updateLocalSleepScore(
+                    derivedRecord(for: candidate, now: .now), database: database
+                )
+            else {
                 execute("ROLLBACK")
                 return
             }
         }
-        guard setMetadataValue(
-            database: database, key: "local-sleep-score-backfill", value: Self.localSource
-        ), execute("COMMIT") else {
+        guard
+            setMetadataValue(
+                database: database, key: "local-sleep-score-backfill", value: Self.localSource
+            ), execute("COMMIT")
+        else {
             execute("ROLLBACK")
             return
         }
@@ -3148,7 +3338,8 @@ final class WhoopStore: @unchecked Sendable {
     private func rebuildRecoveryMetricsIfNeeded(force: Bool = false) {
         guard let database, let model = Self.bundledRecoveryScoreModel else { return }
         if !force,
-           metadataValue(database: database, key: "local-recovery-score-backfill") == model.version {
+            metadataValue(database: database, key: "local-recovery-score-backfill") == model.version
+        {
             return
         }
         let healthSQL = """
@@ -3168,36 +3359,39 @@ final class WhoopStore: @unchecked Sendable {
             """
         var healthStatementPointer: OpaquePointer?
         guard sqlite3_prepare_v2(database, healthSQL, -1, &healthStatementPointer, nil) == SQLITE_OK,
-              let healthStatement = healthStatementPointer else { return }
+            let healthStatement = healthStatementPointer
+        else { return }
         var records: [DailyHealthRecord] = []
         var result = sqlite3_step(healthStatement)
         while result == SQLITE_ROW {
             guard let dateKey = textColumn(healthStatement, 0),
-                  let source = textColumn(healthStatement, 7),
-                  let sourceUpdatedAt = textColumn(healthStatement, 9) else {
+                let source = textColumn(healthStatement, 7),
+                let sourceUpdatedAt = textColumn(healthStatement, 9)
+            else {
                 result = sqlite3_step(healthStatement)
                 continue
             }
-            records.append(DailyHealthRecord(
-                dateKey: dateKey,
-                sleepScore: doubleColumn(healthStatement, 1),
-                sleepDurationMinutes: doubleColumn(healthStatement, 2),
-                hrvRMSSDMilliseconds: doubleColumn(healthStatement, 3),
-                restingHeartRateBPM: doubleColumn(healthStatement, 4),
-                sleepID: textColumn(healthStatement, 5),
-                cycleID: int64Column(healthStatement, 6),
-                source: source,
-                sourceArchive: textColumn(healthStatement, 8),
-                sourceUpdatedAt: sourceUpdatedAt,
-                sleepStartAt: textColumn(healthStatement, 10),
-                sleepEndAt: textColumn(healthStatement, 11),
-                sleepStartMinute: doubleColumn(healthStatement, 12),
-                sleepEndMinute: doubleColumn(healthStatement, 13),
-                sleepNeedMinutes: doubleColumn(healthStatement, 14),
-                sleepConsistencyPercentage: doubleColumn(healthStatement, 15),
-                sleepEfficiencyPercentage: doubleColumn(healthStatement, 16),
-                sleepSufficiencyPercentage: doubleColumn(healthStatement, 17)
-            ))
+            records.append(
+                DailyHealthRecord(
+                    dateKey: dateKey,
+                    sleepScore: doubleColumn(healthStatement, 1),
+                    sleepDurationMinutes: doubleColumn(healthStatement, 2),
+                    hrvRMSSDMilliseconds: doubleColumn(healthStatement, 3),
+                    restingHeartRateBPM: doubleColumn(healthStatement, 4),
+                    sleepID: textColumn(healthStatement, 5),
+                    cycleID: int64Column(healthStatement, 6),
+                    source: source,
+                    sourceArchive: textColumn(healthStatement, 8),
+                    sourceUpdatedAt: sourceUpdatedAt,
+                    sleepStartAt: textColumn(healthStatement, 10),
+                    sleepEndAt: textColumn(healthStatement, 11),
+                    sleepStartMinute: doubleColumn(healthStatement, 12),
+                    sleepEndMinute: doubleColumn(healthStatement, 13),
+                    sleepNeedMinutes: doubleColumn(healthStatement, 14),
+                    sleepConsistencyPercentage: doubleColumn(healthStatement, 15),
+                    sleepEfficiencyPercentage: doubleColumn(healthStatement, 16),
+                    sleepSufficiencyPercentage: doubleColumn(healthStatement, 17)
+                ))
             result = sqlite3_step(healthStatement)
         }
         sqlite3_finalize(healthStatement)
@@ -3217,7 +3411,8 @@ final class WhoopStore: @unchecked Sendable {
             """
         var stepsStatementPointer: OpaquePointer?
         guard sqlite3_prepare_v2(database, stepsSQL, -1, &stepsStatementPointer, nil) == SQLITE_OK,
-              let stepsStatement = stepsStatementPointer else { return }
+            let stepsStatement = stepsStatementPointer
+        else { return }
         var stepsByDate: [String: Double] = [:]
         result = sqlite3_step(stepsStatement)
         while result == SQLITE_ROW {
@@ -3251,16 +3446,22 @@ final class WhoopStore: @unchecked Sendable {
             """
         var upsertStatementPointer: OpaquePointer?
         guard sqlite3_prepare_v2(database, upsertSQL, -1, &upsertStatementPointer, nil) == SQLITE_OK,
-              let upsertStatement = upsertStatementPointer else { execute("ROLLBACK"); return }
+            let upsertStatement = upsertStatementPointer
+        else {
+            execute("ROLLBACK")
+            return
+        }
         let encoder = JSONEncoder()
         for (index, record) in records.enumerated() {
-            guard let features = RecoveryScoreFeatureBuilder.features(
-                current: record,
-                history: Array(records[..<index]),
-                stepsByDate: stepsByDate
-            ), let prediction = model.prediction(features),
-               let inputs = try? encoder.encode(features.map { $0.isFinite ? Optional($0) : nil }),
-               let inputJSON = String(data: inputs, encoding: .utf8) else { continue }
+            guard
+                let features = RecoveryScoreFeatureBuilder.features(
+                    current: record,
+                    history: Array(records[..<index]),
+                    stepsByDate: stepsByDate
+                ), let prediction = model.prediction(features),
+                let inputs = try? encoder.encode(features.map { $0.isFinite ? Optional($0) : nil }),
+                let inputJSON = String(data: inputs, encoding: .utf8)
+            else { continue }
             bind(record.dateKey, to: 1, in: upsertStatement)
             sqlite3_bind_double(upsertStatement, 2, prediction.score)
             sqlite3_bind_double(upsertStatement, 3, prediction.confidence)
@@ -3284,9 +3485,11 @@ final class WhoopStore: @unchecked Sendable {
             sqlite3_clear_bindings(upsertStatement)
         }
         sqlite3_finalize(upsertStatement)
-        guard setMetadataValue(
-            database: database, key: "local-recovery-score-backfill", value: model.version
-        ), execute("COMMIT") else {
+        guard
+            setMetadataValue(
+                database: database, key: "local-recovery-score-backfill", value: model.version
+            ), execute("COMMIT")
+        else {
             execute("ROLLBACK")
             return
         }
@@ -3310,10 +3513,12 @@ final class WhoopStore: @unchecked Sendable {
         // by more state-2 sleep in real captures. Keep dashes through it for the
         // automatic path, while still exposing the current candidate so Process
         // can serve as Harley's explicit wake boundary.
-        let recentSleepBeforeUp = lastAsleepTimestamp.map {
-            latest.timestamp - $0 <= 90 * 60
-        } == true
-        let detectorReportsSleeping = sampleIsCurrent
+        let recentSleepBeforeUp =
+            lastAsleepTimestamp.map {
+                latest.timestamp - $0 <= 90 * 60
+            } == true
+        let detectorReportsSleeping =
+            sampleIsCurrent
             && (latest.sleepState == 2
                 || (latest.sleepState == 3 && recentSleepBeforeUp))
         let asleepRows = rows.filter { $0.sleepState == 2 }
@@ -3331,9 +3536,10 @@ final class WhoopStore: @unchecked Sendable {
             if index == groups.count - 1, storedManualEnd != nil {
                 latestSessionHasManualEnd = true
             }
-            let session = storedManualEnd.map { end in
-                unboundedSession.filter { $0.timestamp <= end }
-            } ?? unboundedSession
+            let session =
+                storedManualEnd.map { end in
+                    unboundedSession.filter { $0.timestamp <= end }
+                } ?? unboundedSession
             guard let firstSleep = session.first, let lastSleep = session.last else { continue }
             let sessionRows = rows.filter {
                 $0.timestamp >= firstSleep.timestamp && $0.timestamp <= lastSleep.timestamp
@@ -3342,23 +3548,25 @@ final class WhoopStore: @unchecked Sendable {
             let wakeRows = rows.filter {
                 $0.timestamp > lastSleep.timestamp && $0.sleepState != 2
             }
-            candidates.append(SleepCandidate(
-                sessionRows: sessionRows,
-                asleepRows: session,
-                firstSleep: firstSleep,
-                lastSleep: lastSleep,
-                latest: latest,
-                cadenceSeconds: cadence,
-                // State 3 ("up") may bridge two state-2 runs into one night,
-                // but it is not sleep. Group with the asleep rows and measure
-                // with the asleep rows; conflating those two operations added
-                // an hour-long up interval to a real night's duration.
-                sleepSeconds: Self.elapsedSeconds(across: session, cadence: cadence),
-                sessionCoverage: Self.observedFraction(of: sessionRows, cadence: cadence),
-                wakeSeconds: Self.elapsedSeconds(across: wakeRows, cadence: cadence)
-            ))
+            candidates.append(
+                SleepCandidate(
+                    sessionRows: sessionRows,
+                    asleepRows: session,
+                    firstSleep: firstSleep,
+                    lastSleep: lastSleep,
+                    latest: latest,
+                    cadenceSeconds: cadence,
+                    // State 3 ("up") may bridge two state-2 runs into one night,
+                    // but it is not sleep. Group with the asleep rows and measure
+                    // with the asleep rows; conflating those two operations added
+                    // an hour-long up interval to a real night's duration.
+                    sleepSeconds: Self.elapsedSeconds(across: session, cadence: cadence),
+                    sessionCoverage: Self.observedFraction(of: sessionRows, cadence: cadence),
+                    wakeSeconds: Self.elapsedSeconds(across: wakeRows, cadence: cadence)
+                ))
         }
-        let detectorSaysSleeping = manualEndAt == nil
+        let detectorSaysSleeping =
+            manualEndAt == nil
             && !latestSessionHasManualEnd
             && detectorReportsSleeping
         if detectorSaysSleeping { return .sleeping(latestDate, candidates.last) }
@@ -3411,13 +3619,15 @@ final class WhoopStore: @unchecked Sendable {
             // primary metrics are written together. The persisted completion
             // marker also makes this safe immediately after an app relaunch;
             // a newer partial chunk invalidates it until the next COMPLETE.
-            let coherentHistory = allowAutomaticFinalization
+            let coherentHistory =
+                allowAutomaticFinalization
                 && completedOffloadCoversLatestHistory(database: database)
             var publishable: [DailyHealthRecord] = []
             for candidate in candidates
-                where coherentHistory
-                    && candidate.meetsEvidenceGates
-                    && candidate.meetsWakeGates {
+            where coherentHistory
+                && candidate.meetsEvidenceGates
+                && candidate.meetsWakeGates
+            {
                 guard shouldDerive(candidate: candidate, database: database) else { continue }
                 let record = derivedRecord(for: candidate, now: now)
                 guard record.hasCompletePrimarySleepMetrics else { continue }
@@ -3501,12 +3711,13 @@ final class WhoopStore: @unchecked Sendable {
                     return
                 }
                 guard upsertLocalDailyHealthRecord(record, database: database),
-                      setManualSleepEnd(
-                          effectiveManualEnd,
-                          forStartedAt: candidate.firstSleep.timestamp,
-                          database: database
-                      ),
-                      execute("COMMIT") else {
+                    setManualSleepEnd(
+                        effectiveManualEnd,
+                        forStartedAt: candidate.firstSleep.timestamp,
+                        database: database
+                    ),
+                    execute("COMMIT")
+                else {
                     execute("ROLLBACK")
                     completion(.failure(.writeFailed))
                     return
@@ -3645,18 +3856,19 @@ final class WhoopStore: @unchecked Sendable {
                 verdict = "all gates pass; finalizes automatically"
             }
 
-            sessions.append(WhoopSleepSessionDiagnostics(
-                startedAt: stamp(first.timestamp), endedAt: stamp(last.timestamp),
-                spanMinutes: (span / 60).rounded(), durationMinutes: (duration / 60).rounded(),
-                sampleCount: inSession.count, coverage: coverage, sampleDensity: density,
-                bankedWakeMinutes: (wake / 60).rounded(),
-                minutesSinceLastAsleep: (since / 60).rounded(),
-                passesDurationGate: durationGate, passesCoverageGate: coverageGate,
-                passesWakeCoverageGate: wakeGate, passesWakeElapsedGate: elapsedGate,
-                dateKey: dateKey, storedSleepID: stored,
-                storedSummary: storedRecordSummary(forDateKey: dateKey, database: database),
-                verdict: verdict
-            ))
+            sessions.append(
+                WhoopSleepSessionDiagnostics(
+                    startedAt: stamp(first.timestamp), endedAt: stamp(last.timestamp),
+                    spanMinutes: (span / 60).rounded(), durationMinutes: (duration / 60).rounded(),
+                    sampleCount: inSession.count, coverage: coverage, sampleDensity: density,
+                    bankedWakeMinutes: (wake / 60).rounded(),
+                    minutesSinceLastAsleep: (since / 60).rounded(),
+                    passesDurationGate: durationGate, passesCoverageGate: coverageGate,
+                    passesWakeCoverageGate: wakeGate, passesWakeElapsedGate: elapsedGate,
+                    dateKey: dateKey, storedSleepID: stored,
+                    storedSummary: storedRecordSummary(forDateKey: dateKey, database: database),
+                    verdict: verdict
+                ))
         }
 
         return WhoopSleepDiagnostics(
@@ -3682,7 +3894,10 @@ final class WhoopStore: @unchecked Sendable {
         guard let database else { return (0, 0, [:]) }
         // Decoder results have the indexed shape diagnostics need. Counting the
         // raw table forced a full scan of more than a million retained frames.
-        let rawTotal = Int((try? scalarInt(database, sql: "SELECT COUNT(*) FROM whoop_decode_result WHERE decoder_version = \(Self.decoderVersion)")) ?? 0)
+        let rawTotal = Int(
+            (try? scalarInt(
+                database, sql: "SELECT COUNT(*) FROM whoop_decode_result WHERE decoder_version = \(Self.decoderVersion)"
+            )) ?? 0)
         let sampleTotal = Int((try? scalarInt(database, sql: "SELECT COUNT(*) FROM whoop_historical_sample")) ?? 0)
         var outcomes: [String: Int] = [:]
         let sql = """
@@ -3693,7 +3908,8 @@ final class WhoopStore: @unchecked Sendable {
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return (rawTotal, sampleTotal, outcomes) }
+            let statement
+        else { return (rawTotal, sampleTotal, outcomes) }
         defer { sqlite3_finalize(statement) }
         while sqlite3_step(statement) == SQLITE_ROW {
             guard let blob = sqlite3_column_blob(statement, 0) else { continue }
@@ -3728,7 +3944,8 @@ final class WhoopStore: @unchecked Sendable {
         )
         let timingAgreement = features.last ?? 100
         let modelPrediction = Self.bundledSleepScoreModel?.prediction(features)
-        let sleepScore = modelPrediction?.score
+        let sleepScore =
+            modelPrediction?.score
             ?? Self.fallbackSleepScore(
                 durationMinutes: durationMinutes,
                 efficiencyPercentage: efficiency,
@@ -3774,19 +3991,21 @@ final class WhoopStore: @unchecked Sendable {
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return [] }
+            let statement
+        else { return [] }
         defer { sqlite3_finalize(statement) }
         bind(dateKey, to: 1, in: statement)
         var nights: [SleepScoreNight] = []
         while sqlite3_step(statement) == SQLITE_ROW {
             guard let key = textColumn(statement, 0) else { continue }
-            nights.append(SleepScoreNight(
-                dateKey: key,
-                durationMinutes: sqlite3_column_double(statement, 1),
-                efficiencyPercentage: sqlite3_column_double(statement, 2),
-                startMinute: sqlite3_column_double(statement, 3),
-                endMinute: sqlite3_column_double(statement, 4)
-            ))
+            nights.append(
+                SleepScoreNight(
+                    dateKey: key,
+                    durationMinutes: sqlite3_column_double(statement, 1),
+                    efficiencyPercentage: sqlite3_column_double(statement, 2),
+                    startMinute: sqlite3_column_double(statement, 3),
+                    endMinute: sqlite3_column_double(statement, 4)
+                ))
         }
         return nights
     }
@@ -3804,12 +4023,14 @@ final class WhoopStore: @unchecked Sendable {
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return false }
+            let statement
+        else { return false }
         defer { sqlite3_finalize(statement) }
         bind(candidate.dateKey, to: 1, in: statement)
         guard sqlite3_step(statement) == SQLITE_ROW else { return true }
         guard let source = textColumn(statement, 0),
-              source.hasPrefix(Self.localSourcePrefix) else { return false }
+            source.hasPrefix(Self.localSourcePrefix)
+        else { return false }
         if source != Self.localSource { return true }
         if (1...4).contains(where: { sqlite3_column_type(statement, Int32($0)) == SQLITE_NULL }) {
             return true
@@ -3845,11 +4066,13 @@ final class WhoopStore: @unchecked Sendable {
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return false }
+            let statement
+        else { return false }
         defer { sqlite3_finalize(statement) }
         guard sqlite3_step(statement) == SQLITE_ROW,
-              sqlite3_column_type(statement, 0) != SQLITE_NULL,
-              sqlite3_column_type(statement, 1) != SQLITE_NULL else { return false }
+            sqlite3_column_type(statement, 0) != SQLITE_NULL,
+            sqlite3_column_type(statement, 1) != SQLITE_NULL
+        else { return false }
         let newestSampleSequence = sqlite3_column_int64(statement, 0)
         let newestCompletionSequence = sqlite3_column_int64(statement, 1)
         return newestCompletionSequence >= newestSampleSequence
@@ -3863,7 +4086,8 @@ final class WhoopStore: @unchecked Sendable {
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return nil }
+            let statement
+        else { return nil }
         defer { sqlite3_finalize(statement) }
         bind(dateKey, to: 1, in: statement)
         guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
@@ -3872,14 +4096,16 @@ final class WhoopStore: @unchecked Sendable {
         let hrv = sqlite3_column_type(statement, 2) == SQLITE_NULL ? nil : sqlite3_column_double(statement, 2)
         let rhr = sqlite3_column_type(statement, 3) == SQLITE_NULL ? nil : sqlite3_column_double(statement, 3)
         let source = textColumn(statement, 4) ?? "?"
-        return "score \(Int(score.rounded()))% | \(Int(duration.rounded())) min | HRV \(hrv.map { String(Int($0.rounded())) } ?? "nil") | RHR \(rhr.map { String(Int($0.rounded())) } ?? "nil") | \(source)"
+        return
+            "score \(Int(score.rounded()))% | \(Int(duration.rounded())) min | HRV \(hrv.map { String(Int($0.rounded())) } ?? "nil") | RHR \(rhr.map { String(Int($0.rounded())) } ?? "nil") | \(source)"
     }
 
     private func storedSleepID(forDateKey dateKey: String, database: OpaquePointer) -> String? {
         let sql = "SELECT sleep_id FROM daily_health_metric WHERE date_key = ? LIMIT 1"
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return nil }
+            let statement
+        else { return nil }
         defer { sqlite3_finalize(statement) }
         bind(dateKey, to: 1, in: statement)
         guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
@@ -3958,7 +4184,8 @@ final class WhoopStore: @unchecked Sendable {
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return [] }
+            let statement
+        else { return [] }
         defer { sqlite3_finalize(statement) }
         bind(source, to: 1, in: statement)
         sqlite3_bind_double(statement, 2, start)
@@ -3968,10 +4195,11 @@ final class WhoopStore: @unchecked Sendable {
             let text = textColumn(statement, 1) ?? "[]"
             let intervals = (try? JSONDecoder().decode([Double].self, from: Data(text.utf8))) ?? []
             if !intervals.isEmpty {
-                packets.append(RealtimeRRPacket(
-                    timestamp: sqlite3_column_double(statement, 0),
-                    intervals: intervals
-                ))
+                packets.append(
+                    RealtimeRRPacket(
+                        timestamp: sqlite3_column_double(statement, 0),
+                        intervals: intervals
+                    ))
             }
         }
         return packets
@@ -4011,21 +4239,26 @@ final class WhoopStore: @unchecked Sendable {
         let alreadyOrdered = zip(packets, packets.dropFirst()).allSatisfy {
             $0.timestamp <= $1.timestamp
         }
-        let ordered = alreadyOrdered ? packets : packets.sorted { lhs, rhs in
-            lhs.timestamp == rhs.timestamp
-                ? lhs.intervals.count < rhs.intervals.count
-                : lhs.timestamp < rhs.timestamp
-        }
+        let ordered =
+            alreadyOrdered
+            ? packets
+            : packets.sorted { lhs, rhs in
+                lhs.timestamp == rhs.timestamp
+                    ? lhs.intervals.count < rhs.intervals.count
+                    : lhs.timestamp < rhs.timestamp
+            }
         let windows = Dictionary(grouping: ordered) { Int($0.timestamp / 300) }
         var values: [Double] = []
         for packets in windows.values {
-            let plausible = packets
+            let plausible =
+                packets
                 .flatMap(\.intervals)
                 .filter { (300...2_000).contains($0) }
                 .sorted()
             guard !plausible.isEmpty else { continue }
             let middle = plausible.count / 2
-            let median = plausible.count.isMultiple(of: 2)
+            let median =
+                plausible.count.isMultiple(of: 2)
                 ? (plausible[middle - 1] + plausible[middle]) / 2
                 : plausible[middle]
             var squares: [Double] = []
@@ -4035,10 +4268,12 @@ final class WhoopStore: @unchecked Sendable {
             for packet in packets {
                 let packetGap = previousPacketTimestamp.map { packet.timestamp - $0 }
                 for (index, interval) in packet.intervals.enumerated() {
-                    let valid = (300...2_000).contains(interval)
+                    let valid =
+                        (300...2_000).contains(interval)
                         && median > 0
                         && abs(interval - median) / median <= 0.20
-                    let adjacent = index > 0
+                    let adjacent =
+                        index > 0
                         || packetGap.map { $0 > 0 && $0 <= 3 } == true
                     if valid, previousWasValid, adjacent, let previousInterval {
                         let difference = interval - previousInterval
@@ -4078,12 +4313,15 @@ final class WhoopStore: @unchecked Sendable {
         efficiencyPercentage: Double,
         timingAgreementPercentage: Double
     ) -> Double {
-        min(99, max(0,
-            -101.418011
-                + 0.10204614 * durationMinutes
-                + 0.43013477 * efficiencyPercentage
-                + 1.06691453 * timingAgreementPercentage
-        ))
+        min(
+            99,
+            max(
+                0,
+                -101.418011
+                    + 0.10204614 * durationMinutes
+                    + 0.43013477 * efficiencyPercentage
+                    + 1.06691453 * timingAgreementPercentage
+            ))
     }
 
     private static func minuteOfDay(_ date: Date) -> Double {
@@ -4131,7 +4369,8 @@ final class WhoopStore: @unchecked Sendable {
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return false }
+            let statement
+        else { return false }
         defer { sqlite3_finalize(statement) }
         bind(record.dateKey, to: 1, in: statement)
         bind(record.sleepScore, to: 2, in: statement)
@@ -4174,7 +4413,8 @@ final class WhoopStore: @unchecked Sendable {
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return false }
+            let statement
+        else { return false }
         defer { sqlite3_finalize(statement) }
         bind(record.sleepScore, to: 1, in: statement)
         bind(record.source, to: 2, in: statement)
@@ -4239,7 +4479,8 @@ final class WhoopStore: @unchecked Sendable {
 
     private func textColumn(_ statement: OpaquePointer, _ index: Int32) -> String? {
         guard sqlite3_column_type(statement, index) != SQLITE_NULL,
-              let bytes = sqlite3_column_text(statement, index) else { return nil }
+            let bytes = sqlite3_column_text(statement, index)
+        else { return nil }
         return String(cString: bytes)
     }
 
@@ -4255,14 +4496,16 @@ final class WhoopStore: @unchecked Sendable {
 
     private func dataColumn(_ statement: OpaquePointer, _ index: Int32) -> Data? {
         guard sqlite3_column_type(statement, index) != SQLITE_NULL,
-              let bytes = sqlite3_column_blob(statement, index) else { return nil }
+            let bytes = sqlite3_column_blob(statement, index)
+        else { return nil }
         return Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, index)))
     }
 
     private func scalarInt(_ database: OpaquePointer, sql: String) throws -> Int64 {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { throw StoreError.queryFailed(errorMessage(database)) }
+            let statement
+        else { throw StoreError.queryFailed(errorMessage(database)) }
         defer { sqlite3_finalize(statement) }
         guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }
         return sqlite3_column_int64(statement, 0)

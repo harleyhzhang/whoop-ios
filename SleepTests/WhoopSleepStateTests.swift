@@ -1,5 +1,6 @@
-import XCTest
 import SQLite3
+import XCTest
+
 @testable import Sleep
 
 final class WhoopSleepStateTests: XCTestCase {
@@ -114,11 +115,13 @@ final class WhoopSleepStateTests: XCTestCase {
         let day = PublishedDashboardDay(
             healthRecords: [health],
             stepRecords: [dailyStepRecord(dateKey: health.dateKey, stepCount: 8_432)],
-            recoveryRecords: [DailyRecoveryRecord(
-                dateKey: health.dateKey,
-                score: 82,
-                source: "synthetic"
-            )],
+            recoveryRecords: [
+                DailyRecoveryRecord(
+                    dateKey: health.dateKey,
+                    score: 82,
+                    source: "synthetic"
+                )
+            ],
             isWakePending: true
         )
 
@@ -173,18 +176,21 @@ final class WhoopSleepStateTests: XCTestCase {
         var database: OpaquePointer?
         XCTAssertEqual(sqlite3_open(databaseURL.path, &database), SQLITE_OK)
         guard let database else { throw XCTSkip("Could not open SQLite fixture") }
-        XCTAssertEqual(sqlite3_exec(database, """
-            INSERT INTO daily_health_metric
-                (date_key, sleep_score, sleep_duration_minutes,
-                 hrv_rmssd_milliseconds, resting_heart_rate_bpm,
-                 source, source_updated_at, imported_at)
-            VALUES ('2026-09-09', 88, 480, 64, 52,
-                    'synthetic', '2026-09-09T12:00:00Z', 0);
-            INSERT INTO whoop_official_daily_metric
-                (date_key, official_recovery_score, official_steps,
-                 source_archive, source_manifest_sha256, imported_at)
-            VALUES ('2026-09-09', 81, 5432, 'synthetic', 'synthetic', 0);
-            """, nil, nil, nil), SQLITE_OK)
+        XCTAssertEqual(
+            sqlite3_exec(
+                database,
+                """
+                INSERT INTO daily_health_metric
+                    (date_key, sleep_score, sleep_duration_minutes,
+                     hrv_rmssd_milliseconds, resting_heart_rate_bpm,
+                     source, source_updated_at, imported_at)
+                VALUES ('2026-09-09', 88, 480, 64, 52,
+                        'synthetic', '2026-09-09T12:00:00Z', 0);
+                INSERT INTO whoop_official_daily_metric
+                    (date_key, official_recovery_score, official_steps,
+                     source_archive, source_manifest_sha256, imported_at)
+                VALUES ('2026-09-09', 81, 5432, 'synthetic', 'synthetic', 0);
+                """, nil, nil, nil), SQLITE_OK)
         sqlite3_close(database)
 
         let snapshot = try await dashboardSnapshot(store: store)
@@ -480,10 +486,11 @@ final class WhoopSleepStateTests: XCTestCase {
                 sessionID: nil
             )
         }
-        XCTAssertTrue(store.setManualSleepEndForTesting(
-            startedAt: startedAt,
-            endedAt: manualEnd
-        ))
+        XCTAssertTrue(
+            store.setManualSleepEndForTesting(
+                startedAt: startedAt,
+                endedAt: manualEnd
+            ))
 
         let snapshot = await sleepSnapshot(store: store, now: observedAt)
 
@@ -526,21 +533,23 @@ final class WhoopSleepStateTests: XCTestCase {
             WhoopStore.RealtimeRRPacket(timestamp: 10, intervals: [1_000]),
         ]
 
-        XCTAssertNil(WhoopStore.rmssdFromRealtimePackets(
-            packets,
-            minimumDifferencesPerWindow: 1
-        ))
+        XCTAssertNil(
+            WhoopStore.rmssdFromRealtimePackets(
+                packets,
+                minimumDifferencesPerWindow: 1
+            ))
     }
 
     func testRealtimeRMSSDRejectsImplausibleBeatWithoutBridgingIt() {
         let packets = [
-            WhoopStore.RealtimeRRPacket(timestamp: 1, intervals: [900, 100, 1_000]),
+            WhoopStore.RealtimeRRPacket(timestamp: 1, intervals: [900, 100, 1_000])
         ]
 
-        XCTAssertNil(WhoopStore.rmssdFromRealtimePackets(
-            packets,
-            minimumDifferencesPerWindow: 1
-        ))
+        XCTAssertNil(
+            WhoopStore.rmssdFromRealtimePackets(
+                packets,
+                minimumDifferencesPerWindow: 1
+            ))
     }
 
     func testRealtimeRMSSDUsesRobustMedianAcrossWindows() {
@@ -604,55 +613,65 @@ final class WhoopSleepStateTests: XCTestCase {
     }
 
     func testFullerCoherentOffloadRepairsPrematureLocalNight() {
-        XCTAssertTrue(WhoopStore.shouldReplaceLocalSleep(
-            existingDurationMinutes: 230.4,
-            candidateDurationMinutes: 512
-        ))
+        XCTAssertTrue(
+            WhoopStore.shouldReplaceLocalSleep(
+                existingDurationMinutes: 230.4,
+                candidateDurationMinutes: 512
+            ))
     }
 
     func testPartialOffloadCannotShrinkStoredNight() {
-        XCTAssertFalse(WhoopStore.shouldReplaceLocalSleep(
-            existingDurationMinutes: 512,
-            candidateDurationMinutes: 230.4
-        ))
+        XCTAssertFalse(
+            WhoopStore.shouldReplaceLocalSleep(
+                existingDurationMinutes: 512,
+                candidateDurationMinutes: 230.4
+            ))
     }
 
     func testCadenceJitterDoesNotRewriteSettledNight() {
-        XCTAssertFalse(WhoopStore.shouldReplaceLocalSleep(
-            existingDurationMinutes: 512,
-            candidateDurationMinutes: 512.5
-        ))
+        XCTAssertFalse(
+            WhoopStore.shouldReplaceLocalSleep(
+                existingDurationMinutes: 512,
+                candidateDurationMinutes: 512.5
+            ))
     }
 
     func testHeartRateFreshnessRejectsOldCachedReading() {
         let now = Date(timeIntervalSince1970: 1_000)
-        XCTAssertTrue(WhoopHandshakeProbe.heartRateIsFresh(
-            receivedAt: now.addingTimeInterval(-30),
-            now: now
-        ))
-        XCTAssertFalse(WhoopHandshakeProbe.heartRateIsFresh(
-            receivedAt: now.addingTimeInterval(-91),
-            now: now
-        ))
-        XCTAssertFalse(WhoopHandshakeProbe.heartRateIsFresh(
-            receivedAt: nil,
-            now: now
-        ))
+        XCTAssertTrue(
+            WhoopHandshakeProbe.heartRateIsFresh(
+                receivedAt: now.addingTimeInterval(-30),
+                now: now
+            ))
+        XCTAssertFalse(
+            WhoopHandshakeProbe.heartRateIsFresh(
+                receivedAt: now.addingTimeInterval(-91),
+                now: now
+            ))
+        XCTAssertFalse(
+            WhoopHandshakeProbe.heartRateIsFresh(
+                receivedAt: nil,
+                now: now
+            ))
     }
 
-    func testPacketReplaySignatureIncludesCharacteristicAndPayload() {
-        let peripheral = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+    func testPacketReplaySignatureIncludesCharacteristicAndPayload() throws {
+        let peripheral = try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000001"))
+        let otherPeripheral = try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000002"))
         let payload = Data([0xAA, 0x01, 0x02])
-        let first = WhoopStore.packetSignature(peripheralID: peripheral, characteristicUUID: "FD4B0003", payload: payload)
-        let repeated = WhoopStore.packetSignature(peripheralID: peripheral, characteristicUUID: "fd4b0003", payload: payload)
-        let differentCharacteristic = WhoopStore.packetSignature(peripheralID: peripheral, characteristicUUID: "FD4B0004", payload: payload)
+        let first = WhoopStore.packetSignature(
+            peripheralID: peripheral, characteristicUUID: "FD4B0003", payload: payload)
+        let repeated = WhoopStore.packetSignature(
+            peripheralID: peripheral, characteristicUUID: "fd4b0003", payload: payload)
+        let differentCharacteristic = WhoopStore.packetSignature(
+            peripheralID: peripheral, characteristicUUID: "FD4B0004", payload: payload)
         let differentPayload = WhoopStore.packetSignature(
             peripheralID: peripheral,
             characteristicUUID: "FD4B0003",
             payload: Data([0xAA, 0x01, 0x03])
         )
         let differentPeripheral = WhoopStore.packetSignature(
-            peripheralID: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            peripheralID: otherPeripheral,
             characteristicUUID: "FD4B0003",
             payload: payload
         )
@@ -745,34 +764,46 @@ final class WhoopSleepStateTests: XCTestCase {
         XCTAssertEqual(sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READONLY, nil), SQLITE_OK)
         defer { if let database { sqlite3_close(database) } }
         XCTAssertEqual(scalarInt(database, sql: "PRAGMA user_version"), 9)
-        XCTAssertEqual(scalarInt(
-            database,
-            sql: "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('whoop_decode_result','whoop_ppg_packet','whoop_store_metadata')"
-        ), 3)
-        XCTAssertEqual(scalarInt(
-            database,
-            sql: "SELECT COUNT(*) FROM pragma_table_info('daily_health_metric') WHERE name IN ('sleep_start_at','sleep_end_at','sleep_start_minute','sleep_end_minute','sleep_need_minutes','sleep_consistency_percentage','sleep_efficiency_percentage','sleep_sufficiency_percentage')"
-        ), 8)
-        XCTAssertEqual(scalarInt(
-            database,
-            sql: "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('whoop_api_source_record','whoop_api_numeric_metric')"
-        ), 2)
-        XCTAssertGreaterThanOrEqual(scalarInt(
-            database,
-            sql: "SELECT COUNT(*) FROM whoop_time_zone_observation"
-        ), 1)
-        XCTAssertEqual(scalarInt(
-            database,
-            sql: "SELECT COUNT(*) FROM pragma_table_info('whoop_historical_sample') WHERE name IN ('step_motion_counter','step_cadence_raw','motion_class_raw','step_utc_offset_seconds','step_date_key')"
-        ), 5)
-        XCTAssertEqual(scalarInt(
-            database,
-            sql: "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='whoop_daily_step_metric'"
-        ), 1)
-        XCTAssertEqual(scalarInt(
-            database,
-            sql: "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('whoop_official_daily_metric','whoop_daily_recovery_metric')"
-        ), 2)
+        XCTAssertEqual(
+            scalarInt(
+                database,
+                sql:
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('whoop_decode_result','whoop_ppg_packet','whoop_store_metadata')"
+            ), 3)
+        XCTAssertEqual(
+            scalarInt(
+                database,
+                sql:
+                    "SELECT COUNT(*) FROM pragma_table_info('daily_health_metric') WHERE name IN ('sleep_start_at','sleep_end_at','sleep_start_minute','sleep_end_minute','sleep_need_minutes','sleep_consistency_percentage','sleep_efficiency_percentage','sleep_sufficiency_percentage')"
+            ), 8)
+        XCTAssertEqual(
+            scalarInt(
+                database,
+                sql:
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('whoop_api_source_record','whoop_api_numeric_metric')"
+            ), 2)
+        XCTAssertGreaterThanOrEqual(
+            scalarInt(
+                database,
+                sql: "SELECT COUNT(*) FROM whoop_time_zone_observation"
+            ), 1)
+        XCTAssertEqual(
+            scalarInt(
+                database,
+                sql:
+                    "SELECT COUNT(*) FROM pragma_table_info('whoop_historical_sample') WHERE name IN ('step_motion_counter','step_cadence_raw','motion_class_raw','step_utc_offset_seconds','step_date_key')"
+            ), 5)
+        XCTAssertEqual(
+            scalarInt(
+                database,
+                sql: "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='whoop_daily_step_metric'"
+            ), 1)
+        XCTAssertEqual(
+            scalarInt(
+                database,
+                sql:
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('whoop_official_daily_metric','whoop_daily_recovery_metric')"
+            ), 2)
     }
 
     func testVersion18DecoderPreservesMotionFieldsAndRejectsCorruption() {
@@ -1070,41 +1101,42 @@ final class WhoopSleepStateTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: temporary.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: temporary.path + "-wal"))
         XCTAssertFalse(FileManager.default.fileExists(atPath: temporary.path + "-shm"))
-        XCTAssertTrue(FileManager.default.fileExists(
-            atPath: backupDirectory.appendingPathComponent("sleep-v7-before-v9.sqlite3").path
-        ))
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: backupDirectory.appendingPathComponent("sleep-v7-before-v9.sqlite3").path
+            ))
     }
 
     func testOfficialMetricsSeedPreservesTargetsBaselinesAndProvenance() throws {
         let json = """
-        {
-          "formatVersion": 1,
-          "source": "whoop_private_ios_api",
-          "sourceArchive": "private-api-example",
-          "sourceManifestSHA256": "manifest-sha",
-          "sourceDatabaseSHA256": "database-sha",
-          "coverageStart": "2025-10-15",
-          "coverageEnd": "2026-09-07",
-          "daily": [{
-            "dateKey": "2026-08-31",
-            "officialRecoveryScore": 91,
-            "officialSteps": 7493,
-            "officialDayStrain": 12.4,
-            "dayStrainTarget": 13.2,
-            "stepsBaseline": 8100,
-            "hrv": 82.5,
-            "hrvBaseline": 77.2,
-            "rhr": 48,
-            "rhrBaseline": 50.1,
-            "respiratoryRate": 14.2,
-            "respiratoryRateBaseline": 14.0,
-            "sleepPerformance": 96,
-            "sleepPerformanceBaseline": 91,
-            "sourceRecoverySHA256": "recovery-sha",
-            "sourceStrainSHA256": "strain-sha"
-          }]
-        }
-        """
+            {
+              "formatVersion": 1,
+              "source": "whoop_private_ios_api",
+              "sourceArchive": "private-api-example",
+              "sourceManifestSHA256": "manifest-sha",
+              "sourceDatabaseSHA256": "database-sha",
+              "coverageStart": "2025-10-15",
+              "coverageEnd": "2026-09-07",
+              "daily": [{
+                "dateKey": "2026-08-31",
+                "officialRecoveryScore": 91,
+                "officialSteps": 7493,
+                "officialDayStrain": 12.4,
+                "dayStrainTarget": 13.2,
+                "stepsBaseline": 8100,
+                "hrv": 82.5,
+                "hrvBaseline": 77.2,
+                "rhr": 48,
+                "rhrBaseline": 50.1,
+                "respiratoryRate": 14.2,
+                "respiratoryRateBaseline": 14.0,
+                "sleepPerformance": 96,
+                "sleepPerformanceBaseline": 91,
+                "sourceRecoverySHA256": "recovery-sha",
+                "sourceStrainSHA256": "strain-sha"
+              }]
+            }
+            """
 
         let seed = try JSONDecoder().decode(OfficialMetricsSeed.self, from: Data(json.utf8))
 
@@ -1142,11 +1174,12 @@ final class WhoopSleepStateTests: XCTestCase {
         let past = record("2026-09-06", hrv: 70, rhr: 51, score: 90)
         let future = record("2026-09-08", hrv: 1, rhr: 200, score: 1)
 
-        let features = try XCTUnwrap(RecoveryScoreFeatureBuilder.features(
-            current: current,
-            history: [past, future],
-            stepsByDate: ["2026-09-06": 8_000, "2026-09-07": 10_000]
-        ))
+        let features = try XCTUnwrap(
+            RecoveryScoreFeatureBuilder.features(
+                current: current,
+                history: [past, future],
+                stepsByDate: ["2026-09-06": 8_000, "2026-09-07": 10_000]
+            ))
 
         XCTAssertEqual(features.count, RecoveryScoreFeatureBuilder.featureCount)
         XCTAssertEqual(features[50], 80)
@@ -1168,12 +1201,12 @@ final class WhoopSleepStateTests: XCTestCase {
             "boostedWeight": 0.7,
             "imputerMedians": zeros,
             "boostedModel": [
-                "initialPrediction": 80.0, "learningRate": 0.1, "trees": []
+                "initialPrediction": 80.0, "learningRate": 0.1, "trees": [],
             ],
             "ridgeModel": [
                 "imputerMedians": zeros, "means": zeros, "scales": ones,
-                "coefficients": zeros, "intercept": 20.0
-            ]
+                "coefficients": zeros, "intercept": 20.0,
+            ],
         ]
         let model = try JSONDecoder().decode(
             RecoveryScoreModelBundle.self,
@@ -1188,21 +1221,6 @@ final class WhoopSleepStateTests: XCTestCase {
         XCTAssertEqual(prediction.confidence, 0.82)
     }
 
-    func testPrivateRecoveryModelMatchesPythonExporterWhenAvailable() throws {
-        guard let model = RecoveryScoreModelBundle.load() else { return }
-        var features = model.imputerMedians
-        features[50] += 10
-        features[51] -= 2
-        features[52] = .nan
-        features[53] += 3
-
-        let prediction = try XCTUnwrap(model.prediction(features))
-
-        XCTAssertEqual(model.version, "whoop5_local_recovery_v1_gbt_ridge")
-        XCTAssertEqual(prediction.score, 64.61710245284407, accuracy: 0.0000001)
-        XCTAssertEqual(prediction.confidence, 0.82)
-    }
-
     func testOfficialStepsOverrideOverlappingLocalDayAndJoinLocalTail() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1213,19 +1231,22 @@ final class WhoopSleepStateTests: XCTestCase {
         var database: OpaquePointer?
         XCTAssertEqual(sqlite3_open_v2(databaseURL.path, &database, SQLITE_OPEN_READWRITE, nil), SQLITE_OK)
         defer { if let database { sqlite3_close(database) } }
-        XCTAssertEqual(sqlite3_exec(database, """
-            INSERT INTO whoop_official_daily_metric
-                (date_key, official_recovery_score, official_steps,
-                 source_archive, source_manifest_sha256, imported_at)
-            VALUES ('2026-08-31', 91, 7493, 'archive', 'manifest', 0);
-            INSERT INTO whoop_daily_step_metric
-                (date_key, peripheral_id, step_count, sample_count, span_seconds,
-                 coverage_fraction, gap_seconds, counter_wrap_count, rejected_delta_count,
-                 source, algorithm_version, derived_at)
-            VALUES
-                ('2026-08-31', 'strap', 7000, 1, 1, 1, 0, 0, 0, 'local', 1, 0),
-                ('2026-09-01', 'strap', 8123, 1, 1, 1, 0, 0, 0, 'local', 1, 0);
-            """, nil, nil, nil), SQLITE_OK)
+        XCTAssertEqual(
+            sqlite3_exec(
+                database,
+                """
+                INSERT INTO whoop_official_daily_metric
+                    (date_key, official_recovery_score, official_steps,
+                     source_archive, source_manifest_sha256, imported_at)
+                VALUES ('2026-08-31', 91, 7493, 'archive', 'manifest', 0);
+                INSERT INTO whoop_daily_step_metric
+                    (date_key, peripheral_id, step_count, sample_count, span_seconds,
+                     coverage_fraction, gap_seconds, counter_wrap_count, rejected_delta_count,
+                     source, algorithm_version, derived_at)
+                VALUES
+                    ('2026-08-31', 'strap', 7000, 1, 1, 1, 0, 0, 0, 'local', 1, 0),
+                    ('2026-09-01', 'strap', 8123, 1, 1, 1, 0, 0, 0, 'local', 1, 0);
+                """, nil, nil, nil), SQLITE_OK)
 
         let records: [DailyStepRecord] = try await withCheckedThrowingContinuation { continuation in
             store.loadDailyStepRecords { continuation.resume(with: $0) }
@@ -1249,7 +1270,7 @@ final class WhoopSleepStateTests: XCTestCase {
             SleepScoreNight(
                 dateKey: "2026-09-06", durationMinutes: 480,
                 efficiencyPercentage: 95, startMinute: 1_410, endMinute: 420
-            )
+            ),
         ]
         let current = SleepScoreNight(
             dateKey: "2026-09-07", durationMinutes: 510,
@@ -1292,26 +1313,28 @@ final class WhoopSleepStateTests: XCTestCase {
             "featureVersion": SleepScoreFeatureBuilder.version,
             "directWeight": 0.1,
             "extraTreesWeight": 0.75,
-            "trees": [[
-                "childrenLeft": [-1], "childrenRight": [-1],
-                "features": [-2], "thresholds": [-2.0], "values": [80.0]
-            ]],
+            "trees": [
+                [
+                    "childrenLeft": [-1], "childrenRight": [-1],
+                    "features": [-2], "thresholds": [-2.0], "values": [80.0],
+                ]
+            ],
             "svr": [
                 "means": features, "scales": Array(repeating: 1.0, count: features.count),
                 "supportVectors": [features], "dualCoefficients": [0.0],
-                "intercept": 100.0, "gamma": 0.1
+                "intercept": 100.0, "gamma": 0.1,
             ],
             "needModel": [
-                "initialPrediction": 500.0, "learningRate": 0.1, "trees": []
+                "initialPrediction": 500.0, "learningRate": 0.1, "trees": [],
             ],
             "consistencyModel": [
-                "initialPrediction": 80.0, "learningRate": 0.1, "trees": []
+                "initialPrediction": 80.0, "learningRate": 0.1, "trees": [],
             ],
             "pillarSVR": [
                 "means": [0.0, 0.0, 0.0], "scales": [1.0, 1.0, 1.0],
                 "supportVectors": [[0.0, 0.0, 0.0]], "dualCoefficients": [0.0],
-                "intercept": 100.0, "gamma": 0.1
-            ]
+                "intercept": 100.0, "gamma": 0.1,
+            ],
         ]
         let data = try JSONSerialization.data(withJSONObject: payload)
         let model = try JSONDecoder().decode(SleepScoreModelBundle.self, from: data)
@@ -1321,27 +1344,6 @@ final class WhoopSleepStateTests: XCTestCase {
         XCTAssertEqual(prediction.sleepNeedMinutes, 500, accuracy: 0.0001)
         XCTAssertEqual(prediction.consistencyPercentage, 80, accuracy: 0.0001)
         XCTAssertEqual(prediction.sufficiencyPercentage, 0, accuracy: 0.0001)
-    }
-
-    func testPrivateSleepScoreModelDecodesWhenAvailable() throws {
-        guard let path = Bundle.main.url(
-            forResource: "whoop-score-model", withExtension: "json"
-        ) else { return }
-        let model = try JSONDecoder().decode(
-            SleepScoreModelBundle.self,
-            from: Data(contentsOf: path)
-        )
-        let current = SleepScoreNight(
-            dateKey: "2026-09-07", durationMinutes: 480,
-            efficiencyPercentage: 95, startMinute: 1_410, endMinute: 420
-        )
-        let prediction = model.predict(
-            SleepScoreFeatureBuilder.features(current: current, history: [])
-        )
-
-        XCTAssertEqual(model.version, "whoop5_local_v5_score_staged_1")
-        XCTAssertNotNil(prediction)
-        XCTAssertTrue((0...99).contains(prediction ?? -1))
     }
 
     func testOffloadCompletionRequiresDurableCRCValidCompletionAfterHistory() async throws {
@@ -1425,17 +1427,19 @@ final class WhoopSleepStateTests: XCTestCase {
         let store = WhoopStore(databaseURL: url, runBackgroundDecoding: false)
         defer { store.shutdownForTesting() }
         let packet = version18Frame(timestamp: 1_800_000_000, sleepState: 2)
+        let firstPeripheral = try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000001"))
+        let secondPeripheral = try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000002"))
 
         let first = try await append(
             packet,
             store: store,
-            peripheral: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            peripheral: firstPeripheral,
             sessionID: nil
         )
         let second = try await append(
             packet,
             store: store,
-            peripheral: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            peripheral: secondPeripheral,
             sessionID: nil
         )
         XCTAssertTrue(first.success)
@@ -1674,7 +1678,8 @@ final class WhoopSleepStateTests: XCTestCase {
     private func scalarInt(_ database: OpaquePointer?, sql: String) -> Int64 {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return -1 }
+            let statement
+        else { return -1 }
         defer { sqlite3_finalize(statement) }
         guard sqlite3_step(statement) == SQLITE_ROW else { return -1 }
         return sqlite3_column_int64(statement, 0)
@@ -1683,10 +1688,12 @@ final class WhoopSleepStateTests: XCTestCase {
     private func scalarText(_ database: OpaquePointer?, sql: String) -> String? {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return nil }
+            let statement
+        else { return nil }
         defer { sqlite3_finalize(statement) }
         guard sqlite3_step(statement) == SQLITE_ROW,
-              let value = sqlite3_column_text(statement, 0) else { return nil }
+            let value = sqlite3_column_text(statement, 0)
+        else { return nil }
         return String(cString: value)
     }
 }

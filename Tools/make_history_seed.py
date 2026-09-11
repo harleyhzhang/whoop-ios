@@ -5,14 +5,15 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 
 def load_records(path: Path) -> list[dict[str, Any]]:
     with path.open(encoding="utf-8") as source:
-        return json.load(source)["records"]
+        payload = cast(dict[str, Any], json.load(source))
+    return cast(list[dict[str, Any]], payload["records"])
 
 
 def parse_instant(value: str) -> datetime:
@@ -21,7 +22,7 @@ def parse_instant(value: str) -> datetime:
 
 def local_date_key(end: str, offset: str) -> str:
     if offset == "Z":
-        zone = timezone.utc
+        zone = UTC
     else:
         sign = 1 if offset[0] == "+" else -1
         hours, minutes = (int(part) for part in offset[1:].split(":"))
@@ -31,7 +32,7 @@ def local_date_key(end: str, offset: str) -> str:
 
 def local_zone(offset: str) -> timezone:
     if offset == "Z":
-        return timezone.utc
+        return UTC
     sign = 1 if offset[0] == "+" else -1
     hours, minutes = (int(part) for part in offset[1:].split(":"))
     return timezone(sign * timedelta(hours=hours, minutes=minutes))
@@ -78,7 +79,9 @@ def build_seed(archive: Path) -> list[dict[str, Any]]:
         )
         source_updated = max(
             parse_instant(sleep["updated_at"]),
-            parse_instant(recovery["updated_at"]) if recovery else parse_instant(sleep["updated_at"]),
+            parse_instant(recovery["updated_at"])
+            if recovery
+            else parse_instant(sleep["updated_at"]),
         )
         result.append(
             {
@@ -105,18 +108,10 @@ def build_seed(archive: Path) -> list[dict[str, Any]]:
                 "sleepStartMinute": minute_of_day(sleep["start"], sleep["timezone_offset"]),
                 "sleepEndMinute": minute_of_day(sleep["end"], sleep["timezone_offset"]),
                 "sleepNeedMinutes": need_milli / 60_000,
-                "sleepConsistencyPercentage": float(
-                    sleep_score["sleep_consistency_percentage"]
-                ),
-                "sleepEfficiencyPercentage": float(
-                    sleep_score["sleep_efficiency_percentage"]
-                ),
-                "sleepSufficiencyPercentage": min(
-                    100.0, total_sleep_milli / need_milli * 100
-                ),
-                "sourceSleepPayloadJSON": json.dumps(
-                    sleep, separators=(",", ":"), sort_keys=True
-                ),
+                "sleepConsistencyPercentage": float(sleep_score["sleep_consistency_percentage"]),
+                "sleepEfficiencyPercentage": float(sleep_score["sleep_efficiency_percentage"]),
+                "sleepSufficiencyPercentage": min(100.0, total_sleep_milli / need_milli * 100),
+                "sourceSleepPayloadJSON": json.dumps(sleep, separators=(",", ":"), sort_keys=True),
                 "sourceRecoveryPayloadJSON": (
                     json.dumps(recovery, separators=(",", ":"), sort_keys=True)
                     if recovery
@@ -143,7 +138,9 @@ def main() -> None:
     with args.output.open("w", encoding="utf-8") as destination:
         json.dump(records, destination, indent=2, sort_keys=True)
         destination.write("\n")
-    print(f"Wrote {len(records)} real nights: {records[0]['dateKey']} through {records[-1]['dateKey']}")
+    print(
+        f"Wrote {len(records)} real nights: {records[0]['dateKey']} through {records[-1]['dateKey']}"
+    )
 
 
 if __name__ == "__main__":

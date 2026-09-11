@@ -17,8 +17,9 @@ import argparse
 import json
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
+import backtest_sleep_score as sleep_model
 import numpy as np
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.impute import SimpleImputer
@@ -26,9 +27,6 @@ from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
-
-import backtest_sleep_score as sleep_model
-
 
 FEATURE_VERSION = "whoop_local_recovery_features_v1"
 MODEL_VERSION = "whoop5_local_recovery_v1_gbt_ridge"
@@ -38,7 +36,8 @@ BOOSTED_WEIGHT = 0.70
 
 def load_records(path: Path) -> list[dict[str, Any]]:
     with path.open(encoding="utf-8") as source:
-        return json.load(source)["records"]
+        payload = cast(dict[str, Any], json.load(source))
+    return cast(list[dict[str, Any]], payload["records"])
 
 
 def target_rows(archive: Path) -> tuple[dict[date, float], dict[date, float], dict[date, float]]:
@@ -56,9 +55,11 @@ def target_rows(archive: Path) -> tuple[dict[date, float], dict[date, float], di
         sleep = sleeps.get(int(recovery["cycle_id"]))
         if not sleep:
             continue
-        day = sleep_model.parse_instant(sleep["end"]).astimezone(
-            sleep_model.local_zone(sleep["timezone_offset"])
-        ).date()
+        day = (
+            sleep_model.parse_instant(sleep["end"])
+            .astimezone(sleep_model.local_zone(sleep["timezone_offset"]))
+            .date()
+        )
         score = recovery["score"]
         targets[day] = float(score["recovery_score"])
         hrv[day] = float(score["hrv_rmssd_milli"])
@@ -115,7 +116,9 @@ def recovery_features(
         prior_nights = nights[max(0, index - window) : index]
         sleep_scores = {night["date"]: float(night["target"]) for night in prior_nights}
         for mapping, current_value in (
-            (hrv, current[0]), (rhr, current[1]), (steps, current[2]),
+            (hrv, current[0]),
+            (rhr, current[1]),
+            (steps, current[2]),
             (sleep_scores, current[3]),
         ):
             history = np.asarray(
@@ -180,7 +183,7 @@ def chronological_validation(inputs: np.ndarray, targets: np.ndarray) -> dict[st
         "medianAbsoluteError": float(np.median(absolute)),
         "p90AbsoluteError": float(np.percentile(absolute, 90)),
         "withinFivePoints": float(np.mean(absolute <= 5)),
-        "validationNightCount": int(len(actual)),
+        "validationNightCount": len(actual),
     }
 
 

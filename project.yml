@@ -7,6 +7,12 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+    GCC_TREAT_WARNINGS_AS_ERRORS: YES
+    CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED: YES
+    CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION: YES_AGGRESSIVE
+    CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER: YES
+    ENABLE_STRICT_OBJC_MSGSEND: YES
     CURRENT_PROJECT_VERSION: 13
     MARKETING_VERSION: 0.7.1
 targets:
@@ -16,6 +22,7 @@ targets:
     sources:
       - path: SleepApp
       - path: WhoopHandshakeApp/HandshakeView.swift
+      - path: WhoopHandshakeApp/WhoopBluetoothPolicy.swift
       - path: WhoopHandshakeApp/WhoopHandshakeProbe.swift
       - path: WhoopHandshakeApp/WhoopStore.swift
     postBuildScripts:
@@ -87,6 +94,7 @@ targets:
     scheme:
       testTargets:
         - SleepTests
+        - SleepUITests
   SleepTests:
     type: bundle.unit-test
     platform: iOS
@@ -100,3 +108,31 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.clintonst.sideload.sleep.tests
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/WHOOP.app/WHOOP"
         BUNDLE_LOADER: "$(TEST_HOST)"
+  SleepUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: SleepUITests
+    dependencies:
+      - target: Sleep
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.clintonst.sideload.sleep.ui-tests
+        TEST_TARGET_NAME: Sleep
+  SleepPrivateTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: SleepPrivateTests
+    dependencies:
+      - target: Sleep
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.clintonst.sideload.sleep.private-tests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/WHOOP.app/WHOOP"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+    scheme:
+      testTargets:
+        - SleepPrivateTests

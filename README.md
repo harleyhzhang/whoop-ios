@@ -1,6 +1,6 @@
 # WHOOP iOS
 
-[![Manual iOS CI](https://github.com/harleyhzhang/whoop-ios/actions/workflows/ios-ci.yml/badge.svg)](https://github.com/harleyhzhang/whoop-ios/actions/workflows/ios-ci.yml)
+[![Local CI](https://github.com/harleyhzhang/whoop-ios/actions/workflows/local-ci.yml/badge.svg)](https://github.com/harleyhzhang/whoop-ios/actions/workflows/local-ci.yml)
 
 WHOOP iOS is an unofficial, native, offline-first personal iPhone client. It is
 intended to operate a personally owned WHOOP 5 directly,
@@ -9,11 +9,23 @@ metrics locally without depending on a WHOOP membership.
 
 ## Local verification
 
-Run `Tools/verify_local.sh` before merging code changes. It rejects committed
-private runtime data, runs the unit tests, builds the Release configuration for
-the iOS Simulator, and runs Xcode's static analyzer. The GitHub Actions workflow
-is retained only as a manually dispatched fallback so pushes do not consume
-hosted macOS runner minutes.
+Install the pinned tools and repository hook once, then run the canonical gate:
+
+```bash
+brew bundle --file Brewfile
+Tools/install_git_hooks.sh
+Tools/verify_local.sh
+```
+
+The gate enforces Swift formatting, Swift 6 strict concurrency, warnings as
+errors, Ruff formatting/linting, strict mypy, shellcheck, secret and private-data
+scans, generated-project drift, zero skipped tests, a 58% app coverage floor,
+Release compilation, and Xcode static analysis. Pull requests and `main` use a
+private self-hosted Mac runner, so normal CI consumes no GitHub-hosted macOS
+minutes. `.github/workflows/ios-ci.yml` is a manual hosted fallback only.
+
+See [testing and CI](docs/testing.md), [architecture](docs/architecture.md), and
+[contributing](CONTRIBUTING.md) before making a behavioral change.
 
 ## Product target
 

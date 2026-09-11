@@ -13,6 +13,7 @@ struct RootView: View {
     @State private var chartMorphGeneration = 0
     @State private var currentDate = Date()
     @State private var debugMockPendingSleepDismissed = false
+    @State private var showsConnectionDetails = false
     @ObservedObject var whoopCollector: WhoopHandshakeProbe
     @StateObject private var history = HealthHistoryModel()
 
@@ -34,7 +35,8 @@ struct RootView: View {
     /// whatever exists rather than a fixed window.
     private var availableRanges: [HealthRange] {
         guard let first = history.records.first?.date,
-              let last = history.records.last?.date else {
+            let last = history.records.last?.date
+        else {
             return HealthRange.allCases
         }
         let days = (Calendar.current.dateComponents([.day], from: first, to: last).day ?? 0) + 1
@@ -50,9 +52,9 @@ struct RootView: View {
 
     private var sleepMetricsArePending: Bool {
         #if DEBUG
-        if ProcessInfo.processInfo.environment["WHOOP_MOCK_SLEEPING"] == "1" {
-            return true
-        }
+            if ProcessInfo.processInfo.environment["WHOOP_MOCK_SLEEPING"] == "1" {
+                return true
+            }
         #endif
         return whoopCollector.isSleeping
             || displayedPendingSleep != nil
@@ -61,10 +63,11 @@ struct RootView: View {
 
     private var whoopBatteryLevel: Int? {
         #if DEBUG
-        if let mockValue = ProcessInfo.processInfo.environment["WHOOP_MOCK_BATTERY"],
-           let level = Int(mockValue) {
-            return min(max(level, 0), 100)
-        }
+            if let mockValue = ProcessInfo.processInfo.environment["WHOOP_MOCK_BATTERY"],
+                let level = Int(mockValue)
+            {
+                return min(max(level, 0), 100)
+            }
         #endif
 
         return whoopCollector.batteryLevel
@@ -72,9 +75,9 @@ struct RootView: View {
 
     private var whoopCharging: Bool {
         #if DEBUG
-        if ProcessInfo.processInfo.environment["WHOOP_MOCK_CHARGING"] == "1" {
-            return true
-        }
+            if ProcessInfo.processInfo.environment["WHOOP_MOCK_CHARGING"] == "1" {
+                return true
+            }
         #endif
 
         return whoopCollector.isCharging
@@ -82,9 +85,9 @@ struct RootView: View {
 
     private var whoopConnected: Bool {
         #if DEBUG
-        if ProcessInfo.processInfo.environment["WHOOP_MOCK_CONNECTED"] == "1" {
-            return true
-        }
+            if ProcessInfo.processInfo.environment["WHOOP_MOCK_CONNECTED"] == "1" {
+                return true
+            }
         #endif
 
         return whoopCollector.isConnected
@@ -92,16 +95,17 @@ struct RootView: View {
 
     private var displayedPendingSleep: WhoopPendingSleep? {
         #if DEBUG
-        if !debugMockPendingSleepDismissed,
-           let rawMinutes = ProcessInfo.processInfo.environment["WHOOP_MOCK_PENDING_SLEEP_MINUTES"],
-           let minutes = Double(rawMinutes) {
-            return WhoopPendingSleep(
-                sleepID: "mock-pending-sleep",
-                startedAt: currentDate.addingTimeInterval(-minutes * 60),
-                endedAt: currentDate,
-                durationMinutes: minutes
-            )
-        }
+            if !debugMockPendingSleepDismissed,
+                let rawMinutes = ProcessInfo.processInfo.environment["WHOOP_MOCK_PENDING_SLEEP_MINUTES"],
+                let minutes = Double(rawMinutes)
+            {
+                return WhoopPendingSleep(
+                    sleepID: "mock-pending-sleep",
+                    startedAt: currentDate.addingTimeInterval(-minutes * 60),
+                    endedAt: currentDate,
+                    durationMinutes: minutes
+                )
+            }
         #endif
 
         return whoopCollector.pendingSleep
@@ -257,6 +261,9 @@ struct RootView: View {
                 currentDate = .now
             }
         }
+        .sheet(isPresented: $showsConnectionDetails) {
+            HandshakeView(probe: whoopCollector)
+        }
     }
 
     private var dateHeader: some View {
@@ -283,36 +290,43 @@ struct RootView: View {
 
             Spacer()
 
-            HStack(spacing: 9) {
-                ZStack(alignment: .bottomTrailing) {
-                    Image("WhoopBand")
-                        .resizable()
-                        .scaledToFit()
-                        .brightness(0.07)
-                        .contrast(1.03)
-                        .frame(width: 33, height: 33)
+            Button {
+                AppHaptics.softImpact()
+                showsConnectionDetails = true
+            } label: {
+                HStack(spacing: 9) {
+                    ZStack(alignment: .bottomTrailing) {
+                        Image("WhoopBand")
+                            .resizable()
+                            .scaledToFit()
+                            .brightness(0.07)
+                            .contrast(1.03)
+                            .frame(width: 33, height: 33)
 
-                    Circle()
-                        .fill(whoopConnected ? Color.green : Color.secondary)
-                        .frame(width: 6, height: 6)
-                        .overlay {
-                            Circle()
-                                .stroke(Color(uiColor: .systemGroupedBackground), lineWidth: 1.5)
-                        }
-                        .offset(x: -1, y: -1)
-                }
+                        Circle()
+                            .fill(whoopConnected ? Color.green : Color.secondary)
+                            .frame(width: 6, height: 6)
+                            .overlay {
+                                Circle()
+                                    .stroke(Color(uiColor: .systemGroupedBackground), lineWidth: 1.5)
+                            }
+                            .offset(x: -1, y: -1)
+                    }
 
-                WhoopBatteryPercentIcon(
-                    level: whoopBatteryLevel,
-                    isCharging: whoopCharging
-                )
+                    WhoopBatteryPercentIcon(
+                        level: whoopBatteryLevel,
+                        isCharging: whoopCharging
+                    )
                     .opacity(whoopConnected ? 1 : 0.45)
+                }
             }
+            .buttonStyle(.plain)
             .frame(minHeight: 36)
-            .accessibilityElement(children: .ignore)
             .accessibilityLabel(
                 "WHOOP \(whoopConnected ? "connected" : "disconnected"), battery \(whoopBatteryLevel.map { "\($0) percent" } ?? "unavailable")\(whoopCharging ? ", charging" : "")"
             )
+            .accessibilityHint("Show connection details")
+            .accessibilityIdentifier("whoop.connection.details")
         }
     }
 
@@ -385,10 +399,10 @@ struct RootView: View {
 
     private func processPendingSleepCard() {
         #if DEBUG
-        if ProcessInfo.processInfo.environment["WHOOP_MOCK_PENDING_SLEEP_MINUTES"] != nil {
-            debugMockPendingSleepDismissed = true
-            return
-        }
+            if ProcessInfo.processInfo.environment["WHOOP_MOCK_PENDING_SLEEP_MINUTES"] != nil {
+                debugMockPendingSleepDismissed = true
+                return
+            }
         #endif
 
         whoopCollector.processPendingSleep()
@@ -529,22 +543,26 @@ struct RootView: View {
         color: Color,
         formatValue: @escaping (Double) -> String
     ) -> some View {
-        let cardSelection = !sleepMetricsArePending && activeMetric == metric
+        let cardSelection =
+            !sleepMetricsArePending && activeMetric == metric
             ? selectedDate
             : nil
         let selectedMetricPoint: MetricPoint? = cardSelection.flatMap {
             self.selectedPoint(in: series.plotted, near: $0)
         }
-        let currentValue: Double? = switch metric {
-        case .steps: publishedDay.steps.map { Double($0.stepCount) }
-        case .recovery: publishedDay.recovery?.score
-        default: metricValue(for: metric, in: publishedDay.health)
-        }
-        let displayedValue = sleepMetricsArePending
+        let currentValue: Double? =
+            switch metric {
+            case .steps: publishedDay.steps.map { Double($0.stepCount) }
+            case .recovery: publishedDay.recovery?.score
+            default: metricValue(for: metric, in: publishedDay.health)
+            }
+        let displayedValue =
+            sleepMetricsArePending
             ? nil
             : (cardSelection == nil ? currentValue : selectedMetricPoint?.value)
         let value = displayedValue.map(formatValue) ?? "—"
-        let valueDateLabel = cardSelection == nil
+        let valueDateLabel =
+            cardSelection == nil
             ? publishedDay.date.map { selectionLabel(for: $0) } ?? "Today"
             : selectedMetricPoint.map { selectionLabel(for: $0.date) } ?? "No real data"
 
@@ -588,7 +606,9 @@ struct RootView: View {
         .padding(.horizontal, 14)
         .padding(.top, 13)
         .padding(.bottom, 10)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(
+            Color(uiColor: .secondarySystemGroupedBackground),
+            in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     @ViewBuilder
@@ -608,7 +628,9 @@ struct RootView: View {
         }
     }
 
-    private func populatedMetricChart(metric: MetricKind, series: MetricSeries, color: Color, title: String) -> some View {
+    private func populatedMetricChart(metric: MetricKind, series: MetricSeries, color: Color, title: String)
+        -> some View
+    {
         let plottedPoints = series.plotted
         let chartPoints = morphingPoints(for: metric, target: series)
         let domain = morphingDomain(for: metric, target: series)
@@ -622,7 +644,10 @@ struct RootView: View {
         let lineOpacity = contentOpacity.line
         let areaOpacity = contentOpacity.area
         let markerSymbolArea: CGFloat = 48
-        let highlightedPoint = selectedPoint(in: plottedPoints, near: chartSelection) ?? plottedPoints.last!
+        let highlightedPoint =
+            selectedPoint(in: plottedPoints, near: chartSelection)
+            ?? plottedPoints.last
+            ?? MetricPoint(date: .now, value: 0)
         let requestedHighlightPosition = normalizedPosition(of: highlightedPoint, in: plottedPoints)
         // The colored trend is drawn through the resampled morph points, not
         // the original daily values. Snap the marker to the nearest one of
@@ -634,11 +659,12 @@ struct RootView: View {
         )
         let highlightedPosition = highlightedCurvePoint?.position ?? requestedHighlightPosition
         let highlightedValue = highlightedCurvePoint?.value ?? highlightedPoint.value
-        let firstDate = series.daily.first!.date
+        let firstDate = series.daily.first?.date ?? highlightedPoint.date
         let middleDate = series.daily[series.daily.count / 2].date
         let monthTicks = monthlyAxisDates(in: series.daily)
         let averageRange = averageLevelRange
-        let averageSeries = averageRange == selectedRange
+        let averageSeries =
+            averageRange == selectedRange
             ? series
             : metricSeries(for: metric, range: averageRange)
         let averageLevels = adaptiveAverageLevels(from: averageSeries.daily, for: averageRange)
@@ -655,7 +681,7 @@ struct RootView: View {
                         LinearGradient(
                             colors: [
                                 color,
-                                color.opacity(0.015 / 0.26)
+                                color.opacity(0.015 / 0.26),
                             ],
                             startPoint: .top,
                             endPoint: .bottom
@@ -858,13 +884,15 @@ struct RootView: View {
 
         let representedMonths: [Date] = grouped.values.compactMap { month in
             guard let representativeDate = month.first?.date,
-                  let interval = calendar.dateInterval(of: .month, for: representativeDate) else {
+                let interval = calendar.dateInterval(of: .month, for: representativeDate)
+            else {
                 return nil
             }
 
             let visibleStart = max(interval.start, firstDate)
             let visibleEnd = min(interval.end, lastDate)
-            let midpoint = visibleStart.timeIntervalSinceReferenceDate
+            let midpoint =
+                visibleStart.timeIntervalSinceReferenceDate
                 + (visibleEnd.timeIntervalSince(visibleStart) / 2)
             return Date(timeIntervalSinceReferenceDate: midpoint)
         }
@@ -968,8 +996,9 @@ struct RootView: View {
             },
             set: { position in
                 if let position,
-                   let firstDate = selectableSeries.first?.date,
-                   let lastDate = selectableSeries.last?.date {
+                    let firstDate = selectableSeries.first?.date,
+                    let lastDate = selectableSeries.last?.date
+                {
                     let clampedPosition = min(max(position, 0), 1)
                     let date = firstDate.addingTimeInterval(
                         lastDate.timeIntervalSince(firstDate) * clampedPosition
@@ -1279,8 +1308,8 @@ private struct WhoopBatteryPercentIcon: View {
                 topTrailingRadius: 3.3,
                 style: .continuous
             )
-                .fill(trackColor)
-                .frame(width: 2.4, height: 6.6)
+            .fill(trackColor)
+            .frame(width: 2.4, height: 6.6)
         }
         .accessibilityHidden(true)
     }
@@ -1459,7 +1488,8 @@ enum ChartCurveSampler {
                 let nextWidth = widths[index]
                 let previousWeight = (2 * nextWidth) + previousWidth
                 let nextWeight = nextWidth + (2 * previousWidth)
-                tangents[index] = (previousWeight + nextWeight)
+                tangents[index] =
+                    (previousWeight + nextWeight)
                     / ((previousWeight / before) + (nextWeight / after))
             }
         }
