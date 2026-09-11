@@ -530,6 +530,30 @@ then, a new run is the correct retry unit.
 
 ## 10. Build, sign, install, and preserve migration backups
 
+### Choose the verification tier first
+
+Run `Tools/phone_install_policy.sh` before a physical install. By default it
+compares `HEAD` with `installedCommit` in the file named by
+`WHOOP_DEVICE_INSTALL_STATE_PATH`; `--base` can supply the known installed
+commit explicitly.
+
+- `none` means no production app code changed, so there is nothing to install.
+- `fast` is restricted to presentation-only changes in `RootView.swift` or the
+  asset catalog. Reuse a recent integrity-checked full backup, install in place,
+  verify that CoreDevice reports the same data-container UUID, launch, confirm
+  the process remains alive, and confirm the database or WAL modification time
+  advances. Do not copy the complete database before or after this tier.
+- `full` covers any data store, schema, migration, model, collector, lifecycle,
+  app identity, project configuration, or unclassified production change. Use
+  the coherent pre/post snapshot procedure below. Connect the iPhone by USB
+  when practical because CoreDevice otherwise transfers the entire database
+  over Wi-Fi without delta compression.
+
+The policy intentionally fails closed to `full` if the installed baseline is
+missing, unavailable, divergent, or ambiguous. A fast install is a verification
+optimization, not permission to skip exact-commit building, signing checks,
+private-asset hash checks, in-place installation, launch, or runtime validation.
+
 Generate the Xcode project after changing `project.yml`:
 
 ```sh

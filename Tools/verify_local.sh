@@ -12,6 +12,9 @@ trap cleanup EXIT
 
 cd "$repo_dir"
 
+echo "Testing physical-phone install policy..."
+Tools/test_phone_install_policy.sh
+
 if git ls-files | grep -Eq '(^|/)(sleep\.sqlite3|whoop-history\.json|whoop-score-model\.json|whoop-recovery-model\.json|whoop-official-metrics\.json|whoop-official-archive\.sqlite3)$'; then
   echo "Private WHOOP runtime data must not be committed."
   exit 1
