@@ -3,6 +3,57 @@ import SQLite3
 @testable import Sleep
 
 final class WhoopSleepStateTests: XCTestCase {
+    func testWeekChartUsesAContinuousShapePreservingCurve() {
+        let start = Date(timeIntervalSinceReferenceDate: 0)
+        let day: TimeInterval = 86_400
+        let points = [
+            MetricPoint(date: start, value: 0),
+            MetricPoint(date: start.addingTimeInterval(day), value: 10),
+            MetricPoint(date: start.addingTimeInterval(2 * day), value: 30),
+        ]
+
+        let values = ChartCurveSampler.resampledValues(from: points, count: 5)
+
+        XCTAssertEqual(values.count, 5)
+        XCTAssertEqual(values[0], 0)
+        XCTAssertEqual(values[2], 10)
+        XCTAssertEqual(values[4], 30)
+        XCTAssertEqual(values[1], 4.583_333, accuracy: 0.000_001)
+        XCTAssertEqual(values[3], 19.166_667, accuracy: 0.000_001)
+        XCTAssertNotEqual(values[1], 5)
+    }
+
+    func testChartCurveDoesNotOvershootTurningPoints() {
+        let start = Date(timeIntervalSinceReferenceDate: 0)
+        let day: TimeInterval = 86_400
+        let points = [
+            MetricPoint(date: start, value: 10),
+            MetricPoint(date: start.addingTimeInterval(day), value: 30),
+            MetricPoint(date: start.addingTimeInterval(2 * day), value: 20),
+        ]
+
+        let values = ChartCurveSampler.resampledValues(from: points, count: 49)
+
+        XCTAssertEqual(values.first, 10)
+        XCTAssertEqual(values.last, 20)
+        XCTAssertTrue(values.allSatisfy { (10...30).contains($0) })
+        XCTAssertEqual(values.max(), 30)
+    }
+
+    func testChartCurveKeepsRangeMorphTopologyStable() {
+        let start = Date(timeIntervalSinceReferenceDate: 0)
+        let day: TimeInterval = 86_400
+        let week = (0..<7).map {
+            MetricPoint(date: start.addingTimeInterval(Double($0) * day), value: Double($0))
+        }
+        let year = (0..<53).map {
+            MetricPoint(date: start.addingTimeInterval(Double($0 * 7) * day), value: Double($0))
+        }
+
+        XCTAssertEqual(ChartCurveSampler.resampledValues(from: week, count: 48).count, 48)
+        XCTAssertEqual(ChartCurveSampler.resampledValues(from: year, count: 48).count, 48)
+    }
+
     func testChartMarkerSnapsToExactSmoothedCurveAnchor() throws {
         let curve = [
             MorphingMetricPoint(id: 0, position: 0, value: 40),
