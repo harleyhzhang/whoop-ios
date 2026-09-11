@@ -13,7 +13,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: local-ci-${{ github.ref }}
+  # pull_request_target uses the default branch as github.ref. Include the
+  # event and PR number so a new PR cannot cancel verification of main.
+  group: local-ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
