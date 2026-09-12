@@ -54,6 +54,9 @@ Tools/check_project_generation.sh
 echo "Testing physical-phone install policy..."
 Tools/test_phone_install_policy.sh
 
+echo "Testing private asset embedding..."
+Tools/test_embed_private_assets.sh
+
 echo "Checking private-data boundary and secrets..."
 Tools/check_private_data.sh
 

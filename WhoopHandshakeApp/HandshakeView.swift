@@ -4,16 +4,8 @@ struct HandshakeView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var probe: WhoopHandshakeProbe
 
-    private var mockConnected: Bool {
-        #if DEBUG
-            ProcessInfo.processInfo.environment["WHOOP_MOCK_CONNECTED"] == "1"
-        #else
-            false
-        #endif
-    }
-
     private var isConnected: Bool {
-        probe.isConnected || mockConnected
+        probe.isConnected || WhoopLaunchOverrides.isConnected
     }
 
     private var deviceDisplayName: String {
@@ -21,14 +13,7 @@ struct HandshakeView: View {
     }
 
     private var batteryLevel: Int? {
-        #if DEBUG
-            if let value = ProcessInfo.processInfo.environment["WHOOP_MOCK_BATTERY"],
-                let level = Int(value)
-            {
-                return min(max(level, 0), 100)
-            }
-        #endif
-        return probe.batteryLevel
+        WhoopLaunchOverrides.batteryLevel ?? probe.batteryLevel
     }
 
     private var batterySymbol: String {
@@ -42,9 +27,7 @@ struct HandshakeView: View {
     }
 
     private var lastConnectedStatus: String {
-        #if DEBUG
-            if mockConnected { return "Just now" }
-        #endif
+        if WhoopLaunchOverrides.isConnected { return "Just now" }
 
         guard let date = probe.lastConnectedAt else { return "Not yet" }
         let formatter = RelativeDateTimeFormatter()

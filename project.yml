@@ -21,55 +21,12 @@ targets:
     platform: iOS
     sources:
       - path: SleepApp
-      - path: WhoopHandshakeApp/HandshakeView.swift
-      - path: WhoopHandshakeApp/WhoopBluetoothPolicy.swift
-      - path: WhoopHandshakeApp/WhoopHandshakeProbe.swift
-      - path: WhoopHandshakeApp/WhoopStore.swift
+      - path: WhoopHandshakeApp
     postBuildScripts:
       - name: Embed private WHOOP history
         basedOnDependencyAnalysis: false
         script: |
-          SEED_PATH="${WHOOP_HISTORY_SEED_PATH:-${HOME}/Documents/personal/data/whoop/app-seeds/whoop-history.json}"
-          DESTINATION="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/whoop-history.json"
-          if [ -f "${SEED_PATH}" ] && ! /usr/bin/cmp -s "${SEED_PATH}" "${DESTINATION}"; then
-            /bin/cp "${SEED_PATH}" "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/whoop-history.json"
-          elif [ ! -f "${SEED_PATH}" ]; then
-            /bin/rm -f "${DESTINATION}"
-          fi
-          MODEL_PATH="${WHOOP_SCORE_MODEL_PATH:-${HOME}/Documents/personal/data/whoop/app-seeds/whoop-score-model.json}"
-          MODEL_DESTINATION="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/whoop-score-model.json"
-          if [ -f "${MODEL_PATH}" ] && ! /usr/bin/cmp -s "${MODEL_PATH}" "${MODEL_DESTINATION}"; then
-            /bin/cp "${MODEL_PATH}" "${MODEL_DESTINATION}"
-          elif [ ! -f "${MODEL_PATH}" ]; then
-            /bin/rm -f "${MODEL_DESTINATION}"
-          fi
-          RECOVERY_MODEL_PATH="${WHOOP_RECOVERY_MODEL_PATH:-${HOME}/Documents/personal/data/whoop/app-seeds/whoop-recovery-model.json}"
-          RECOVERY_MODEL_DESTINATION="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/whoop-recovery-model.json"
-          if [ -f "${RECOVERY_MODEL_PATH}" ] && ! /usr/bin/cmp -s "${RECOVERY_MODEL_PATH}" "${RECOVERY_MODEL_DESTINATION}"; then
-            /bin/cp "${RECOVERY_MODEL_PATH}" "${RECOVERY_MODEL_DESTINATION}"
-          elif [ ! -f "${RECOVERY_MODEL_PATH}" ]; then
-            /bin/rm -f "${RECOVERY_MODEL_DESTINATION}"
-          fi
-          OFFICIAL_METRICS_PATH="${WHOOP_OFFICIAL_METRICS_PATH:-${HOME}/Documents/personal/data/whoop/app-seeds/whoop-official-metrics.json}"
-          OFFICIAL_METRICS_DESTINATION="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/whoop-official-metrics.json"
-          if [ -f "${OFFICIAL_METRICS_PATH}" ] && ! /usr/bin/cmp -s "${OFFICIAL_METRICS_PATH}" "${OFFICIAL_METRICS_DESTINATION}"; then
-            /bin/cp "${OFFICIAL_METRICS_PATH}" "${OFFICIAL_METRICS_DESTINATION}"
-          elif [ ! -f "${OFFICIAL_METRICS_PATH}" ]; then
-            /bin/rm -f "${OFFICIAL_METRICS_DESTINATION}"
-          fi
-          OFFICIAL_ARCHIVE_PATH="${WHOOP_OFFICIAL_ARCHIVE_PATH:-${HOME}/Documents/personal/data/whoop/app-seeds/whoop-official-archive.sqlite3}"
-          OFFICIAL_ARCHIVE_DESTINATION="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/whoop-official-archive.sqlite3"
-          if [ -f "${OFFICIAL_ARCHIVE_PATH}" ] && ! /usr/bin/cmp -s "${OFFICIAL_ARCHIVE_PATH}" "${OFFICIAL_ARCHIVE_DESTINATION}"; then
-            /bin/cp "${OFFICIAL_ARCHIVE_PATH}" "${OFFICIAL_ARCHIVE_DESTINATION}"
-          elif [ ! -f "${OFFICIAL_ARCHIVE_PATH}" ]; then
-            /bin/rm -f "${OFFICIAL_ARCHIVE_DESTINATION}"
-          fi
-          if [ "${CONFIGURATION}" = "Release" ] && [ "${PLATFORM_NAME}" = "iphoneos" ]; then
-            if [ ! -f "${DESTINATION}" ] || [ ! -f "${MODEL_DESTINATION}" ] || [ ! -f "${RECOVERY_MODEL_DESTINATION}" ] || [ ! -f "${OFFICIAL_METRICS_DESTINATION}" ] || [ ! -f "${OFFICIAL_ARCHIVE_DESTINATION}" ]; then
-              echo "error: Personal WHOOP device releases require the private history, models, and official raw archive."
-              exit 1
-            fi
-          fi
+          "${SRCROOT}/Tools/embed_private_assets.sh"
     info:
       path: SleepApp/Info.plist
       properties:

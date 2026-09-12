@@ -84,7 +84,7 @@ if [ -z "$changed_files" ]; then
 fi
 
 production_files=$(printf '%s\n' "$changed_files" | awk '
-  /^SleepApp\// || /^project\.yml$/ || /^Sleep\.xcodeproj\// { print }
+  /^SleepApp\// || /^WhoopHandshakeApp\// || /^project\.yml$/ || /^Sleep\.xcodeproj\// { print }
 ')
 
 if [ -z "$production_files" ]; then
@@ -96,6 +96,7 @@ fi
 unsafe_files=$(printf '%s\n' "$production_files" | awk '
   /^SleepApp\/RootView\.swift$/ { next }
   /^SleepApp\/Assets\.xcassets\// { next }
+  /^WhoopHandshakeApp\/HandshakeView\.swift$/ { next }
   { print }
 ')
 

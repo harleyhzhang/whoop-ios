@@ -34,6 +34,45 @@ struct WhoopHistoricalMetadata: Equatable {
     }
 }
 
+/// Typed commands keep wire opcodes and payload shapes out of the Bluetooth
+/// lifecycle coordinator. The low-level frame encoder remains independently
+/// testable, while production call sites can only construct known commands.
+enum WhoopCommand: Equatable {
+    case clientHello
+    case requestHistory
+    case acknowledgeHistoryChunk([UInt8])
+    case realtimeSensors(enabled: Bool)
+    case realtimeHeartRate(enabled: Bool)
+
+    var opcode: UInt8 {
+        switch self {
+        case .clientHello: 0x91
+        case .requestHistory: 22
+        case .acknowledgeHistoryChunk: 23
+        case .realtimeSensors: 0x3F
+        case .realtimeHeartRate: 0x03
+        }
+    }
+
+    var payload: [UInt8] {
+        switch self {
+        case .clientHello: [0x01]
+        case .requestHistory: [0x00]
+        case .acknowledgeHistoryChunk(let endData): [0x01] + endData
+        case .realtimeSensors(let enabled), .realtimeHeartRate(let enabled):
+            [enabled ? 0x01 : 0x00]
+        }
+    }
+
+    func frame(sequence: UInt8) -> [UInt8] {
+        WhoopBluetoothPolicy.commandFrame(
+            command: opcode,
+            sequence: sequence,
+            payload: payload
+        )
+    }
+}
+
 enum WhoopBluetoothPolicy {
     static func matchesAdvertisement(
         serviceUUIDs: Set<String>,
