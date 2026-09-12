@@ -35,6 +35,9 @@ The committed pre-push hook invokes this command. Install it with
   skipped public tests.
 - `Tools/verify_sanitizers.sh`: AddressSanitizer and ThreadSanitizer runs for
   risky memory, concurrency, persistence, or protocol changes.
+- `ToolsTests/test_phone_shipping.py`: deterministic private-asset contracts,
+  device/container parsing, backup integrity and preservation, atomic install
+  state, and exact-merged-commit shipping policy.
 
 Tests may not depend on Bluetooth hardware, network access, local health data,
 execution order, or the real wall clock. Inject these boundaries or use

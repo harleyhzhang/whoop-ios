@@ -33,6 +33,7 @@ targets:
         CFBundleDisplayName: WHOOP
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        WHOOPSourceCommit: "$(WHOOP_SOURCE_COMMIT)"
         NSBluetoothAlwaysUsageDescription: Establish a local encrypted link to your WHOOP strap and read live measurements.
         UIBackgroundModes:
           - bluetooth-central
