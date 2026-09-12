@@ -110,7 +110,7 @@ final class WhoopSleepStateTests: XCTestCase {
         XCTAssertEqual(opacity.area, 0.07, accuracy: 0.000_001)
     }
 
-    func testPendingWakeSuppressesEveryDashboardMetric() {
+    func testPendingWakeKeepsLastPublishedDashboardVisible() {
         let health = dailyHealthRecord(dateKey: "2026-09-08")
         let day = PublishedDashboardDay(
             healthRecords: [health],
@@ -121,14 +121,12 @@ final class WhoopSleepStateTests: XCTestCase {
                     score: 82,
                     source: "synthetic"
                 )
-            ],
-            isWakePending: true
+            ]
         )
 
-        XCTAssertNil(day.health)
-        XCTAssertNil(day.steps)
-        XCTAssertNil(day.recovery)
-        XCTAssertNil(day.date)
+        XCTAssertEqual(day.health?.dateKey, health.dateKey)
+        XCTAssertEqual(day.steps?.dateKey, health.dateKey)
+        XCTAssertEqual(day.recovery?.dateKey, health.dateKey)
     }
 
     func testPublishedDashboardMetricsShareOneDayKey() throws {
@@ -142,8 +140,7 @@ final class WhoopSleepStateTests: XCTestCase {
             recoveryRecords: [
                 DailyRecoveryRecord(dateKey: health.dateKey, score: 82, source: "synthetic"),
                 DailyRecoveryRecord(dateKey: "2026-09-09", score: 91, source: "synthetic"),
-            ],
-            isWakePending: false
+            ]
         )
 
         XCTAssertEqual(try XCTUnwrap(day.health).dateKey, health.dateKey)
@@ -156,8 +153,7 @@ final class WhoopSleepStateTests: XCTestCase {
         let day = PublishedDashboardDay(
             healthRecords: [health],
             stepRecords: [dailyStepRecord(dateKey: health.dateKey, stepCount: 8_432)],
-            recoveryRecords: [],
-            isWakePending: false
+            recoveryRecords: []
         )
 
         XCTAssertNil(day.health)
@@ -375,7 +371,7 @@ final class WhoopSleepStateTests: XCTestCase {
         )
     }
 
-    func testSleepingSnapshotExposesCandidateForManualProcessing() async throws {
+    func testShortUpStateKeepsSleepProvisional() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -416,6 +412,158 @@ final class WhoopSleepStateTests: XCTestCase {
             snapshot.pendingSleep?.endedAt,
             now.addingTimeInterval(-60)
         )
+    }
+
+    func testAutomaticSleepPolicyFinalizesUpAfterTenMinutes() {
+        XCTAssertTrue(
+            WhoopAutomaticSleepPolicy.reportsSleeping(
+                latestState: 3,
+                secondsSinceLastAsleep: 9 * 60,
+                latestSampleIsCurrent: true
+            )
+        )
+        XCTAssertFalse(
+            WhoopAutomaticSleepPolicy.canFinalize(
+                latestState: 3,
+                secondsSinceLastAsleep: 9 * 60,
+                latestSampleIsCurrent: true
+            )
+        )
+        XCTAssertFalse(
+            WhoopAutomaticSleepPolicy.reportsSleeping(
+                latestState: 3,
+                secondsSinceLastAsleep: 10 * 60,
+                latestSampleIsCurrent: true
+            )
+        )
+        XCTAssertTrue(
+            WhoopAutomaticSleepPolicy.canFinalize(
+                latestState: 3,
+                secondsSinceLastAsleep: 10 * 60,
+                latestSampleIsCurrent: true
+            )
+        )
+    }
+
+    func testAutomaticSleepPolicyFinalizesExplicitAwakeWithoutDelay() {
+        XCTAssertTrue(
+            WhoopAutomaticSleepPolicy.canFinalize(
+                latestState: 0,
+                secondsSinceLastAsleep: 60,
+                latestSampleIsCurrent: false
+            )
+        )
+        XCTAssertTrue(
+            WhoopAutomaticSleepPolicy.canFinalize(
+                latestState: 1,
+                secondsSinceLastAsleep: 60,
+                latestSampleIsCurrent: true
+            )
+        )
+    }
+
+    func testAutomaticProvisionalWakeSilentlyGrowsWhenSleepResumes() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = WhoopStore(
+            databaseURL: directory.appendingPathComponent("sleep.sqlite3"),
+            runBackgroundDecoding: false
+        )
+        defer { store.shutdownForTesting() }
+        let peripheral = UUID()
+        let firstWakeCheck = Date(timeIntervalSince1970: 1_800_000_000)
+        let startedAt = firstWakeCheck.addingTimeInterval(-(4 * 60 * 60 + 10 * 60))
+        let firstLastAsleep = firstWakeCheck.addingTimeInterval(-10 * 60)
+        let firstSessionID = try await beginOffload(store: store, peripheral: peripheral)
+
+        for timestamp in stride(
+            from: startedAt.timeIntervalSince1970,
+            through: firstLastAsleep.timeIntervalSince1970,
+            by: 60
+        ) {
+            _ = try await append(
+                version18Frame(timestamp: UInt32(timestamp), sleepState: 2),
+                store: store,
+                peripheral: peripheral,
+                sessionID: firstSessionID
+            )
+        }
+        _ = await appendRealtime(
+            Data([0x01]),
+            heartRate: 55,
+            rrIntervals: Array(repeating: [UInt16(900), UInt16(1_000)], count: 11).flatMap { $0 },
+            deliveredAt: startedAt.addingTimeInterval(60 * 60),
+            store: store,
+            peripheral: peripheral
+        )
+        _ = try await append(
+            version18Frame(
+                timestamp: UInt32(firstWakeCheck.timeIntervalSince1970),
+                sleepState: 3
+            ),
+            store: store,
+            peripheral: peripheral,
+            sessionID: firstSessionID
+        )
+        _ = try await append(
+            metadataFrame(type: 3),
+            store: store,
+            peripheral: peripheral,
+            sessionID: firstSessionID
+        )
+
+        let provisional = await sleepSnapshot(
+            store: store,
+            now: firstWakeCheck,
+            allowAutomaticFinalization: true
+        )
+        let provisionalRecord = try XCTUnwrap(provisional.finalizedRecord)
+
+        let resumedAt = firstLastAsleep.addingTimeInterval(40 * 60)
+        let resumedUntil = resumedAt.addingTimeInterval(20 * 60)
+        let correctedWakeCheck = resumedUntil.addingTimeInterval(10 * 60)
+        let correctionSessionID = try await beginOffload(store: store, peripheral: peripheral)
+        for timestamp in stride(
+            from: resumedAt.timeIntervalSince1970,
+            through: resumedUntil.timeIntervalSince1970,
+            by: 60
+        ) {
+            _ = try await append(
+                version18Frame(timestamp: UInt32(timestamp), sleepState: 2),
+                store: store,
+                peripheral: peripheral,
+                sessionID: correctionSessionID
+            )
+        }
+        _ = try await append(
+            version18Frame(
+                timestamp: UInt32(correctedWakeCheck.timeIntervalSince1970),
+                sleepState: 3
+            ),
+            store: store,
+            peripheral: peripheral,
+            sessionID: correctionSessionID
+        )
+        _ = try await append(
+            metadataFrame(type: 3),
+            store: store,
+            peripheral: peripheral,
+            sessionID: correctionSessionID
+        )
+
+        let corrected = await sleepSnapshot(
+            store: store,
+            now: correctedWakeCheck,
+            allowAutomaticFinalization: true
+        )
+        let correctedRecord = try XCTUnwrap(corrected.finalizedRecord)
+        XCTAssertEqual(correctedRecord.dateKey, provisionalRecord.dateKey)
+        XCTAssertGreaterThan(
+            correctedRecord.sleepDurationMinutes ?? 0,
+            provisionalRecord.sleepDurationMinutes ?? 0
+        )
+        XCTAssertEqual(correctedRecord.sleepEndAt, ISO8601DateFormatter().string(from: resumedUntil))
     }
 
     func testManualEndCapsLaterAsleepSamplesAndOverridesDetector() async throws {
@@ -1898,10 +2046,15 @@ final class WhoopSleepStateTests: XCTestCase {
     private func sleepSnapshot(
         store: WhoopStore,
         now: Date,
-        manualEndAt: Date? = nil
+        manualEndAt: Date? = nil,
+        allowAutomaticFinalization: Bool = false
     ) async -> WhoopSleepSnapshot {
         await withCheckedContinuation { continuation in
-            store.refreshSleepSnapshot(now: now, manualEndAt: manualEndAt) {
+            store.refreshSleepSnapshot(
+                now: now,
+                manualEndAt: manualEndAt,
+                allowAutomaticFinalization: allowAutomaticFinalization
+            ) {
                 continuation.resume(returning: $0)
             }
         }

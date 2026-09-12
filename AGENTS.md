@@ -60,8 +60,8 @@
   privacy boundaries are preserved. Run `Tools/verify_sanitizers.sh` for risky
   memory/concurrency/storage changes.
 - Do not add an app-side manual sync control for the hosted replica or for
-  memory. Memory reads are initiated from the Mac side. The dashboard's Process
-  control is not a sync button: it finalizes a night already collected on the
-  phone, waiving only the wake-timing gates and never the evidence gates. If a
-  strap-history offload is in flight, Process must wait for its durable
-  HISTORY_COMPLETE marker; it must never finalize the currently received prefix.
+  memory. Memory reads are initiated from the Mac side. Sleep publication is
+  automatic and has no routine Process/loading UI: explicit awake finalizes
+  immediately, while ambiguous `up` finalizes after ten minutes. Every publish
+  still requires a durable HISTORY_COMPLETE marker, and state-2 sleep returning
+  within ninety minutes silently grows the same night instead of losing data.

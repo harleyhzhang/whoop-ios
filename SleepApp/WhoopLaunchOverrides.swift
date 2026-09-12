@@ -5,10 +5,6 @@ enum WhoopLaunchOverrides {
         value(for: "WHOOP_MOCK_CONNECTED") == "1"
     }
 
-    static var isSleeping: Bool {
-        value(for: "WHOOP_MOCK_SLEEPING") == "1"
-    }
-
     static var isCharging: Bool {
         value(for: "WHOOP_MOCK_CHARGING") == "1"
     }
@@ -18,10 +14,6 @@ enum WhoopLaunchOverrides {
             return nil
         }
         return min(max(level, 0), 100)
-    }
-
-    static var pendingSleepMinutes: Double? {
-        value(for: "WHOOP_MOCK_PENDING_SLEEP_MINUTES").flatMap(Double.init)
     }
 
     private static func value(for key: String) -> String? {

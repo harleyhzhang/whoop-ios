@@ -2365,6 +2365,7 @@ final class WhoopStore: @unchecked Sendable {
     /// during the just-finished sleep—remain on the preceding day.
     private func assignStepsToPublishedDay(
         _ record: DailyHealthRecord,
+        replacingWakeAt previousWakeAt: Date?,
         database: OpaquePointer
     ) -> Bool {
         guard let wakeRaw = record.sleepEndAt,
@@ -2395,7 +2396,38 @@ final class WhoopStore: @unchecked Sendable {
             )
         else { return false }
 
-        let affectedDateKeys = oldDateKeys.union([record.dateKey])
+        var affectedDateKeys = oldDateKeys.union([record.dateKey])
+
+        // A provisional wake can move later when state-2 sleep returns inside
+        // the reopen window. Move the interval that used to be post-wake back
+        // to the preceding physiological day in the same transaction.
+        if let previousWakeAt, previousWakeAt < wokeAt {
+            let previousDateKey =
+                boundaries
+                .filter { $0.wokeAt < wokeAt }
+                .max(by: { $0.wokeAt < $1.wokeAt })?
+                .dateKey
+                ?? DayKey.string(
+                    from: previousWakeAt.addingTimeInterval(-1),
+                    timeZone: .autoupdatingCurrent
+                )
+            let correctionLowerBound = previousWakeAt.timeIntervalSince1970
+            guard
+                let correctionDateKeys = stepDateKeys(
+                    from: correctionLowerBound,
+                    until: lowerBound,
+                    database: database
+                ),
+                assignStepSamples(
+                    to: previousDateKey,
+                    from: correctionLowerBound,
+                    until: lowerBound,
+                    database: database
+                )
+            else { return false }
+            affectedDateKeys.formUnion(correctionDateKeys)
+            affectedDateKeys.insert(previousDateKey)
+        }
         for dateKey in affectedDateKeys {
             guard deleteLocalStepMetric(dateKey: dateKey, database: database) else {
                 return false
@@ -2805,6 +2837,7 @@ final class WhoopStore: @unchecked Sendable {
         let firstSleep: HistoricalRow
         let lastSleep: HistoricalRow
         let latest: HistoricalRow
+        let latestSampleIsCurrent: Bool
         /// Observed spacing of the strap's own historical record.
         let cadenceSeconds: Double
         /// The detected sleep interval. A bounded `up` interval followed by
@@ -2832,11 +2865,14 @@ final class WhoopStore: @unchecked Sendable {
             sleepSeconds >= 3 * 60 * 60 && sessionCoverage >= 0.50
         }
 
-        /// Timing gates. These only ask whether Harley has actually woken up
-        /// yet. Pressing Process answers that question directly, so the manual
-        /// path waives them while keeping the evidence gates intact.
-        var meetsWakeGates: Bool {
-            wakeSeconds >= 30 * 60 && secondsSinceLastAsleep >= 30 * 60
+        /// Explicit awake is final immediately. The ambiguous `up` state gets
+        /// a short provisional delay, then remains reversible if sleep resumes.
+        var meetsAutomaticWakeGate: Bool {
+            WhoopAutomaticSleepPolicy.canFinalize(
+                latestState: latest.sleepState,
+                secondsSinceLastAsleep: secondsSinceLastAsleep,
+                latestSampleIsCurrent: latestSampleIsCurrent
+            )
         }
 
         var pendingSleep: WhoopPendingSleep {
@@ -2905,7 +2941,7 @@ final class WhoopStore: @unchecked Sendable {
     /// longer than 90 minutes is treated as a separate sleep instead.
     static func groupedAsleepRows(
         _ asleepRows: [HistoricalRow],
-        maximumInterruptionSeconds: Double = 90 * 60
+        maximumInterruptionSeconds: Double = WhoopAutomaticSleepPolicy.reopenWindow
     ) -> [[HistoricalRow]] {
         var groups: [[HistoricalRow]] = []
         for row in asleepRows {
@@ -3010,6 +3046,7 @@ final class WhoopStore: @unchecked Sendable {
                 firstSleep: first,
                 lastSleep: last,
                 latest: latest,
+                latestSampleIsCurrent: false,
                 cadenceSeconds: cadence,
                 sleepSeconds: Self.elapsedSeconds(across: group, cadence: cadence),
                 sessionCoverage: Self.observedFraction(of: session, cadence: cadence),
@@ -3211,18 +3248,12 @@ final class WhoopStore: @unchecked Sendable {
         let latestDate = Date(timeIntervalSince1970: latest.timestamp)
         let sampleIsCurrent = abs(now.timeIntervalSince(latestDate)) <= 30 * 60
         let lastAsleepTimestamp = rows.last { $0.sleepState == 2 }?.timestamp
-        // State 3 ("up") can occur inside a still-running night and is followed
-        // by more state-2 sleep in real captures. Keep dashes through it for the
-        // automatic path, while still exposing the current candidate so Process
-        // can serve as Harley's explicit wake boundary.
-        let recentSleepBeforeUp =
-            lastAsleepTimestamp.map {
-                latest.timestamp - $0 <= 90 * 60
-            } == true
-        let detectorReportsSleeping =
-            sampleIsCurrent
-            && (latest.sleepState == 2
-                || (latest.sleepState == 3 && recentSleepBeforeUp))
+        let secondsSinceLastAsleep = lastAsleepTimestamp.map { latest.timestamp - $0 } ?? .infinity
+        let detectorReportsSleeping = WhoopAutomaticSleepPolicy.reportsSleeping(
+            latestState: latest.sleepState,
+            secondsSinceLastAsleep: secondsSinceLastAsleep,
+            latestSampleIsCurrent: sampleIsCurrent
+        )
         let asleepRows = rows.filter { $0.sleepState == 2 }
         guard !asleepRows.isEmpty else { return .awake(latestDate, []) }
 
@@ -3257,6 +3288,7 @@ final class WhoopStore: @unchecked Sendable {
                     firstSleep: firstSleep,
                     lastSleep: lastSleep,
                     latest: latest,
+                    latestSampleIsCurrent: sampleIsCurrent,
                     cadenceSeconds: cadence,
                     // State 3 ("up") may bridge two state-2 runs into one night,
                     // but it is not sleep. Group with the asleep rows and measure
@@ -3275,10 +3307,9 @@ final class WhoopStore: @unchecked Sendable {
         return .awake(latestDate, candidates)
     }
 
-    /// Automatic path. Stores only a main sleep the strap itself marked asleep,
-    /// followed by at least 30 minutes of banked wake data. A night that clears
-    /// the evidence gates but not the wake gates is reported as pending so the
-    /// dashboard can offer to finish it instead of silently showing dashes.
+    /// Automatic path. Explicit awake finalizes immediately; ambiguous `up`
+    /// finalizes after ten minutes. Both remain gated on a coherent completed
+    /// offload and can grow silently if sleep resumes within ninety minutes.
     private func analyzeLatestSleep(
         now: Date = .now,
         manualEndAt: Date? = nil,
@@ -3328,7 +3359,7 @@ final class WhoopStore: @unchecked Sendable {
             for candidate in candidates
             where coherentHistory
                 && candidate.meetsEvidenceGates
-                && candidate.meetsWakeGates
+                && candidate.meetsAutomaticWakeGate
             {
                 guard shouldDerive(candidate: candidate, database: database) else { continue }
                 let record = derivedRecord(for: candidate, now: now)
@@ -3531,8 +3562,12 @@ final class WhoopStore: @unchecked Sendable {
             let stored = storedSleepID(forDateKey: dateKey, database: database)
             let durationGate = duration >= 3 * 60 * 60
             let coverageGate = coverage >= 0.50
-            let wakeGate = wake >= 30 * 60
-            let elapsedGate = since >= 30 * 60
+            let latestSampleIsCurrent = abs(now.timeIntervalSince1970 - latest.timestamp) <= 30 * 60
+            let automaticWakeGate = WhoopAutomaticSleepPolicy.canFinalize(
+                latestState: latest.sleepState,
+                secondsSinceLastAsleep: since,
+                latestSampleIsCurrent: latestSampleIsCurrent
+            )
 
             let candidate = SleepCandidate(
                 sessionRows: inSession,
@@ -3540,6 +3575,7 @@ final class WhoopStore: @unchecked Sendable {
                 firstSleep: first,
                 lastSleep: last,
                 latest: latest,
+                latestSampleIsCurrent: latestSampleIsCurrent,
                 cadenceSeconds: sessionCadence,
                 sleepSeconds: duration,
                 sessionCoverage: coverage,
@@ -3552,11 +3588,11 @@ final class WhoopStore: @unchecked Sendable {
             if storedComplete {
                 verdict = "already stored"
             } else if !durationGate || !coverageGate {
-                verdict = "pending; Process visible, evidence incomplete"
+                verdict = "pending; evidence incomplete"
             } else if !metricsComplete {
-                verdict = "pending; Process visible, primary metrics still loading"
-            } else if !wakeGate || !elapsedGate {
-                verdict = "pending; Process control visible"
+                verdict = "pending; primary metrics still loading"
+            } else if !automaticWakeGate {
+                verdict = "pending; automatic wake delay"
             } else {
                 verdict = "all gates pass; finalizes automatically"
             }
@@ -3569,7 +3605,8 @@ final class WhoopStore: @unchecked Sendable {
                     bankedWakeMinutes: (wake / 60).rounded(),
                     minutesSinceLastAsleep: (since / 60).rounded(),
                     passesDurationGate: durationGate, passesCoverageGate: coverageGate,
-                    passesWakeCoverageGate: wakeGate, passesWakeElapsedGate: elapsedGate,
+                    passesWakeCoverageGate: automaticWakeGate,
+                    passesWakeElapsedGate: automaticWakeGate,
                     dateKey: dateKey, storedSleepID: stored,
                     storedSummary: storedRecordSummary(forDateKey: dateKey, database: database),
                     verdict: verdict
@@ -4053,6 +4090,7 @@ final class WhoopStore: @unchecked Sendable {
         _ record: DailyHealthRecord,
         database: OpaquePointer
     ) -> Bool {
+        let previousWakeAt = storedWakeAt(dateKey: record.dateKey, database: database)
         let sql = """
             INSERT INTO daily_health_metric
             (date_key, sleep_score, sleep_duration_minutes, hrv_rmssd_milliseconds,
@@ -4108,7 +4146,22 @@ final class WhoopStore: @unchecked Sendable {
         bind(record.sleepSufficiencyPercentage, to: 19, in: statement)
         guard sqlite3_step(statement) == SQLITE_DONE else { return false }
         cachedPublishedWakeBoundaries = nil
-        return assignStepsToPublishedDay(record, database: database)
+        return assignStepsToPublishedDay(
+            record,
+            replacingWakeAt: previousWakeAt,
+            database: database
+        )
+    }
+
+    private func storedWakeAt(dateKey: String, database: OpaquePointer) -> Date? {
+        let sql = "SELECT sleep_end_at FROM daily_health_metric WHERE date_key = ? LIMIT 1"
+        return withCachedStatement(database: database, sql: sql) { statement in
+            bind(dateKey, to: 1, in: statement)
+            guard sqlite3_step(statement) == SQLITE_ROW,
+                let raw = textColumn(statement, 0)
+            else { return nil }
+            return Self.parseISO8601(raw)
+        } ?? nil
     }
 
     /// Score-model backfills must not erase a previously valid HRV or RHR if

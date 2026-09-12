@@ -1,12 +1,42 @@
 import Foundation
 
+enum WhoopAutomaticSleepPolicy {
+    static let provisionalWakeDelay: TimeInterval = 10 * 60
+    static let reopenWindow: TimeInterval = 90 * 60
+
+    static func reportsSleeping(
+        latestState: Int,
+        secondsSinceLastAsleep: TimeInterval,
+        latestSampleIsCurrent: Bool
+    ) -> Bool {
+        latestSampleIsCurrent
+            && (latestState == 2
+                || (latestState == 3 && secondsSinceLastAsleep < provisionalWakeDelay))
+    }
+
+    static func canFinalize(
+        latestState: Int,
+        secondsSinceLastAsleep: TimeInterval,
+        latestSampleIsCurrent: Bool
+    ) -> Bool {
+        switch latestState {
+        case 0, 1:
+            return secondsSinceLastAsleep >= 0
+        case 3:
+            return latestSampleIsCurrent && secondsSinceLastAsleep >= provisionalWakeDelay
+        default:
+            return false
+        }
+    }
+}
+
 struct WhoopSleepSnapshot: Sendable {
     let isSleeping: Bool
     let sampleAt: Date?
     let finalizedRecord: DailyHealthRecord?
     /// A main sleep the strap has detected but has not atomically stored with
-    /// all four primary metrics yet. Non-nil is exactly the condition the
-    /// dashboard reports as "Sleep detected".
+    /// all four primary metrics yet. Retained for diagnostics and non-routine
+    /// repair tooling; the dashboard intentionally does not surface it.
     let pendingSleep: WhoopPendingSleep?
 }
 

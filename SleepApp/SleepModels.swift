@@ -175,9 +175,8 @@ struct DailyRecoveryRecord: Hashable, Identifiable, Sendable {
     }
 }
 
-/// One coherent, wake-published dashboard day. A detected or processing sleep
-/// is the boundary between days, so no metric may independently fall back to a
-/// stale or provisional timeline point while that boundary is unpublished.
+/// One coherent, wake-published dashboard day. While a new sleep is still being
+/// detected or corrected, the last completely published day stays visible.
 struct PublishedDashboardDay: Sendable {
     let health: DailyHealthRecord?
     let steps: DailyStepRecord?
@@ -186,11 +185,9 @@ struct PublishedDashboardDay: Sendable {
     init(
         healthRecords: [DailyHealthRecord],
         stepRecords: [DailyStepRecord],
-        recoveryRecords: [DailyRecoveryRecord],
-        isWakePending: Bool
+        recoveryRecords: [DailyRecoveryRecord]
     ) {
-        guard !isWakePending,
-            let health = healthRecords.last,
+        guard let health = healthRecords.last,
             let steps = stepRecords.last(where: { $0.dateKey == health.dateKey }),
             let recovery = recoveryRecords.last(where: { $0.dateKey == health.dateKey })
         else {
