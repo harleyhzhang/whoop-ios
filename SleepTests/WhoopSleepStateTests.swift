@@ -763,13 +763,30 @@ final class WhoopSleepStateTests: XCTestCase {
         var database: OpaquePointer?
         XCTAssertEqual(sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READONLY, nil), SQLITE_OK)
         defer { if let database { sqlite3_close(database) } }
-        XCTAssertEqual(scalarInt(database, sql: "PRAGMA user_version"), 9)
+        XCTAssertEqual(scalarInt(database, sql: "PRAGMA user_version"), 10)
         XCTAssertEqual(
             scalarInt(
                 database,
                 sql:
-                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('whoop_decode_result','whoop_ppg_packet','whoop_store_metadata')"
-            ), 3)
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('whoop_decode_failure','whoop_latest_heart_rate','whoop_ppg_packet','whoop_store_metadata')"
+            ), 4)
+        XCTAssertEqual(
+            scalarInt(
+                database,
+                sql:
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='whoop_decode_result'"
+            ), 0)
+        XCTAssertEqual(
+            scalarInt(
+                database,
+                sql:
+                    "SELECT COUNT(*) FROM pragma_table_info('whoop_ppg_packet') WHERE name='decoder_version'"
+            ), 1)
+        XCTAssertEqual(
+            scalarInt(
+                database,
+                sql: "SELECT COUNT(*) FROM pragma_table_info('heart_rate_sample') WHERE name='id'"
+            ), 0)
         XCTAssertEqual(
             scalarInt(
                 database,
@@ -1071,6 +1088,76 @@ final class WhoopSleepStateTests: XCTestCase {
         )
     }
 
+    func testRealtimeStorageKeepsLatestValueWithoutIndexingEmptyRRHistory() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("sleep.sqlite3")
+        let store = WhoopStore(databaseURL: databaseURL, runBackgroundDecoding: false)
+        defer { store.shutdownForTesting() }
+        let peripheral = UUID()
+        let repeatedPacket = Data([0xAA, 0x01, 0x28])
+
+        let first = await appendRealtime(
+            repeatedPacket,
+            heartRate: 60,
+            rrIntervals: [],
+            deliveredAt: Date(timeIntervalSince1970: 100),
+            store: store,
+            peripheral: peripheral
+        )
+        let duplicate = await appendRealtime(
+            repeatedPacket,
+            heartRate: 61,
+            rrIntervals: [],
+            deliveredAt: Date(timeIntervalSince1970: 200),
+            store: store,
+            peripheral: peripheral
+        )
+        let withRR = await appendRealtime(
+            Data([0xAA, 0x01, 0x29]),
+            heartRate: 62,
+            rrIntervals: [900],
+            deliveredAt: Date(timeIntervalSince1970: 300),
+            store: store,
+            peripheral: peripheral
+        )
+        let stale = await appendRealtime(
+            Data([0xAA, 0x01, 0x2A]),
+            heartRate: 70,
+            rrIntervals: [],
+            deliveredAt: Date(timeIntervalSince1970: 250),
+            store: store,
+            peripheral: peripheral
+        )
+        let invalidLatest = await appendRealtime(
+            Data([0xAA, 0x01, 0x2B]),
+            heartRate: 0,
+            rrIntervals: [],
+            deliveredAt: Date(timeIntervalSince1970: 400),
+            store: store,
+            peripheral: peripheral
+        )
+
+        XCTAssertTrue(first.success)
+        XCTAssertTrue(duplicate.success)
+        XCTAssertTrue(withRR.success)
+        XCTAssertTrue(stale.success)
+        XCTAssertTrue(invalidLatest.success)
+        let latest: WhoopLatestHeartRateSample? = await withCheckedContinuation { continuation in
+            store.loadLatestHeartRateSample { continuation.resume(returning: $0) }
+        }
+        XCTAssertEqual(latest?.heartRate, 62)
+        XCTAssertEqual(latest?.receivedAt, Date(timeIntervalSince1970: 300))
+
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open_v2(databaseURL.path, &database, SQLITE_OPEN_READONLY, nil), SQLITE_OK)
+        defer { if let database { sqlite3_close(database) } }
+        XCTAssertEqual(scalarInt(database, sql: "SELECT COUNT(*) FROM whoop_raw_packet"), 4)
+        XCTAssertEqual(scalarInt(database, sql: "SELECT SUM(duplicate_count) FROM whoop_packet_replay"), 1)
+        XCTAssertEqual(scalarInt(database, sql: "SELECT COUNT(*) FROM heart_rate_sample"), 1)
+    }
+
     func testMigrationSnapshotRemovesStaleTemporarySidecars() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1103,8 +1190,163 @@ final class WhoopSleepStateTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: temporary.path + "-shm"))
         XCTAssertTrue(
             FileManager.default.fileExists(
-                atPath: backupDirectory.appendingPathComponent("sleep-v7-before-v9.sqlite3").path
+                atPath: backupDirectory.appendingPathComponent("sleep-v7-before-v10.sqlite3").path
             ))
+    }
+
+    func testSchema10MigrationCompactsRealtimeProjectionAndDecodeLedger() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let databaseURL = directory.appendingPathComponent("sleep.sqlite3")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        do {
+            let store = WhoopStore(databaseURL: databaseURL, runBackgroundDecoding: false)
+            store.shutdownForTesting()
+        }
+
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open_v2(databaseURL.path, &database, SQLITE_OPEN_READWRITE, nil), SQLITE_OK)
+        guard let database else { throw XCTSkip("Could not open schema fixture") }
+        XCTAssertEqual(
+            sqlite3_exec(
+                database,
+                """
+                PRAGMA foreign_keys=OFF;
+                DROP TABLE heart_rate_sample;
+                DROP TABLE whoop_latest_heart_rate;
+                DROP TABLE whoop_decode_failure;
+                DROP TABLE whoop_ppg_packet;
+                CREATE TABLE heart_rate_sample (
+                    id TEXT PRIMARY KEY,
+                    source_packet_id TEXT NOT NULL,
+                    received_at REAL NOT NULL,
+                    device_timestamp INTEGER,
+                    heart_rate INTEGER NOT NULL,
+                    rr_intervals_json TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    FOREIGN KEY(source_packet_id) REFERENCES whoop_raw_packet(id)
+                );
+                CREATE INDEX heart_rate_sample_received_at
+                    ON heart_rate_sample(received_at);
+                CREATE INDEX heart_rate_sample_source_time
+                    ON heart_rate_sample(source, device_timestamp, received_at);
+                CREATE INDEX heart_rate_sample_source_received
+                    ON heart_rate_sample(source, received_at);
+                CREATE TABLE whoop_decode_result (
+                    source_packet_id TEXT NOT NULL,
+                    decoder_version INTEGER NOT NULL,
+                    protocol_version INTEGER,
+                    stream TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    error TEXT,
+                    decoded_at REAL NOT NULL,
+                    PRIMARY KEY(source_packet_id, decoder_version),
+                    FOREIGN KEY(source_packet_id) REFERENCES whoop_raw_packet(id)
+                );
+                CREATE INDEX whoop_decode_result_status
+                    ON whoop_decode_result(decoder_version, status);
+                CREATE TABLE whoop_ppg_packet (
+                    source_packet_id TEXT PRIMARY KEY,
+                    sample_at REAL NOT NULL,
+                    channel INTEGER NOT NULL CHECK(channel BETWEEN 1 AND 255),
+                    sample_rate_hz REAL NOT NULL,
+                    samples_i16_le BLOB NOT NULL,
+                    FOREIGN KEY(source_packet_id) REFERENCES whoop_raw_packet(id)
+                );
+                CREATE INDEX whoop_ppg_packet_sample_at
+                    ON whoop_ppg_packet(sample_at, channel);
+                INSERT INTO whoop_raw_packet
+                    (id, received_at, delivery_sequence, peripheral_id,
+                     characteristic_uuid, frame_type, crc_valid, payload)
+                VALUES
+                    ('p1', 100, 1, 'strap', 'FD4B0003', 40, 1, X'01'),
+                    ('p2', 200, 2, 'strap', 'FD4B0003', 40, 1, X'02');
+                INSERT INTO heart_rate_sample
+                    (id, source_packet_id, received_at, device_timestamp,
+                     heart_rate, rr_intervals_json, source)
+                VALUES
+                    ('p1', 'p1', 100, 100, 60, '[]', 'whoop5_type40'),
+                    ('p2', 'p2', 200, 200, 61, '[900]', 'whoop5_type40');
+                INSERT INTO whoop_decode_result
+                    (source_packet_id, decoder_version, protocol_version,
+                     stream, status, error, decoded_at)
+                VALUES
+                    ('p1', 2, 26, 'optical_ppg', 'decoded', NULL, 100),
+                    ('p2', 3, 99, 'historical_unknown', 'unsupported', 'fixture', 200);
+                INSERT INTO whoop_ppg_packet
+                    (source_packet_id, sample_at, channel, sample_rate_hz, samples_i16_le)
+                VALUES ('p1', 100, 1, 24, X'0102');
+                PRAGMA user_version=9;
+                """,
+                nil,
+                nil,
+                nil
+            ), SQLITE_OK)
+        sqlite3_close(database)
+
+        do {
+            let store = WhoopStore(databaseURL: databaseURL, runBackgroundDecoding: false)
+            store.shutdownForTesting()
+        }
+
+        var migrated: OpaquePointer?
+        XCTAssertEqual(sqlite3_open_v2(databaseURL.path, &migrated, SQLITE_OPEN_READONLY, nil), SQLITE_OK)
+        defer { if let migrated { sqlite3_close(migrated) } }
+        XCTAssertEqual(scalarInt(migrated, sql: "PRAGMA user_version"), 10)
+        XCTAssertEqual(scalarInt(migrated, sql: "PRAGMA freelist_count"), 0)
+        XCTAssertEqual(scalarInt(migrated, sql: "SELECT COUNT(*) FROM heart_rate_sample"), 1)
+        XCTAssertEqual(
+            scalarInt(migrated, sql: "SELECT COUNT(*) FROM heart_rate_sample WHERE rr_intervals_json='[]'"),
+            0
+        )
+        XCTAssertEqual(
+            scalarInt(migrated, sql: "SELECT heart_rate FROM whoop_latest_heart_rate WHERE singleton=1"),
+            61
+        )
+        XCTAssertEqual(scalarInt(migrated, sql: "SELECT COUNT(*) FROM whoop_decode_failure"), 1)
+        XCTAssertEqual(
+            scalarInt(migrated, sql: "SELECT decoder_version FROM whoop_ppg_packet WHERE source_packet_id='p1'"),
+            2
+        )
+        XCTAssertEqual(
+            scalarText(migrated, sql: "SELECT hex(samples_i16_le) FROM whoop_ppg_packet WHERE source_packet_id='p1'"),
+            "0102"
+        )
+        XCTAssertEqual(
+            scalarInt(
+                migrated,
+                sql:
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='whoop_decode_result'"
+            ), 0)
+        XCTAssertEqual(scalarText(migrated, sql: "PRAGMA foreign_key_check"), nil)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: directory.appendingPathComponent(
+                    "migration-backups/sleep-v9-before-v10.sqlite3"
+                ).path
+            ))
+    }
+
+    func testMigrationBackupPruningKeepsExactRollbackPointAndUnrelatedFiles() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let retained = directory.appendingPathComponent("sleep-v9-before-v10.sqlite3")
+        let old = directory.appendingPathComponent("sleep-v8-before-v9.sqlite3")
+        let unrelated = directory.appendingPathComponent("manual-recovery.sqlite3")
+        for url in [retained, old, unrelated, URL(fileURLWithPath: old.path + "-wal")] {
+            try Data("synthetic".utf8).write(to: url)
+        }
+
+        WhoopStore.pruneMigrationBackups(in: directory, keeping: retained)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: retained.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: old.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: old.path + "-wal"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unrelated.path))
     }
 
     func testOfficialMetricsSeedPreservesTargetsBaselinesAndProvenance() throws {
@@ -1623,6 +1865,34 @@ final class WhoopSleepStateTests: XCTestCase {
             }
         }
         return result
+    }
+
+    private func appendRealtime(
+        _ packet: Data,
+        heartRate: Int,
+        rrIntervals: [UInt16],
+        deliveredAt: Date,
+        store: WhoopStore,
+        peripheral: UUID
+    ) async -> WhoopPacketPersistenceResult {
+        await withCheckedContinuation { continuation in
+            store.append(
+                packet: packet,
+                peripheralID: peripheral,
+                characteristicUUID: "FD4B0003",
+                frameType: 40,
+                realtime: WhoopDecodedRealtime(
+                    deviceTimestamp: UInt32(deliveredAt.timeIntervalSince1970),
+                    heartRate: heartRate,
+                    rrIntervals: rrIntervals,
+                    source: "whoop5_type40"
+                ),
+                historical: nil,
+                deliveredAt: deliveredAt
+            ) {
+                continuation.resume(returning: $0)
+            }
+        }
     }
 
     private func sleepSnapshot(

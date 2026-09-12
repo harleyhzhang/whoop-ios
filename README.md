@@ -283,10 +283,24 @@ discipline, and the limits of historical recovery.
   raw evidence is untouched, but future database and index growth is materially
   lower. Database opening, migration, and private-history materialization run
   off the main actor, so a large phone database no longer stalls launch.
+- Schema v10 keeps raw packets as the complete evidence layer while making
+  derived storage proportional to what the product actually queries. Heart-rate
+  readings without R-R intervals update one latest-value row instead of growing
+  an indexed history; R-R-bearing packets remain individually traceable for HRV.
+  Successful historical and PPG decodes are proven by their versioned derived
+  rows, while only unsupported or rejected packets need a separate failure
+  ledger. Replay registration is one atomic SQLite upsert. On a disposable clone
+  of a representative 1.0 GB store, the migration reduced realtime rows from
+  761,411 to 328,003 and `VACUUM` reduced the database to 792 MB, with SQLite
+  quick-check and foreign-key checks clean.
 - Before upgrading any non-empty schema, the app now uses SQLite's online
   backup API to create and validate a standalone, WAL-consistent snapshot in
   `migration-backups`. The migration fails closed if that restorable copy
   cannot be made; Mac-side container transfer is no longer the safety boundary.
+  After a successful upgrade, it retains the new validated rollback point,
+  removes only older app-created migration snapshots, and best-effort compacts
+  free pages. Failure to reclaim filesystem space does not invalidate the
+  migrated database, which can reuse those pages for future writes.
 - The app records an append-only local time-zone/UTC-offset timeline. Raw sensor
   timestamps remain absolute, while future timing-consistency models can
   reproduce the civil-time context of a sleep after travel instead of applying

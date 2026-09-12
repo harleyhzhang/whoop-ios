@@ -46,6 +46,28 @@ Framework APIs belong behind small adapters so decisions can be unit tested.
 5. A durable `HISTORY_COMPLETE` permits finalization and snapshot publication.
 6. SwiftUI observes the published snapshot; it does not infer missing evidence.
 
+## Storage representation
+
+SQLite separates immutable evidence from rebuildable query projections:
+
+- `whoop_raw_packet` retains every unique transport payload and its provenance.
+  Exact retries of the same characteristic/payload pair increment
+  `whoop_packet_replay` through one atomic upsert.
+- `whoop_latest_heart_rate` is a singleton freshness cache. Nonpositive readings
+  never replace a valid latest value, but they also never block raw persistence.
+- `heart_rate_sample` retains only packets with R-R intervals because those
+  packet boundaries and timestamps are required for nightly HRV.
+- Versioned rows in `whoop_historical_sample` and `whoop_ppg_packet` are the
+  success record for decoding. `whoop_decode_failure` is a sparse ledger for
+  unsupported and rejected packets, preserving diagnosability without a second
+  row for every successful decode.
+
+Schema migrations run transactionally only after a validated online SQLite
+backup. The store retains one app-created rollback snapshot, prunes only older
+snapshots matching its own naming contract, and attempts `VACUUM` after a
+successful migration. A failed `VACUUM` is non-fatal: SQLite keeps the released
+pages on its freelist and reuses them as collection continues.
+
 ## Change rules
 
 Do not add a second persistence owner, network dependency, or app-global mutable

@@ -13,6 +13,7 @@ struct RootView: View {
     @State private var chartMorphGeneration = 0
     @State private var currentDate = Date()
     @State private var debugMockPendingSleepDismissed = false
+    @State private var debugMockSleepIsProcessing = false
     @State private var showsConnectionDetails = false
     @ObservedObject var whoopCollector: WhoopHandshakeProbe
     @StateObject private var history = HealthHistoryModel()
@@ -53,7 +54,11 @@ struct RootView: View {
     private var sleepMetricsArePending: Bool {
         WhoopLaunchOverrides.isSleeping || whoopCollector.isSleeping
             || displayedPendingSleep != nil
-            || whoopCollector.isProcessingSleep
+            || isSleepProcessing
+    }
+
+    private var isSleepProcessing: Bool {
+        debugMockSleepIsProcessing || whoopCollector.isProcessingSleep
     }
 
     private var whoopBatteryLevel: Int? {
@@ -87,7 +92,7 @@ struct RootView: View {
     private var showsSleepDetectedCard: Bool {
         whoopCollector.isSleeping
             || displayedPendingSleep != nil
-            || whoopCollector.isProcessingSleep
+            || isSleepProcessing
     }
 
     var body: some View {
@@ -190,15 +195,7 @@ struct RootView: View {
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(.primary)
 
-                if whoopCollector.isProcessingSleep {
-                    HStack(spacing: 5) {
-                        ProgressView()
-                            .controlSize(.mini)
-                        Text("Finishing sleep…")
-                    }
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                } else if let errorMessage = history.errorMessage {
+                if let errorMessage = history.errorMessage {
                     Text(errorMessage)
                         .font(.caption2)
                         .foregroundStyle(.red)
@@ -271,29 +268,31 @@ struct RootView: View {
                 .frame(width: 34, height: 34)
                 .background(MetricKind.sleep.color.opacity(0.14), in: Circle())
 
-            Text("Sleep detected")
+            Text(isSleepProcessing ? "Processing sleep…" : "Sleep detected")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.primary)
 
             Spacer(minLength: 8)
 
-            Button {
-                // processPendingSleep clears the row synchronously on the main
-                // actor, so wrapping the call is what puts that removal inside
-                // the animated transaction.
-                withAnimation(.smooth(duration: 0.45, extraBounce: 0.18)) {
-                    processPendingSleepCard()
+            if !isSleepProcessing {
+                Button {
+                    // Processing begins synchronously on the main actor, so
+                    // the label change and button removal share one animated
+                    // transaction while the history completion stays gated.
+                    withAnimation(.smooth(duration: 0.45, extraBounce: 0.18)) {
+                        processPendingSleepCard()
+                    }
+                } label: {
+                    Text("Process")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .frame(height: 32)
+                        .background(MetricKind.sleep.color, in: Capsule(style: .continuous))
                 }
-            } label: {
-                Text("Process")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
-                    .frame(height: 32)
-                    .background(MetricKind.sleep.color, in: Capsule(style: .continuous))
+                .buttonStyle(.plain)
+                .transition(.opacity)
             }
-            .buttonStyle(.plain)
-            .disabled(whoopCollector.isProcessingSleep)
         }
         .padding(.horizontal, 14)
         .frame(height: SleepDetectedCardHeightTransition.expandedHeight)
@@ -306,10 +305,10 @@ struct RootView: View {
                 .stroke(.white.opacity(0.055), lineWidth: 0.5)
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Sleep detected")
+        .accessibilityLabel(isSleepProcessing ? "Processing sleep…" : "Sleep detected")
         .accessibilityHint(
-            whoopCollector.isProcessingSleep
-                ? "Finishing sleep"
+            isSleepProcessing
+                ? "Waiting for complete WHOOP history"
                 : (whoopCollector.sleepProcessFailure ?? "Process the complete sleep record")
         )
     }
@@ -317,6 +316,7 @@ struct RootView: View {
     private func processPendingSleepCard() {
         if WhoopLaunchOverrides.pendingSleepMinutes != nil {
             debugMockPendingSleepDismissed = true
+            debugMockSleepIsProcessing = true
             return
         }
 
