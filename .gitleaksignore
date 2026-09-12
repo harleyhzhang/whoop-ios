@@ -1,3 +1,0 @@
-# False positives: UserDefaults preference-key parameter names, not credentials.
-cf5c45e2c421c93028607afd448f822ab7f43b32:SleepApp/SleepApp.swift:generic-api-key:117
-cf5c45e2c421c93028607afd448f822ab7f43b32:SleepApp/SleepApp.swift:generic-api-key:124
