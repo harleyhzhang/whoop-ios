@@ -1,18 +1,39 @@
 import SwiftUI
 
+enum WhoopBatteryPresentation {
+    static func isLow(level: Int?) -> Bool {
+        guard let level else { return false }
+        return level <= 20
+    }
+}
+
 struct WhoopBatteryPercentIcon: View {
+    private static let chargingTransitionDuration = 0.24
+    private static let boltFadeOutDuration = 0.14
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     let level: Int?
     let isCharging: Bool
+
+    @State private var chargingStyleActive: Bool
+    @State private var chargingContentExpansion: CGFloat
+    @State private var boltOpacity: Double
+
+    init(level: Int?, isCharging: Bool) {
+        self.level = level
+        self.isCharging = isCharging
+        _chargingStyleActive = State(initialValue: isCharging)
+        _chargingContentExpansion = State(initialValue: isCharging ? 1 : 0)
+        _boltOpacity = State(initialValue: isCharging ? 1 : 0)
+    }
 
     private var clampedLevel: Int {
         min(max(level ?? 0, 0), 100)
     }
 
-    private var fillColor: Color {
-        if isCharging { return .green }
-        if clampedLevel <= 20 { return .red }
-        if clampedLevel <= 35 { return .yellow }
-        return .primary
+    private var lowBattery: Bool {
+        WhoopBatteryPresentation.isLow(level: level)
     }
 
     private var percentageText: String {
@@ -24,27 +45,26 @@ struct WhoopBatteryPercentIcon: View {
     }
 
     private var trackColor: Color {
-        if isCharging { return Color.white.opacity(0.24) }
-        return Color.primary.opacity(0.58)
+        // Match iOS: the unfilled well and terminal stay neutral. Only the
+        // filled charge changes to system red or green.
+        return Color(uiColor: .tertiarySystemFill)
+    }
+
+    private var fillColor: Color {
+        if chargingStyleActive { return .green }
+        return lowBattery ? .red : .primary
+    }
+
+    private var labelColor: Color {
+        chargingStyleActive || lowBattery ? .white : .black
     }
 
     private static let shellWidth: CGFloat = 29
     private static let shellHeight: CGFloat = 16
     private static let shellRadius: CGFloat = 4.6
 
-    private func percentageLabel(color: Color) -> some View {
-        HStack(spacing: -0.5) {
-            ForEach(Array(percentageText.enumerated()), id: \.offset) { _, digit in
-                Text(String(digit))
-            }
-        }
-        .font(.system(size: 13, weight: .bold, design: .rounded))
-        .foregroundStyle(color)
-        .frame(width: Self.shellWidth, height: Self.shellHeight)
-    }
-
-    private var chargingLabel: some View {
-        HStack(spacing: 1) {
+    private var statusLabel: some View {
+        HStack(spacing: chargingContentExpansion) {
             HStack(spacing: -0.5) {
                 ForEach(Array(percentageText.enumerated()), id: \.offset) { _, digit in
                     Text(String(digit))
@@ -54,8 +74,10 @@ struct WhoopBatteryPercentIcon: View {
 
             Image(systemName: "bolt.fill")
                 .font(.system(size: 7, weight: .bold))
+                .frame(width: 7 * chargingContentExpansion)
+                .opacity(boltOpacity)
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(labelColor)
         .frame(width: Self.shellWidth, height: Self.shellHeight)
     }
 
@@ -69,11 +91,7 @@ struct WhoopBatteryPercentIcon: View {
                     .fill(fillColor)
                     .frame(width: Self.shellWidth * fillFraction)
 
-                if isCharging {
-                    chargingLabel
-                } else {
-                    percentageLabel(color: .black)
-                }
+                statusLabel
             }
             .frame(width: Self.shellWidth, height: Self.shellHeight)
             .clipShape(RoundedRectangle(cornerRadius: Self.shellRadius, style: .continuous))
@@ -89,6 +107,40 @@ struct WhoopBatteryPercentIcon: View {
             .frame(width: 2.4, height: 6.6)
         }
         .accessibilityHidden(true)
+        .task(id: isCharging) {
+            if reduceMotion {
+                var transaction = Transaction(animation: nil)
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    chargingStyleActive = isCharging
+                    chargingContentExpansion = isCharging ? 1 : 0
+                    boltOpacity = isCharging ? 1 : 0
+                }
+                return
+            }
+
+            if isCharging {
+                // Color, digit position, and bolt opacity enter as one motion.
+                withAnimation(.easeInOut(duration: Self.chargingTransitionDuration)) {
+                    chargingStyleActive = true
+                    chargingContentExpansion = 1
+                    boltOpacity = 1
+                }
+                return
+            }
+
+            // On exit, preserve the charging layout until the bolt is fully
+            // gone. Then center the digits while the colors return together.
+            withAnimation(.easeOut(duration: Self.boltFadeOutDuration)) {
+                boltOpacity = 0
+            }
+            try? await Task.sleep(for: .seconds(Self.boltFadeOutDuration))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: Self.chargingTransitionDuration)) {
+                chargingContentExpansion = 0
+                chargingStyleActive = false
+            }
+        }
     }
 }
 
