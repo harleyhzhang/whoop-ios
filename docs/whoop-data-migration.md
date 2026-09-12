@@ -393,7 +393,8 @@ After pairing, verify all of these on real hardware:
 - reconnect after force-quit/relaunch and Bluetooth interruption;
 - historical offload completion and acknowledgement ordering;
 - no duplicate raw growth from repeated transport frames; and
-- a completed local sleep only after the evidence and wake-timing gates pass.
+- a completed local sleep only after evidence, automatic wake, metric-completeness,
+  and HISTORY_COMPLETE gates pass; resumed sleep within ninety minutes repairs it.
 
 ## 8. Backtest Sleep Score and Recovery without leakage
 

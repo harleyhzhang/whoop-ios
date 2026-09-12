@@ -35,6 +35,19 @@ final class WhoopNotificationManagerTests: XCTestCase {
         fixture.manager.sendMorningSummary(for: record)
         await eventually { fixture.scheduler.requests.count == 1 }
         fixture.manager.sendMorningSummary(for: record)
+        let correctedRecord = DailyHealthRecord(
+            dateKey: record.dateKey,
+            sleepScore: 93,
+            sleepDurationMinutes: 505,
+            hrvRMSSDMilliseconds: 70,
+            restingHeartRateBPM: 50,
+            sleepID: "synthetic-corrected-night",
+            cycleID: nil,
+            source: "\(WhoopStore.localSourcePrefix)-test",
+            sourceArchive: nil,
+            sourceUpdatedAt: ISO8601DateFormatter().string(from: now.addingTimeInterval(60))
+        )
+        fixture.manager.sendMorningSummary(for: correctedRecord)
         await Task.yield()
 
         let request = try XCTUnwrap(fixture.scheduler.requests.first)

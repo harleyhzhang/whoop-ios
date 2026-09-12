@@ -1,23 +1,5 @@
 import SwiftUI
 
-struct SleepDetectedCardHeightTransition: ViewModifier, Animatable {
-    static let expandedHeight: CGFloat = 64
-
-    var progress: CGFloat
-
-    nonisolated var animatableData: CGFloat {
-        get { progress }
-        set { progress = newValue }
-    }
-
-    func body(content: Content) -> some View {
-        content
-            .frame(height: Self.expandedHeight * progress, alignment: .top)
-            .opacity(progress)
-            .clipped()
-    }
-}
-
 struct WhoopBatteryPercentIcon: View {
     let level: Int?
     let isCharging: Bool

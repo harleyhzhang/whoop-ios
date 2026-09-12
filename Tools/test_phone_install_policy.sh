@@ -6,6 +6,11 @@ repo_root=$(git rev-parse --show-toplevel)
 policy="$repo_root/Tools/phone_install_policy.sh"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/whoop-install-policy.XXXXXX")
 
+# Git exports repository-local environment while hooks run. Clear it before
+# creating the nested fixture so its commits cannot mutate the calling repo.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY
+unset GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX
+
 cleanup() {
   rm -rf "$fixture"
 }

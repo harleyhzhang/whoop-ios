@@ -29,23 +29,15 @@ final class SleepUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Close"].exists)
     }
 
-    func testPendingSleepMasksMetricsAndProcessShowsProcessingState() {
+    func testSleepProcessingHasNoRoutineCardOrLoadingState() {
         let app = configuredApplication()
         app.launchEnvironment["WHOOP_MOCK_PENDING_SLEEP_MINUTES"] = "480"
         app.launch()
 
-        XCTAssertTrue(app.staticTexts["Sleep detected"].waitForExistence(timeout: 5))
-        let process = app.buttons["Process"]
-        XCTAssertTrue(process.isEnabled)
-        XCTAssertTrue(
-            app.descendants(matching: .any)[
-                "Sleep —, duration —, steps —, recovery —, resting heart rate — beats per minute"
-            ].exists
-        )
-
-        process.tap()
-        XCTAssertTrue(app.staticTexts["Processing sleep…"].waitForExistence(timeout: 1))
-        XCTAssertTrue(process.waitForNonExistence(timeout: 2))
+        XCTAssertTrue(app.staticTexts["Trends"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Sleep detected"].exists)
+        XCTAssertFalse(app.buttons["Process"].exists)
+        XCTAssertFalse(app.staticTexts["Processing sleep…"].exists)
         XCTAssertFalse(app.staticTexts["Finishing sleep…"].exists)
     }
 

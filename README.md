@@ -235,32 +235,19 @@ discipline, and the limits of historical recovery.
   line cap overhanging the final point is dimmed with the rest of the line.
   The plot clips to its final y-domain and gives its x-domain endpoint padding,
   so range changes cannot stretch outside the card or shear the final dot.
-- Sleep finalization is an explicit state machine. Before a new sleep begins,
-  the dashboard continues showing the latest completed night. As soon as the
-  band detects sleep, the compact card says only `Sleep detected`—never a
-  provisional duration—and remains visible through waking and processing.
-  From detection until manual or automatic processing atomically publishes the
-  wake, every current-day value—Sleep, Duration, Steps, Recovery, RHR, and
-  HRV—shows an em dash. One shared published-day projection owns all six values,
-  so no card can independently fall back to a stale timeline point. Process
-  remains available as the manual wake assertion until storage succeeds or
-  automatic processing wins.
-  The automatic path still requires at least three hours of detected sleep,
-  50% observed-session coverage, thirty minutes of banked wake data, and thirty
-  minutes since the last asleep sample. It additionally requires a persisted
-  HISTORY_COMPLETE marker covering the newest sample. Score, duration, HRV,
-  and RHR are derived first and committed only when all four are present, so a
-  partial night can never replace the previous one in the UI. Pressing Process
-  waives only the wake-timing gates; it never waives evidence or metric
-  completeness. Every tap now joins an in-flight historical offload or starts
-  a fresh one, then remains queued until its new durable HISTORY_COMPLETE
-  marker arrives; it can never finalize from an older, stale completion marker.
-  A failed process restores the control. Internal `up` intervals shorter than ninety
-  minutes remain part of one detected night, preventing a mid-sleep state from
-  splitting and prematurely storing the first portion. A later coherent
-  reconstruction can grow an already-local row when it proves the night was
-  materially longer, but partial evidence can never shrink a stored night.
-- The grow-only repair is grounded in the 2026-09-06 failure capture: Process
+- Sleep finalization is automatic and card-free. The first coherent
+  finalization still emits the normal one-time morning notification. While a
+  new sleep is unresolved, the dashboard keeps the latest coherent published
+  day visible; there is no routine Process card or loading state. Explicit
+  awake finalizes immediately, while the ambiguous `up` state becomes a
+  provisional wake after ten minutes.
+  Publication still requires at least three hours of detected sleep, 50%
+  observed-session coverage, all four primary metrics, and a persisted
+  HISTORY_COMPLETE marker covering the newest sample. State-2 sleep returning
+  within ninety minutes silently reopens and grows the same night, including
+  correcting its wake-anchored step boundary. Partial evidence can never shrink
+  a stored night or replace the previous coherent dashboard day.
+- The grow-only repair is grounded in the 2026-09-06 failure capture: manual processing
   stored 230.4 minutes at 12:05 while the strap was actively offloading, then
   the completed local history showed 512 minutes for the same night. The manual
   path now rejects that in-flight prefix and the fuller candidate automatically
@@ -318,8 +305,7 @@ discipline, and the limits of historical recovery.
 - Dashboard reads are generation-ordered: an older asynchronous reload cannot
   overwrite a newly processed night, and a transient SQLite read error keeps
   the last known-good charts visible. The unnecessary full-history reload every
-  minute is gone; while Process waits for HISTORY_COMPLETE, the current day
-  remains in its pending state with an explicit `Finishing sleep…` indicator.
+  minute is gone; automatic processing waits silently for HISTORY_COMPLETE.
 - SQLite schema setup, transactions, commits, and query completion are now
   checked instead of silently accepting partial reads or failed writes. Morning
   summaries are deduplicated by local date as well as sleep ID, so a grow-only
