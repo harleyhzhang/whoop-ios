@@ -724,7 +724,7 @@ final class WhoopSleepStateTests: XCTestCase {
     }
 
     func testWhoop5RealtimeDecoderRequiresCRCAndPreservesTimestamp() {
-        var bytes = framedPacket(length: 24, type: 40, version: 1)
+        var bytes = WhoopTestFrameFactory.frame(length: 24, type: 40, version: 1)
         let timestamp: UInt32 = 1_800_000_000
         bytes[10] = UInt8(truncatingIfNeeded: timestamp)
         bytes[11] = UInt8(truncatingIfNeeded: timestamp >> 8)
@@ -734,7 +734,7 @@ final class WhoopSleepStateTests: XCTestCase {
         bytes[17] = 1
         bytes[18] = 0x84
         bytes[19] = 0x03
-        finishChecksums(&bytes)
+        WhoopTestFrameFactory.finishChecksums(&bytes)
 
         let decoded = WhoopDecodedRealtime.decodeWhoop5Realtime(Data(bytes))
         XCTAssertEqual(decoded?.deviceTimestamp, timestamp)
@@ -1564,7 +1564,7 @@ final class WhoopSleepStateTests: XCTestCase {
         cadenceRaw: UInt8 = 0,
         motionClassRaw: UInt8 = 0
     ) -> Data {
-        var bytes = framedPacket(length: 124, type: 47, version: 18)
+        var bytes = WhoopTestFrameFactory.frame(length: 124, type: 47, version: 18)
         bytes[15] = UInt8(truncatingIfNeeded: timestamp)
         bytes[16] = UInt8(truncatingIfNeeded: timestamp >> 8)
         bytes[17] = UInt8(truncatingIfNeeded: timestamp >> 16)
@@ -1575,51 +1575,23 @@ final class WhoopSleepStateTests: XCTestCase {
         bytes[59] = cadenceRaw
         bytes[63] = motionClassRaw
         bytes[81] = sleepState << 4
-        finishChecksums(&bytes)
+        WhoopTestFrameFactory.finishChecksums(&bytes)
         return Data(bytes)
     }
 
     private func metadataFrame(type: UInt8) -> Data {
-        var bytes = framedPacket(length: 16, type: 49, version: 1)
-        bytes[10] = type
-        finishChecksums(&bytes)
-        return Data(bytes)
+        WhoopTestFrameFactory.historicalMetadata(type: type, length: 16)
     }
 
     private func wristEventFrame(event: UInt8, timestamp: UInt32) -> Data {
-        var bytes = framedPacket(length: 20, type: 48, version: 1)
+        var bytes = WhoopTestFrameFactory.frame(length: 20, type: 48, version: 1)
         bytes[10] = event
         bytes[12] = UInt8(truncatingIfNeeded: timestamp)
         bytes[13] = UInt8(truncatingIfNeeded: timestamp >> 8)
         bytes[14] = UInt8(truncatingIfNeeded: timestamp >> 16)
         bytes[15] = UInt8(truncatingIfNeeded: timestamp >> 24)
-        finishChecksums(&bytes)
+        WhoopTestFrameFactory.finishChecksums(&bytes)
         return Data(bytes)
-    }
-
-    private func framedPacket(length: Int, type: UInt8, version: UInt8) -> [UInt8] {
-        var bytes = [UInt8](repeating: 0, count: length)
-        bytes[0] = 0xAA
-        bytes[1] = 0x01
-        let declared = UInt16(length - 8)
-        bytes[2] = UInt8(truncatingIfNeeded: declared)
-        bytes[3] = UInt8(truncatingIfNeeded: declared >> 8)
-        bytes[4] = 0x01
-        bytes[8] = type
-        bytes[9] = version
-        return bytes
-    }
-
-    private func finishChecksums(_ bytes: inout [UInt8]) {
-        let headerCRC = WhoopFrameIntegrity.crc16Modbus(bytes[0..<6])
-        bytes[6] = UInt8(truncatingIfNeeded: headerCRC)
-        bytes[7] = UInt8(truncatingIfNeeded: headerCRC >> 8)
-        let payloadEnd = bytes.count - 4
-        let crc = WhoopFrameIntegrity.crc32(bytes[8..<payloadEnd])
-        bytes[payloadEnd] = UInt8(truncatingIfNeeded: crc)
-        bytes[payloadEnd + 1] = UInt8(truncatingIfNeeded: crc >> 8)
-        bytes[payloadEnd + 2] = UInt8(truncatingIfNeeded: crc >> 16)
-        bytes[payloadEnd + 3] = UInt8(truncatingIfNeeded: crc >> 24)
     }
 
     private func beginOffload(store: WhoopStore, peripheral: UUID) async throws -> String {

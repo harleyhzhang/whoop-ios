@@ -29,10 +29,13 @@ cd "$fixture"
 git init -q
 git config user.name "WHOOP policy test"
 git config user.email "whoop-policy-test@example.invalid"
-mkdir -p SleepApp/Assets.xcassets docs
+mkdir -p SleepApp/Assets.xcassets WhoopHandshakeApp docs
 printf 'struct RootView {}\n' > SleepApp/RootView.swift
 printf 'struct WhoopStore {}\n' > SleepApp/SleepModels.swift
 printf '{}\n' > SleepApp/Assets.xcassets/Contents.json
+printf 'struct HandshakeView {}\n' > WhoopHandshakeApp/HandshakeView.swift
+printf 'struct WhoopHandshakeProbe {}\n' > WhoopHandshakeApp/WhoopHandshakeProbe.swift
+printf 'struct WhoopPersistence {}\n' > WhoopHandshakeApp/WhoopStore.swift
 printf 'baseline\n' > README.md
 git add .
 git commit -qm baseline
@@ -58,6 +61,21 @@ git commit -qam storage
 storage_commit=$(git rev-parse HEAD)
 assert_mode full --base "$risky_ui_commit" --head "$storage_commit"
 
-assert_mode full --head "$storage_commit"
+printf '// connection presentation\n' >> WhoopHandshakeApp/HandshakeView.swift
+git commit -qam connection_ui
+connection_ui_commit=$(git rev-parse HEAD)
+assert_mode fast --base "$storage_commit" --head "$connection_ui_commit"
+
+printf '// bluetooth lifecycle\n' >> WhoopHandshakeApp/WhoopHandshakeProbe.swift
+git commit -qam bluetooth
+bluetooth_commit=$(git rev-parse HEAD)
+assert_mode full --base "$connection_ui_commit" --head "$bluetooth_commit"
+
+printf '// schema migration\n' >> WhoopHandshakeApp/WhoopStore.swift
+git commit -qam persistence
+persistence_commit=$(git rev-parse HEAD)
+assert_mode full --base "$bluetooth_commit" --head "$persistence_commit"
+
+assert_mode full --head "$persistence_commit"
 
 echo "Phone install policy tests passed."

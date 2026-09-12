@@ -13,15 +13,21 @@
 
 `SleepApp` is the composition and presentation layer. `SleepApp.swift` owns app
 lifecycle and notification orchestration; `RootView.swift` renders snapshots and
-forwards user intent; `SleepModels.swift` contains display-domain models and
-pure scoring helpers.
+forwards user intent. Presentation helpers live in `DashboardComponents.swift`,
+`DashboardMetric.swift`, and `TrendSupport.swift`. `HealthHistoryModel.swift`
+adapts store snapshots for charts. Data contracts remain in `SleepModels.swift`,
+while scoring features and model bundles live in `ScoreModels.swift`.
 
 `WhoopHandshakeApp` is the device and persistence layer:
 
 - `WhoopHandshakeProbe.swift` adapts CoreBluetooth callbacks and coordinates a
   connection/offload session.
 - `WhoopBluetoothPolicy.swift` owns deterministic advertisement, framing,
-  charging-inference, acknowledgement, and history-completion decisions.
+  charging-inference, acknowledgement, and history-completion decisions. Its
+  typed `WhoopCommand` values are the only production owners of wire opcodes and
+  payloads.
+- `WhoopProtocol.swift` owns frame integrity and pure protocol decoders.
+- `WhoopStoreModels.swift` owns persistence and process result contracts.
 - `WhoopStore.swift` owns SQLite schema/migrations, evidence persistence,
   decoding, projections, and snapshot queries.
 - `HandshakeView.swift` is diagnostic presentation only; collection is owned by
@@ -51,4 +57,6 @@ backed up according to the migration runbook, and covered from the oldest
 supported schema to current.
 
 Project structure and compiler policy live in `project.yml`; the checked-in
-Xcode project is generated output for Xcode usability.
+Xcode project is generated output for Xcode usability. Private build assets are
+embedded through the data-driven `Tools/embed_private_assets.sh` helper, and
+test protocol fixtures are constructed by `WhoopTestFrameFactory`.

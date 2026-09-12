@@ -5,11 +5,7 @@ import XCTest
 
 final class WhoopBluetoothPolicyTests: XCTestCase {
     func testCommandFrameMatchesKnownClientHelloAndHasValidIntegrity() {
-        let frame = WhoopBluetoothPolicy.commandFrame(
-            command: 0x91,
-            sequence: 0x01,
-            payload: [0x01]
-        )
+        let frame = WhoopCommand.clientHello.frame(sequence: 0x01)
 
         XCTAssertEqual(
             frame,
@@ -19,6 +15,17 @@ final class WhoopBluetoothPolicyTests: XCTestCase {
             ]
         )
         XCTAssertTrue(WhoopFrameIntegrity.isValid(Data(frame)))
+    }
+
+    func testTypedCommandsOwnTheirWirePayloads() {
+        XCTAssertEqual(WhoopCommand.requestHistory.opcode, 22)
+        XCTAssertEqual(WhoopCommand.requestHistory.payload, [0x00])
+        XCTAssertEqual(
+            WhoopCommand.acknowledgeHistoryChunk([1, 2, 3, 4, 5, 6, 7, 8]).payload,
+            [0x01, 1, 2, 3, 4, 5, 6, 7, 8]
+        )
+        XCTAssertEqual(WhoopCommand.realtimeSensors(enabled: false).payload, [0x00])
+        XCTAssertEqual(WhoopCommand.realtimeHeartRate(enabled: true).payload, [0x01])
     }
 
     func testCommandFramePadsPayloadAndPreservesSequenceAndCommand() {
@@ -144,7 +151,7 @@ final class WhoopBluetoothPolicyTests: XCTestCase {
 
     func testHistoricalMetadataValidatesIntegrityAndExtractsChunkEnd() throws {
         let chunkEnd: [UInt8] = [8, 7, 6, 5, 4, 3, 2, 1]
-        let frame = metadataFrame(type: 2, chunkEnd: chunkEnd)
+        let frame = WhoopTestFrameFactory.historicalMetadata(type: 2, chunkEnd: chunkEnd)
 
         let metadata = try XCTUnwrap(WhoopHistoricalMetadata(data: frame, frameType: 49))
         XCTAssertEqual(metadata.type, 2)
@@ -157,12 +164,27 @@ final class WhoopBluetoothPolicyTests: XCTestCase {
         XCTAssertNil(WhoopHistoricalMetadata(data: frame, frameType: 40))
         XCTAssertNil(WhoopHistoricalMetadata(data: Data(repeating: 0, count: 12), frameType: 49))
         XCTAssertNil(
-            WhoopHistoricalMetadata(data: metadataFrame(type: 2, chunkEnd: chunkEnd, length: 32), frameType: 49))
+            WhoopHistoricalMetadata(
+                data: WhoopTestFrameFactory.historicalMetadata(
+                    type: 2,
+                    chunkEnd: chunkEnd,
+                    length: 32
+                ),
+                frameType: 49
+            ))
     }
 
     func testHistoricalMetadataPresentationAndCompletionPolicies() throws {
-        let start = try XCTUnwrap(WhoopHistoricalMetadata(data: metadataFrame(type: 1), frameType: 49))
-        let complete = try XCTUnwrap(WhoopHistoricalMetadata(data: metadataFrame(type: 3), frameType: 56))
+        let start = try XCTUnwrap(
+            WhoopHistoricalMetadata(
+                data: WhoopTestFrameFactory.historicalMetadata(type: 1),
+                frameType: 49
+            ))
+        let complete = try XCTUnwrap(
+            WhoopHistoricalMetadata(
+                data: WhoopTestFrameFactory.historicalMetadata(type: 3, frameType: 56),
+                frameType: 56
+            ))
 
         XCTAssertTrue(start.shouldForcePresentation(historicalSyncActive: false))
         XCTAssertFalse(complete.shouldForcePresentation(historicalSyncActive: false))
@@ -202,34 +224,4 @@ final class WhoopBluetoothPolicyTests: XCTestCase {
         )
     }
 
-    private func metadataFrame(type: UInt8, chunkEnd: [UInt8] = [], length: Int = 36) -> Data {
-        var bytes = [UInt8](repeating: 0, count: length)
-        bytes[0] = 0xAA
-        bytes[1] = 0x01
-        let declared = UInt16(bytes.count - 8)
-        bytes[2] = UInt8(truncatingIfNeeded: declared)
-        bytes[3] = UInt8(truncatingIfNeeded: declared >> 8)
-        bytes[4] = 0x01
-        bytes[8] = 49
-        bytes[9] = 1
-        bytes[10] = type
-        if type == 2 {
-            precondition(chunkEnd.count == 8)
-            bytes.replaceSubrange(21..<29, with: chunkEnd)
-        }
-        finishChecksums(&bytes)
-        return Data(bytes)
-    }
-
-    private func finishChecksums(_ bytes: inout [UInt8]) {
-        let headerCRC = WhoopFrameIntegrity.crc16Modbus(bytes[0..<6])
-        bytes[6] = UInt8(truncatingIfNeeded: headerCRC)
-        bytes[7] = UInt8(truncatingIfNeeded: headerCRC >> 8)
-        let payloadEnd = bytes.count - 4
-        let payloadCRC = WhoopFrameIntegrity.crc32(bytes[8..<payloadEnd])
-        bytes[payloadEnd] = UInt8(truncatingIfNeeded: payloadCRC)
-        bytes[payloadEnd + 1] = UInt8(truncatingIfNeeded: payloadCRC >> 8)
-        bytes[payloadEnd + 2] = UInt8(truncatingIfNeeded: payloadCRC >> 16)
-        bytes[payloadEnd + 3] = UInt8(truncatingIfNeeded: payloadCRC >> 24)
-    }
 }

@@ -51,62 +51,32 @@ struct RootView: View {
     }
 
     private var sleepMetricsArePending: Bool {
-        #if DEBUG
-            if ProcessInfo.processInfo.environment["WHOOP_MOCK_SLEEPING"] == "1" {
-                return true
-            }
-        #endif
-        return whoopCollector.isSleeping
+        WhoopLaunchOverrides.isSleeping || whoopCollector.isSleeping
             || displayedPendingSleep != nil
             || whoopCollector.isProcessingSleep
     }
 
     private var whoopBatteryLevel: Int? {
-        #if DEBUG
-            if let mockValue = ProcessInfo.processInfo.environment["WHOOP_MOCK_BATTERY"],
-                let level = Int(mockValue)
-            {
-                return min(max(level, 0), 100)
-            }
-        #endif
-
-        return whoopCollector.batteryLevel
+        WhoopLaunchOverrides.batteryLevel ?? whoopCollector.batteryLevel
     }
 
     private var whoopCharging: Bool {
-        #if DEBUG
-            if ProcessInfo.processInfo.environment["WHOOP_MOCK_CHARGING"] == "1" {
-                return true
-            }
-        #endif
-
-        return whoopCollector.isCharging
+        WhoopLaunchOverrides.isCharging || whoopCollector.isCharging
     }
 
     private var whoopConnected: Bool {
-        #if DEBUG
-            if ProcessInfo.processInfo.environment["WHOOP_MOCK_CONNECTED"] == "1" {
-                return true
-            }
-        #endif
-
-        return whoopCollector.isConnected
+        WhoopLaunchOverrides.isConnected || whoopCollector.isConnected
     }
 
     private var displayedPendingSleep: WhoopPendingSleep? {
-        #if DEBUG
-            if !debugMockPendingSleepDismissed,
-                let rawMinutes = ProcessInfo.processInfo.environment["WHOOP_MOCK_PENDING_SLEEP_MINUTES"],
-                let minutes = Double(rawMinutes)
-            {
-                return WhoopPendingSleep(
-                    sleepID: "mock-pending-sleep",
-                    startedAt: currentDate.addingTimeInterval(-minutes * 60),
-                    endedAt: currentDate,
-                    durationMinutes: minutes
-                )
-            }
-        #endif
+        if !debugMockPendingSleepDismissed, let minutes = WhoopLaunchOverrides.pendingSleepMinutes {
+            return WhoopPendingSleep(
+                sleepID: "mock-pending-sleep",
+                startedAt: currentDate.addingTimeInterval(-minutes * 60),
+                endedAt: currentDate,
+                durationMinutes: minutes
+            )
+        }
 
         return whoopCollector.pendingSleep
     }
@@ -135,65 +105,12 @@ struct RootView: View {
                     summaryGrid
                     rangePicker
 
-                    metricCard(
-                        metric: .sleep,
-                        title: "Sleep",
-                        symbol: "moon.stars.fill",
-                        unit: "",
-                        series: metricSeries(for: .sleep),
-                        color: sleepAccent,
-                        formatValue: { "\(Int($0.rounded()))%" }
-                    )
-
-                    metricCard(
-                        metric: .duration,
-                        title: "Sleep duration",
-                        symbol: "bed.double.fill",
-                        unit: "",
-                        series: metricSeries(for: .duration),
-                        color: .cyan,
-                        formatValue: formatDuration
-                    )
-
-                    metricCard(
-                        metric: .steps,
-                        title: "Steps",
-                        symbol: "figure.walk",
-                        unit: "",
-                        series: metricSeries(for: .steps),
-                        color: .green,
-                        formatValue: formatSteps
-                    )
-
-                    metricCard(
-                        metric: .recovery,
-                        title: "Recovery",
-                        symbol: "gauge.with.dots.needle.50percent",
-                        unit: "",
-                        series: metricSeries(for: .recovery),
-                        color: .mint,
-                        formatValue: { "\(Int($0.rounded()))%" }
-                    )
-
-                    metricCard(
-                        metric: .rhr,
-                        title: "RHR",
-                        symbol: "heart.fill",
-                        unit: "BPM",
-                        series: metricSeries(for: .rhr),
-                        color: .red,
-                        formatValue: { String(Int($0.rounded())) }
-                    )
-
-                    metricCard(
-                        metric: .hrv,
-                        title: "HRV",
-                        symbol: "waveform.path.ecg",
-                        unit: "MS",
-                        series: metricSeries(for: .hrv),
-                        color: .pink,
-                        formatValue: { String(Int($0.rounded())) }
-                    )
+                    ForEach(MetricKind.trendOrder, id: \.self) { metric in
+                        metricCard(
+                            metric: metric,
+                            series: metricSeries(for: metric)
+                        )
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
@@ -350,9 +267,9 @@ struct RootView: View {
         HStack(spacing: 12) {
             Image(systemName: "moon.zzz.fill")
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(sleepAccent)
+                .foregroundStyle(MetricKind.sleep.color)
                 .frame(width: 34, height: 34)
-                .background(sleepAccent.opacity(0.14), in: Circle())
+                .background(MetricKind.sleep.color.opacity(0.14), in: Circle())
 
             Text("Sleep detected")
                 .font(.system(size: 15, weight: .semibold))
@@ -373,7 +290,7 @@ struct RootView: View {
                     .foregroundStyle(.white)
                     .padding(.horizontal, 14)
                     .frame(height: 32)
-                    .background(sleepAccent, in: Capsule(style: .continuous))
+                    .background(MetricKind.sleep.color, in: Capsule(style: .continuous))
             }
             .buttonStyle(.plain)
             .disabled(whoopCollector.isProcessingSleep)
@@ -398,17 +315,13 @@ struct RootView: View {
     }
 
     private func processPendingSleepCard() {
-        #if DEBUG
-            if ProcessInfo.processInfo.environment["WHOOP_MOCK_PENDING_SLEEP_MINUTES"] != nil {
-                debugMockPendingSleepDismissed = true
-                return
-            }
-        #endif
+        if WhoopLaunchOverrides.pendingSleepMinutes != nil {
+            debugMockPendingSleepDismissed = true
+            return
+        }
 
         whoopCollector.processPendingSleep()
     }
-
-    private var sleepAccent: Color { Color(red: 0.39, green: 0.69, blue: 1.0) }
 
     private var rangePicker: some View {
         HStack(spacing: 12) {
@@ -440,38 +353,38 @@ struct RootView: View {
         VStack(spacing: 10) {
             HStack(alignment: .top, spacing: 20) {
                 activityMetric(
-                    title: "Sleep",
-                    symbol: "moon.stars.fill",
+                    title: MetricKind.sleep.summaryTitle,
+                    symbol: MetricKind.sleep.symbol,
                     value: summarySleepScore,
-                    iconTint: sleepAccent
+                    iconTint: MetricKind.sleep.color
                 )
                 activityMetric(
-                    title: "Duration",
-                    symbol: "bed.double.fill",
+                    title: MetricKind.duration.summaryTitle,
+                    symbol: MetricKind.duration.symbol,
                     value: summarySleepDuration,
-                    iconTint: .cyan
+                    iconTint: MetricKind.duration.color
                 )
             }
 
             HStack(alignment: .top, spacing: 12) {
                 activityMetric(
-                    title: "Steps",
-                    symbol: "figure.walk",
+                    title: MetricKind.steps.summaryTitle,
+                    symbol: MetricKind.steps.symbol,
                     value: summarySteps,
-                    iconTint: .green
+                    iconTint: MetricKind.steps.color
                 )
                 activityMetric(
-                    title: "Recovery",
-                    symbol: "gauge.with.dots.needle.50percent",
+                    title: MetricKind.recovery.summaryTitle,
+                    symbol: MetricKind.recovery.symbol,
                     value: summaryRecovery,
-                    iconTint: .mint
+                    iconTint: MetricKind.recovery.color
                 )
                 activityMetric(
-                    title: "RHR",
-                    symbol: "heart.fill",
+                    title: MetricKind.rhr.summaryTitle,
+                    symbol: MetricKind.rhr.symbol,
                     value: summaryRHR,
                     unit: summaryRHR == "—" ? "" : "BPM",
-                    iconTint: .red
+                    iconTint: MetricKind.rhr.color
                 )
             }
         }
@@ -515,19 +428,19 @@ struct RootView: View {
     }
 
     private var summarySleepScore: String {
-        currentSleepRecord?.sleepScore.map { "\(Int($0.rounded()))%" } ?? "—"
+        currentSleepRecord?.sleepScore.map(MetricKind.sleep.formattedValue) ?? "—"
     }
 
     private var summarySleepDuration: String {
-        currentSleepRecord?.sleepDurationMinutes.map { formatDuration($0 / 60) } ?? "—"
+        currentSleepRecord?.sleepDurationMinutes.map { MetricKind.duration.formattedValue($0 / 60) } ?? "—"
     }
 
     private var summarySteps: String {
-        publishedDay.steps.map { formatSteps(Double($0.stepCount)) } ?? "—"
+        publishedDay.steps.map { MetricKind.steps.formattedValue(Double($0.stepCount)) } ?? "—"
     }
 
     private var summaryRecovery: String {
-        publishedDay.recovery.map { "\(Int($0.score.rounded()))%" } ?? "—"
+        publishedDay.recovery.map { MetricKind.recovery.formattedValue($0.score) } ?? "—"
     }
 
     private var summaryRHR: String {
@@ -536,13 +449,12 @@ struct RootView: View {
 
     private func metricCard(
         metric: MetricKind,
-        title: String,
-        symbol: String,
-        unit: String,
-        series: MetricSeries,
-        color: Color,
-        formatValue: @escaping (Double) -> String
+        series: MetricSeries
     ) -> some View {
+        let title = metric.trendTitle
+        let symbol = metric.symbol
+        let unit = metric.unit
+        let color = metric.color
         let cardSelection =
             !sleepMetricsArePending && activeMetric == metric
             ? selectedDate
@@ -560,7 +472,7 @@ struct RootView: View {
             sleepMetricsArePending
             ? nil
             : (cardSelection == nil ? currentValue : selectedMetricPoint?.value)
-        let value = displayedValue.map(formatValue) ?? "—"
+        let value = displayedValue.map(metric.formattedValue) ?? "—"
         let valueDateLabel =
             cardSelection == nil
             ? publishedDay.date.map { selectionLabel(for: $0) } ?? "Today"
@@ -719,7 +631,7 @@ struct RootView: View {
                         .foregroundStyle(Color.white)
                         .opacity(averageOpacity)
                         .annotation(position: .top, spacing: 5) {
-                            Text(averageLevelLabel(level.value, for: metric))
+                            Text(metric.formattedAverage(level.value))
                                 .font(.system(size: 10, weight: .semibold, design: .rounded))
                                 .monospacedDigit()
                                 .tracking(-0.35)
@@ -962,19 +874,6 @@ struct RootView: View {
         return levels.reversed()
     }
 
-    private func averageLevelLabel(_ value: Double, for metric: MetricKind) -> String {
-        switch metric {
-        case .sleep, .recovery:
-            return "\(Int(value.rounded()))%"
-        case .duration:
-            return formatDuration(value)
-        case .hrv, .rhr:
-            return String(Int(value.rounded()))
-        case .steps:
-            return formatCompactSteps(value)
-        }
-    }
-
     @ViewBuilder
     private func monthlyAxisLabel(for date: Date) -> some View {
         VStack(spacing: 0) {
@@ -1134,39 +1033,13 @@ struct RootView: View {
         }
     }
 
-    private func formatDuration(_ hours: Double) -> String {
-        let minutes = Int((hours * 60).rounded())
-        return String(format: "%dh %02dm", minutes / 60, minutes % 60)
-    }
-
-    private func formatSteps(_ value: Double) -> String {
-        Int(value.rounded()).formatted(.number.grouping(.automatic))
-    }
-
-    private func formatCompactSteps(_ value: Double) -> String {
-        guard abs(value) >= 1_000 else { return String(Int(value.rounded())) }
-        let thousands = value / 1_000
-        return thousands >= 10
-            ? "\(Int(thousands.rounded()))k"
-            : String(format: "%.1fk", thousands)
-    }
-
     private func yAxisValues(for domain: ClosedRange<Double>) -> [Double] {
         let step = (domain.upperBound - domain.lowerBound) / 4
         return (0...4).map { domain.lowerBound + (Double($0) * step) }
     }
 
     private func yAxisLabel(_ value: Double, for metric: MetricKind) -> String {
-        switch metric {
-        case .sleep, .recovery:
-            "\(Int(value.rounded()))%"
-        case .duration:
-            String(format: "%.1fh", value)
-        case .hrv, .rhr:
-            String(Int(value.rounded()))
-        case .steps:
-            formatCompactSteps(value)
-        }
+        metric.formattedAxisValue(value)
     }
 
     private func metricSeries(
@@ -1193,469 +1066,7 @@ struct RootView: View {
     }
 
     private func chartDomain(for points: [MetricPoint], metric: MetricKind) -> ClosedRange<Double> {
-        if metric == .sleep || metric == .recovery { return 0...100 }
-        let values = points.map(\.value)
-        let low = values.min() ?? 0
-        let high = values.max() ?? 1
-        if metric == .steps {
-            return 0...max(100, high * 1.12)
-        }
-        let padding = max((high - low) * 0.18, 0.5)
-        return (low - padding)...(high + padding)
-    }
-}
-
-private struct SleepDetectedCardHeightTransition: ViewModifier, Animatable {
-    static let expandedHeight: CGFloat = 64
-
-    var progress: CGFloat
-
-    nonisolated var animatableData: CGFloat {
-        get { progress }
-        set { progress = newValue }
-    }
-
-    func body(content: Content) -> some View {
-        content
-            .frame(height: Self.expandedHeight * progress, alignment: .top)
-            .opacity(progress)
-            .clipped()
-    }
-}
-
-private struct WhoopBatteryPercentIcon: View {
-    let level: Int?
-    let isCharging: Bool
-
-    private var clampedLevel: Int {
-        min(max(level ?? 0, 0), 100)
-    }
-
-    private var fillColor: Color {
-        if isCharging { return .green }
-        if clampedLevel <= 20 { return .red }
-        if clampedLevel <= 35 { return .yellow }
-        return .primary
-    }
-
-    private var percentageText: String {
-        level.map(String.init) ?? "–"
-    }
-
-    private var fillFraction: CGFloat {
-        level == nil ? 0 : CGFloat(clampedLevel) / 100
-    }
-
-    private var trackColor: Color {
-        if isCharging { return Color.white.opacity(0.24) }
-        return Color.primary.opacity(0.58)
-    }
-
-    private static let shellWidth: CGFloat = 29
-    private static let shellHeight: CGFloat = 16
-    private static let shellRadius: CGFloat = 4.6
-
-    private func percentageLabel(color: Color) -> some View {
-        HStack(spacing: -0.5) {
-            ForEach(Array(percentageText.enumerated()), id: \.offset) { _, digit in
-                Text(String(digit))
-            }
-        }
-        .font(.system(size: 13, weight: .bold, design: .rounded))
-        .foregroundStyle(color)
-        .frame(width: Self.shellWidth, height: Self.shellHeight)
-    }
-
-    private var chargingLabel: some View {
-        HStack(spacing: 1) {
-            HStack(spacing: -0.5) {
-                ForEach(Array(percentageText.enumerated()), id: \.offset) { _, digit in
-                    Text(String(digit))
-                }
-            }
-            .font(.system(size: 12, weight: .bold, design: .rounded))
-
-            Image(systemName: "bolt.fill")
-                .font(.system(size: 7, weight: .bold))
-        }
-        .foregroundStyle(.white)
-        .frame(width: Self.shellWidth, height: Self.shellHeight)
-    }
-
-    var body: some View {
-        HStack(spacing: 1.6) {
-            ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: Self.shellRadius, style: .continuous)
-                    .fill(trackColor)
-
-                Rectangle()
-                    .fill(fillColor)
-                    .frame(width: Self.shellWidth * fillFraction)
-
-                if isCharging {
-                    chargingLabel
-                } else {
-                    percentageLabel(color: .black)
-                }
-            }
-            .frame(width: Self.shellWidth, height: Self.shellHeight)
-            .clipShape(RoundedRectangle(cornerRadius: Self.shellRadius, style: .continuous))
-
-            UnevenRoundedRectangle(
-                topLeadingRadius: 0,
-                bottomLeadingRadius: 0,
-                bottomTrailingRadius: 3.3,
-                topTrailingRadius: 3.3,
-                style: .continuous
-            )
-            .fill(trackColor)
-            .frame(width: 2.4, height: 6.6)
-        }
-        .accessibilityHidden(true)
-    }
-}
-
-private struct AnimatedMetricValue: View {
-    private static let duration = 0.24
-    private static let stagger = 0.014
-    private static let maximumStagger = 0.042
-
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    let value: String
-    let fontSize: CGFloat
-    let animateChanges: Bool
-
-    @State private var previousValue: String
-    @State private var displayedValue: String
-    @State private var animationProgress: CGFloat = 1
-    @State private var animationGeneration = 0
-
-    init(value: String, fontSize: CGFloat = 30, animateChanges: Bool = true) {
-        self.value = value
-        self.fontSize = fontSize
-        self.animateChanges = animateChanges
-        _previousValue = State(initialValue: value)
-        _displayedValue = State(initialValue: value)
-    }
-
-    var body: some View {
-        ZStack(alignment: .leading) {
-            Text(previousValue)
-                .modifier(PreviousMetricValueFade(progress: animationProgress))
-
-            HStack(spacing: 0) {
-                ForEach(Array(displayedValue.enumerated()), id: \.offset) { index, character in
-                    Text(String(character))
-                        .modifier(
-                            MetricDigitPop(
-                                progress: animationProgress,
-                                delay: min(Double(index) * Self.stagger, Self.maximumStagger),
-                                duration: Self.duration,
-                                totalDuration: Self.duration + Self.maximumStagger
-                            )
-                        )
-                }
-            }
-        }
-        .font(.system(size: fontSize, weight: .semibold, design: .rounded))
-        .monospacedDigit()
-        .foregroundStyle(.primary)
-        .fixedSize()
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(displayedValue)
-        .onChange(of: value) { _, newValue in
-            guard newValue != displayedValue else { return }
-
-            var transaction = Transaction(animation: nil)
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                previousValue = reduceMotion || !animateChanges ? newValue : displayedValue
-                displayedValue = newValue
-                animationProgress = reduceMotion || !animateChanges ? 1 : 0
-                animationGeneration &+= 1
-            }
-        }
-        .task(id: animationGeneration) {
-            guard !reduceMotion, animationProgress == 0 else { return }
-            await Task.yield()
-            guard !Task.isCancelled else { return }
-            withAnimation(.linear(duration: Self.duration + Self.maximumStagger)) {
-                animationProgress = 1
-            }
-            try? await Task.sleep(for: .seconds(Self.duration + Self.maximumStagger))
-            guard !Task.isCancelled else { return }
-            previousValue = displayedValue
-        }
-    }
-}
-
-private struct MetricDigitPop: AnimatableModifier {
-    var progress: CGFloat
-    let delay: Double
-    let duration: Double
-    let totalDuration: Double
-
-    nonisolated var animatableData: CGFloat {
-        get { progress }
-        set { progress = newValue }
-    }
-
-    func body(content: Content) -> some View {
-        let elapsed = progress * CGFloat(totalDuration)
-        let localProgress = min(
-            max((elapsed - CGFloat(delay)) / CGFloat(duration), 0),
-            1
-        )
-        let easedProgress = easeOutBack(localProgress)
-
-        content
-            .opacity(localProgress)
-            .blur(radius: (1 - localProgress) * 1.2)
-            .scaleEffect(0.97 + (0.03 * easedProgress))
-            .offset(y: (1 - easedProgress) * 5)
-    }
-
-    private func easeOutBack(_ progress: CGFloat) -> CGFloat {
-        let overshoot: CGFloat = 0.72
-        let shifted = progress - 1
-        return 1 + ((overshoot + 1) * shifted * shifted * shifted)
-            + (overshoot * shifted * shifted)
-    }
-}
-
-private struct PreviousMetricValueFade: AnimatableModifier {
-    var progress: CGFloat
-
-    nonisolated var animatableData: CGFloat {
-        get { progress }
-        set { progress = newValue }
-    }
-
-    func body(content: Content) -> some View {
-        let remaining = CGFloat(1) - min(progress, CGFloat(1))
-        content.opacity(Double(remaining))
-    }
-}
-
-struct MetricPoint: Identifiable {
-    let date: Date
-    let value: Double
-
-    var id: Date { date }
-}
-
-enum ChartCurveSampler {
-    /// Resample a shape-preserving cubic curve onto the fixed topology used by
-    /// range morphing. Unlike linear resampling followed by rounded joins, the
-    /// sparse Week points produce one continuous curve without overshooting a
-    /// neighboring value interval.
-    static func resampledValues(from points: [MetricPoint], count: Int) -> [Double] {
-        guard count > 0, let first = points.first else { return [] }
-        guard points.count > 1 else {
-            return Array(repeating: first.value, count: count)
-        }
-
-        let offsets = points.map { $0.date.timeIntervalSince(first.date) }
-        guard let span = offsets.last, span > 0 else {
-            return Array(repeating: first.value, count: count)
-        }
-
-        var widths: [Double] = []
-        var slopes: [Double] = []
-        widths.reserveCapacity(points.count - 1)
-        slopes.reserveCapacity(points.count - 1)
-
-        for index in 0..<(points.count - 1) {
-            let width = offsets[index + 1] - offsets[index]
-            widths.append(width)
-            slopes.append(
-                width > 0 ? (points[index + 1].value - points[index].value) / width : 0
-            )
-        }
-
-        var tangents = Array(repeating: 0.0, count: points.count)
-        tangents[0] = slopes[0]
-        tangents[points.count - 1] = slopes[slopes.count - 1]
-
-        if points.count > 2 {
-            for index in 1..<(points.count - 1) {
-                let before = slopes[index - 1]
-                let after = slopes[index]
-                guard before != 0, after != 0, before.sign == after.sign else { continue }
-
-                let previousWidth = widths[index - 1]
-                let nextWidth = widths[index]
-                let previousWeight = (2 * nextWidth) + previousWidth
-                let nextWeight = nextWidth + (2 * previousWidth)
-                tangents[index] =
-                    (previousWeight + nextWeight)
-                    / ((previousWeight / before) + (nextWeight / after))
-            }
-        }
-
-        var upperIndex = 1
-        return (0..<count).map { index in
-            let position = Double(index) / Double(max(count - 1, 1))
-            let targetOffset = span * position
-
-            while upperIndex < points.count - 1, offsets[upperIndex] < targetOffset {
-                upperIndex += 1
-            }
-
-            let lowerIndex = upperIndex - 1
-            let width = widths[lowerIndex]
-            guard width > 0 else { return points[upperIndex].value }
-
-            let progress = (targetOffset - offsets[lowerIndex]) / width
-            let squared = progress * progress
-            let cubed = squared * progress
-            let lowerBasis = (2 * cubed) - (3 * squared) + 1
-            let lowerTangentBasis = cubed - (2 * squared) + progress
-            let upperBasis = (-2 * cubed) + (3 * squared)
-            let upperTangentBasis = cubed - squared
-
-            return (lowerBasis * points[lowerIndex].value)
-                + (lowerTangentBasis * width * tangents[lowerIndex])
-                + (upperBasis * points[upperIndex].value)
-                + (upperTangentBasis * width * tangents[upperIndex])
-        }
-    }
-}
-
-struct MorphingMetricPoint: Identifiable {
-    let id: Int
-    let position: Double
-    let value: Double
-}
-
-enum ChartPointAlignment {
-    static func nearestCurvePoint(
-        to requestedPosition: Double,
-        in points: [MorphingMetricPoint]
-    ) -> MorphingMetricPoint? {
-        points.min {
-            abs($0.position - requestedPosition) < abs($1.position - requestedPosition)
-        }
-    }
-}
-
-struct ChartContentOpacity: Equatable {
-    let line: Double
-    let area: Double
-
-    static func resolve(
-        longRangeStyleProgress: Double,
-        isScrubbing: Bool
-    ) -> ChartContentOpacity {
-        if isScrubbing {
-            return ChartContentOpacity(line: 1, area: 0.26)
-        }
-
-        let progress = min(max(longRangeStyleProgress, 0), 1)
-        return ChartContentOpacity(
-            line: 1 + ((0.3 - 1) * progress),
-            area: 0.26 + ((0.07 - 0.26) * progress)
-        )
-    }
-}
-
-private struct AverageLevel: Identifiable {
-    let startDate: Date
-    let endDate: Date
-    let value: Double
-
-    var id: Date { startDate }
-}
-
-struct MetricSeries {
-    let daily: [MetricPoint]
-    let plotted: [MetricPoint]
-}
-
-enum MetricKind: Hashable {
-    case sleep
-    case recovery
-    case duration
-    case hrv
-    case rhr
-    case steps
-}
-
-enum HealthRange: String, CaseIterable, Identifiable {
-    case week = "Week"
-    case month = "Month"
-    case year = "Year"
-    case all = "All"
-
-    var id: String { rawValue }
-
-    var menuTitle: String {
-        switch self {
-        case .week: "1 week"
-        case .month: "1 month"
-        case .year: "1 year"
-        case .all: "All history"
-        }
-    }
-
-    var dayCount: Int? {
-        switch self {
-        case .week: 7
-        case .month: 30
-        case .year: 365
-        case .all: nil
-        }
-    }
-
-    var accessibilityName: String {
-        switch self {
-        case .week: "one week"
-        case .month: "one month"
-        case .year: "one year"
-        case .all: "all history"
-        }
-    }
-
-    var usesMonthlyAxis: Bool {
-        switch self {
-        case .week, .month: false
-        case .year, .all: true
-        }
-    }
-
-}
-
-@MainActor
-enum AppHaptics {
-    private static let selectionGenerator = UISelectionFeedbackGenerator()
-    private static let softImpactGenerator = UIImpactFeedbackGenerator(style: .soft)
-    private static let firmImpactGenerator = UIImpactFeedbackGenerator(style: .medium)
-    private static let notificationGenerator = UINotificationFeedbackGenerator()
-
-    static func selection() {
-        selectionGenerator.selectionChanged()
-        selectionGenerator.prepare()
-    }
-
-    static func softImpact() {
-        softImpactGenerator.impactOccurred(intensity: 0.75)
-        softImpactGenerator.prepare()
-    }
-
-    static func firmImpact() {
-        firmImpactGenerator.impactOccurred(intensity: 0.85)
-        firmImpactGenerator.prepare()
-    }
-
-    static func success() {
-        notificationGenerator.notificationOccurred(.success)
-        notificationGenerator.prepare()
-    }
-
-    static func warning() {
-        notificationGenerator.notificationOccurred(.warning)
-        notificationGenerator.prepare()
+        metric.chartDomain(for: points)
     }
 }
 

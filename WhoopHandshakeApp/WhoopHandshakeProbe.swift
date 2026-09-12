@@ -1,5 +1,6 @@
 @preconcurrency import CoreBluetooth
 import Foundation
+import OSLog
 
 enum WhoopReconnectPolicy {
     static func delaySeconds(forAttempt attempt: Int) -> Double {
@@ -21,12 +22,12 @@ private struct WhoopPendingSleepProcessRequest {
 
 @MainActor
 final class WhoopHandshakeProbe: NSObject, ObservableObject {
-    @Published private(set) var bluetoothState = "Starting"
-    @Published private(set) var status = "Waiting for Bluetooth"
+    private var bluetoothState = "Starting"
+    private var status = "Waiting for Bluetooth"
     @Published private(set) var deviceName = "—"
     @Published private(set) var handshakeState = "Waiting for WHOOP 5"
-    @Published private(set) var notificationState = "Not requested"
-    @Published private(set) var heartRate = "—"
+    private var notificationState = "Not requested"
+    private var heartRate = "—"
     @Published private(set) var batteryLevel: Int?
     @Published private(set) var isCharging = false
     @Published private(set) var isSleeping = false
@@ -36,23 +37,17 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     @Published private(set) var isProcessingSleep = false
     @Published private(set) var sleepProcessFailure: String?
     @Published private(set) var lastConnectedAt: Date?
-    @Published private(set) var lastDataReceivedAt: Date?
-    @Published private(set) var lastHeartRateReceivedAt: Date?
-    @Published private(set) var rrSummary = "—"
-    @Published private(set) var realtimeState = "Not armed"
-    @Published private(set) var proprietaryPacketCount = 0
-    @Published private(set) var persistedPacketCount = 0
-    @Published private(set) var latestPacket = "—"
-    @Published private(set) var canAttemptHandshake = false
-    @Published private(set) var diagnosticEvents: [String] = []
+    private var lastDataReceivedAt: Date?
+    private var lastHeartRateReceivedAt: Date?
+    private var rrSummary = "—"
+    private var realtimeState = "Not armed"
+    private var proprietaryPacketCount = 0
+    private var persistedPacketCount = 0
+    private var latestPacket = "—"
+    private var canAttemptHandshake = false
 
-    var bluetoothReady: Bool { central.state == .poweredOn }
     var isConnected: Bool {
         peripheral?.state == .connected && handshakeState.hasPrefix("Acknowledged")
-    }
-
-    var hasFreshHeartRate: Bool {
-        Self.heartRateIsFresh(receivedAt: lastHeartRateReceivedAt)
     }
 
     nonisolated static func heartRateIsFresh(
@@ -131,12 +126,6 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         }
     }
 
-    var diagnosticReport: String {
-        (["WHOOP 5 handshake diagnostic", "Generated: \(Self.reportDateFormatter.string(from: .now))", ""]
-            + diagnosticEvents)
-            .joined(separator: "\n")
-    }
-
     private lazy var central = CBCentralManager(
         delegate: self,
         queue: .main,
@@ -145,7 +134,6 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     private var peripheral: CBPeripheral?
     private var commandCharacteristic: CBCharacteristic?
     private var heartRateCharacteristic: CBCharacteristic?
-    private var batteryLevelCharacteristic: CBCharacteristic?
     private var batteryPowerStateCharacteristic: CBCharacteristic?
     private var batteryLevelStatusCharacteristic: CBCharacteristic?
     private var hasExplicitChargingState = false
@@ -201,20 +189,11 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         CBUUID(string: "FD4B0005-CCE1-4033-93CE-002D5875F58A"),
         CBUUID(string: "FD4B0007-CCE1-4033-93CE-002D5875F58A"),
     ])
-    private let clientHello = Data([
-        0xAA, 0x01, 0x08, 0x00, 0x00, 0x01, 0xE6, 0x71,
-        0x23, 0x01, 0x91, 0x01, 0x36, 0x3E, 0x5C, 0x8D,
-    ])
-    private static let reportDateFormatter: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }()
+    private let clientHello = Data(WhoopCommand.clientHello.frame(sequence: 0x01))
+    private static let logger = Logger(subsystem: "com.clintonst.sleep", category: "WhoopHandshake")
 
     override init() {
         super.init()
-        assert(
-            WhoopBluetoothPolicy.commandFrame(command: 0x91, sequence: 0x01, payload: [0x01]) == [UInt8](clientHello))
         restoreCachedTelemetry()
         record("Probe initialized")
         _ = central
@@ -229,11 +208,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     }
 
     private func record(_ message: String) {
-        let timestamp = Date().formatted(.dateTime.hour().minute().second().secondFraction(.fractional(3)))
-        diagnosticEvents.append("\(timestamp)  \(message)")
-        if diagnosticEvents.count > 200 {
-            diagnosticEvents.removeFirst(diagnosticEvents.count - 200)
-        }
+        Self.logger.debug("\(message, privacy: .public)")
     }
 
     private func restoreCachedTelemetry() {
@@ -568,7 +543,6 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         historicalSessionID = nil
         commandCharacteristic = nil
         heartRateCharacteristic = nil
-        batteryLevelCharacteristic = nil
         batteryPowerStateCharacteristic = nil
         batteryLevelStatusCharacteristic = nil
         hasExplicitChargingState = false
@@ -680,11 +654,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
                 self.historicalSessionID = sessionID
                 self.startHistoricalWatchdog()
                 self.commandSequence &+= 1
-                let frame = WhoopBluetoothPolicy.commandFrame(
-                    command: 22,
-                    sequence: self.commandSequence,
-                    payload: [0x00]
-                )
+                let frame = WhoopCommand.requestHistory.frame(sequence: self.commandSequence)
                 self.record(
                     "Starting persisted WHOOP historical offload \(sessionID.prefix(8)), seq \(self.commandSequence)")
                 peripheral.writeValue(Data(frame), for: commandCharacteristic, type: .withResponse)
@@ -717,10 +687,8 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         lastAcknowledgedHistoricalEndData = endData
         lastHistoricalAcknowledgementAt = now
         commandSequence &+= 1
-        let frame = WhoopBluetoothPolicy.commandFrame(
-            command: 23,
-            sequence: commandSequence,
-            payload: [0x01] + endData
+        let frame = WhoopCommand.acknowledgeHistoryChunk(endData).frame(
+            sequence: commandSequence
         )
         record("Acknowledging durably stored historical chunk, seq \(commandSequence)")
         peripheral.writeValue(Data(frame), for: commandCharacteristic, type: .withResponse)
@@ -769,10 +737,8 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
             let commandCharacteristic
         else { return }
         commandSequence &+= 1
-        let sensorFrame = WhoopBluetoothPolicy.commandFrame(
-            command: 0x3F,
-            sequence: commandSequence,
-            payload: [0x00]
+        let sensorFrame = WhoopCommand.realtimeSensors(enabled: false).frame(
+            sequence: commandSequence
         )
         record(
             "Disabling battery-heavy SEND_R10_R11_REALTIME burst, seq \(commandSequence): \(sensorFrame.map { String(format: "%02X", $0) }.joined(separator: " "))"
@@ -780,10 +746,8 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         peripheral.writeValue(Data(sensorFrame), for: commandCharacteristic, type: .withoutResponse)
 
         commandSequence &+= 1
-        let heartRateFrame = WhoopBluetoothPolicy.commandFrame(
-            command: 0x03,
-            sequence: commandSequence,
-            payload: [0x01]
+        let heartRateFrame = WhoopCommand.realtimeHeartRate(enabled: true).frame(
+            sequence: commandSequence
         )
         realtimeState = "Lightweight HR armed"
         status = "Encrypted link active; lightweight HR armed"
@@ -1000,7 +964,6 @@ extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
                     peripheral.setNotifyValue(true, for: characteristic)
                 }
             } else if characteristic.uuid == batteryLevelUUID {
-                batteryLevelCharacteristic = characteristic
                 if characteristic.properties.contains(.read) {
                     peripheral.readValue(for: characteristic)
                 }
