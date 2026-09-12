@@ -36,6 +36,7 @@ git config user.name "WHOOP policy test"
 git config user.email "whoop-policy-test@example.invalid"
 mkdir -p SleepApp/Assets.xcassets WhoopHandshakeApp docs
 printf 'struct RootView {}\n' > SleepApp/RootView.swift
+printf 'struct DashboardComponents {}\n' > SleepApp/DashboardComponents.swift
 printf 'struct WhoopStore {}\n' > SleepApp/SleepModels.swift
 printf '{}\n' > SleepApp/Assets.xcassets/Contents.json
 printf 'struct HandshakeView {}\n' > WhoopHandshakeApp/HandshakeView.swift
@@ -56,10 +57,15 @@ git commit -qam ui
 ui_commit=$(git rev-parse HEAD)
 assert_mode fast --base "$docs_commit" --head "$ui_commit"
 
+printf '// battery color\n' >> SleepApp/DashboardComponents.swift
+git commit -qam dashboard_components_ui
+dashboard_components_ui_commit=$(git rev-parse HEAD)
+assert_mode fast --base "$ui_commit" --head "$dashboard_components_ui_commit"
+
 printf '// schema migration\n' >> SleepApp/RootView.swift
 git commit -qam risky_ui
 risky_ui_commit=$(git rev-parse HEAD)
-assert_mode full --base "$ui_commit" --head "$risky_ui_commit"
+assert_mode full --base "$dashboard_components_ui_commit" --head "$risky_ui_commit"
 
 printf '// storage change\n' >> SleepApp/SleepModels.swift
 git commit -qam storage

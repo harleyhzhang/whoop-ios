@@ -95,6 +95,7 @@ fi
 
 unsafe_files=$(printf '%s\n' "$production_files" | awk '
   /^SleepApp\/RootView\.swift$/ { next }
+  /^SleepApp\/DashboardComponents\.swift$/ { next }
   /^SleepApp\/Assets\.xcassets\// { next }
   /^WhoopHandshakeApp\/HandshakeView\.swift$/ { next }
   { print }
