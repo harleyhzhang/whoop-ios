@@ -280,6 +280,14 @@ final class WhoopSleepStateTests: XCTestCase {
         XCTAssertNil(WhoopHandshakeProbe.batteryLevelStatusCharging(Data([0x02, 0x01, 0x00])))
     }
 
+    func testBatteryUsesOnlySystemRedAtOrBelowTwentyPercent() {
+        XCTAssertFalse(WhoopBatteryPresentation.isLow(level: nil))
+        XCTAssertTrue(WhoopBatteryPresentation.isLow(level: 0))
+        XCTAssertTrue(WhoopBatteryPresentation.isLow(level: 20))
+        XCTAssertFalse(WhoopBatteryPresentation.isLow(level: 21))
+        XCTAssertFalse(WhoopBatteryPresentation.isLow(level: 35))
+    }
+
     func testLegacyBatteryPowerStateReportsCharging() {
         XCTAssertEqual(WhoopHandshakeProbe.legacyBatteryPowerStateCharging(Data([0x30])), true)
         XCTAssertEqual(WhoopHandshakeProbe.legacyBatteryPowerStateCharging(Data([0x20])), false)
