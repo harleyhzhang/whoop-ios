@@ -1,1 +1,2 @@
 struct WhoopHandshakeProbe {}
+// bluetooth lifecycle
