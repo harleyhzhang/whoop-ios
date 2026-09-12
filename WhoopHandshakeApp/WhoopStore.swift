@@ -1,1 +1,2 @@
 struct WhoopPersistence {}
+// schema migration
