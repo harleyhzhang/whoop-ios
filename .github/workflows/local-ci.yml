@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   # pull_request_target uses the default branch as github.ref. Include the
@@ -28,15 +29,43 @@ jobs:
     env:
       PATH: /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
     steps:
+      # pull_request_target starts from the protected base workflow. Check out
+      # that base revision first so the policy itself cannot come from the PR.
+      - name: Check out trusted pull-request policy
+        if: github.event_name == 'pull_request_target'
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: Check out trusted source
+        if: github.event_name != 'pull_request_target'
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
       - name: Reject untrusted self-hosted execution
         env:
-          TRUSTED_ACTOR: harleyhzhang
-          TRUSTED_DEPENDABOT_ACTOR: dependabot[bot]
+          CI_ACTOR: ${{ github.actor }}
+          CI_EVENT_NAME: ${{ github.event_name }}
+          CI_PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          CI_PR_CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+          CI_PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          CI_PR_NUMBER: ${{ github.event.pull_request.number }}
+          CI_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "$GITHUB_ACTOR" != "$TRUSTED_ACTOR" ] && [ "$GITHUB_ACTOR" != "$TRUSTED_DEPENDABOT_ACTOR" ]; then
-            echo "Refusing to execute pull-request code from $GITHUB_ACTOR on a personal Mac." >&2
-            exit 1
+          files_json=""
+          if [ "$CI_EVENT_NAME" = "pull_request_target" ] && [ "$CI_PR_AUTHOR" = "dependabot[bot]" ]; then
+            files_json="$RUNNER_TEMP/dependabot-pr-files.json"
+            curl --fail-with-body --silent --show-error \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header "Accept: application/vnd.github+json" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/$CI_REPOSITORY/pulls/$CI_PR_NUMBER/files?per_page=100" \
+              >"$files_json"
           fi
+          Tools/check_self_hosted_ci_trust.sh "$files_json"
 
       - name: Check out trusted pull-request revision
         if: github.event_name == 'pull_request_target'
@@ -44,12 +73,6 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha }}
-
-      - name: Check out source
-        if: github.event_name != 'pull_request_target'
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
 
       - name: Run canonical verification
         run: Tools/verify_local.sh
