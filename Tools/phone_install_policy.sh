@@ -95,6 +95,7 @@ fi
 
 unsafe_files=$(printf '%s\n' "$production_files" | awk '
   /^SleepApp\/RootView\.swift$/ { next }
+  /^SleepApp\/DashboardComponents\.swift$/ { next }
   /^SleepApp\/Assets\.xcassets\// { next }
   /^WhoopHandshakeApp\/HandshakeView\.swift$/ { next }
   { print }
@@ -106,12 +107,14 @@ if [ -n "$unsafe_files" ]; then
   exit 0
 fi
 
-# RootView is normally presentation-only, but fail closed if a future edit puts
-# persistence, migration, destructive SQL, or bundle-identity mechanics there.
-if git diff -U0 "$base_commit..$head_commit" -- SleepApp/RootView.swift | \
+# These views are normally presentation-only, but fail closed if a future edit
+# puts persistence, migration, destructive SQL, or bundle-identity mechanics
+# in either component.
+if git diff -U0 "$base_commit..$head_commit" -- \
+  SleepApp/RootView.swift SleepApp/DashboardComponents.swift | \
   grep -E '^[+-]' | grep -Ev '^(\+\+\+|---)' | \
   grep -Eiq 'SQLite|WhoopStore|schema|migrat|DELETE[[:space:]]+FROM|DROP[[:space:]]+TABLE|bundleIdentifier|FileManager.*remove'; then
-  printf 'mode=full\nbase=%s\nhead=%s\nreason=risk-sensitive storage or identity code appeared in RootView\n' \
+  printf 'mode=full\nbase=%s\nhead=%s\nreason=risk-sensitive storage or identity code appeared in a presentation component\n' \
     "$base_commit" "$head_commit"
   exit 0
 fi

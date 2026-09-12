@@ -1,9 +1,18 @@
 import SwiftUI
 
 enum WhoopBatteryPresentation {
+    enum TrackTone: Equatable {
+        case lightBehindBlack
+        case darkBehindWhite
+    }
+
     static func isLow(level: Int?) -> Bool {
         guard let level else { return false }
         return level <= 20
+    }
+
+    static func trackTone(level: Int?, isCharging: Bool) -> TrackTone {
+        isCharging || isLow(level: level) ? .darkBehindWhite : .lightBehindBlack
     }
 }
 
@@ -45,9 +54,17 @@ struct WhoopBatteryPercentIcon: View {
     }
 
     private var trackColor: Color {
-        // Match iOS: the unfilled well and terminal stay neutral. Only the
-        // filled charge changes to system red or green.
-        return Color(uiColor: .tertiarySystemFill)
+        // Keep the neutral well legible under the label: a lighter Apple gray
+        // behind black text, and a restrained dark gray behind white text.
+        switch WhoopBatteryPresentation.trackTone(
+            level: level,
+            isCharging: chargingStyleActive
+        ) {
+        case .lightBehindBlack:
+            return Color(uiColor: .systemGray)
+        case .darkBehindWhite:
+            return Color(uiColor: .systemGray3)
+        }
     }
 
     private var fillColor: Color {

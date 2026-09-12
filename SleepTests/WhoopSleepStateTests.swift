@@ -288,6 +288,25 @@ final class WhoopSleepStateTests: XCTestCase {
         XCTAssertFalse(WhoopBatteryPresentation.isLow(level: 35))
     }
 
+    func testBatteryTrackContrastsWithItsLabelColor() {
+        XCTAssertEqual(
+            WhoopBatteryPresentation.trackTone(level: 73, isCharging: false),
+            .lightBehindBlack
+        )
+        XCTAssertEqual(
+            WhoopBatteryPresentation.trackTone(level: nil, isCharging: false),
+            .lightBehindBlack
+        )
+        XCTAssertEqual(
+            WhoopBatteryPresentation.trackTone(level: 20, isCharging: false),
+            .darkBehindWhite
+        )
+        XCTAssertEqual(
+            WhoopBatteryPresentation.trackTone(level: 73, isCharging: true),
+            .darkBehindWhite
+        )
+    }
+
     func testLegacyBatteryPowerStateReportsCharging() {
         XCTAssertEqual(WhoopHandshakeProbe.legacyBatteryPowerStateCharging(Data([0x30])), true)
         XCTAssertEqual(WhoopHandshakeProbe.legacyBatteryPowerStateCharging(Data([0x20])), false)
