@@ -45,8 +45,10 @@ synthetic fixtures.
 `.github/workflows/local-ci.yml` runs the canonical gate on the repository's
 trusted, self-hosted Apple-silicon Mac for Harley's pull requests and `main`.
 Pull requests use the workflow definition from the protected default branch,
-then accept only Harley's GitHub actor before checking out the exact proposed
-commit. Self-hosted execution does not use GitHub-hosted macOS minutes.
+then validate the initiating actor, original author, and same-repository head
+before checking out the exact proposed commit. Dependabot may only replace
+pinned `actions/checkout` revisions in allowlisted workflow files. Self-hosted
+execution does not use GitHub-hosted macOS minutes.
 
 `.github/workflows/ios-ci.yml` is deliberately `workflow_dispatch` only. It is
 an emergency hosted fallback and must not gain `push`, `pull_request`, or a

@@ -54,6 +54,9 @@ Tools/check_project_generation.sh
 echo "Testing physical-phone install policy..."
 Tools/test_phone_install_policy.sh
 
+echo "Testing self-hosted CI trust policy..."
+Tools/test_self_hosted_ci_trust.sh
+
 echo "Testing private asset embedding..."
 Tools/test_embed_private_assets.sh
 

@@ -17,8 +17,16 @@ gh api repos/harleyhzhang/whoop-ios/actions/runners
 The runner must remain repository-scoped. Do not share its label with another
 repository, grant workflow write permissions, add secrets to the job, or switch
 the pull-request trigger away from `pull_request_target`. The trusted workflow
-definition checks the actor before it checks out proposed code and checkout does
-not persist GitHub credentials.
+definition checks the initiating actor, original pull-request author, and head
+repository before it checks out proposed code. Dependabot is additionally
+restricted to pinned `actions/checkout` updates in the two allowlisted workflow
+files. Checkout does not persist GitHub credentials.
+
+The workflow-level policy is the mandatory boundary. For defense in depth,
+migrate the runner to a dedicated non-admin macOS account that cannot read the
+interactive user's files, signing credentials, or private WHOOP assets. Until
+that migration is complete, do not add repository secrets or private asset paths
+to this runner's environment.
 
 If the runner is intentionally removed, first stop and uninstall its service,
 then remove it in the repository's Actions settings. Registration tokens are
