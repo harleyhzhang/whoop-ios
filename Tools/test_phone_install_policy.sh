@@ -37,9 +37,11 @@ git config user.email "whoop-policy-test@example.invalid"
 mkdir -p SleepApp/Assets.xcassets WhoopHandshakeApp docs
 printf 'struct RootView {}\n' > SleepApp/RootView.swift
 printf 'struct DashboardComponents {}\n' > SleepApp/DashboardComponents.swift
+printf 'struct DashboardHeader {}\n' > SleepApp/DashboardHeader.swift
+printf 'struct DashboardChartGeometry {}\n' > SleepApp/DashboardChartGeometry.swift
+printf 'struct MetricTrendCard {}\n' > SleepApp/MetricTrendCard.swift
 printf 'struct WhoopStore {}\n' > SleepApp/SleepModels.swift
 printf '{}\n' > SleepApp/Assets.xcassets/Contents.json
-printf 'struct HandshakeView {}\n' > WhoopHandshakeApp/HandshakeView.swift
 printf 'struct WhoopHandshakeProbe {}\n' > WhoopHandshakeApp/WhoopHandshakeProbe.swift
 printf 'struct WhoopPersistence { private static let schemaVersion = 10 }\n' > WhoopHandshakeApp/WhoopStore.swift
 printf 'baseline\n' > README.md
@@ -77,15 +79,17 @@ git commit -qam storage
 storage_commit=$(git rev-parse HEAD)
 assert_mode protected --base "$risky_ui_commit" --head "$storage_commit"
 
-printf '// connection presentation\n' >> WhoopHandshakeApp/HandshakeView.swift
-git commit -qam connection_ui
-connection_ui_commit=$(git rev-parse HEAD)
-assert_mode fast --base "$storage_commit" --head "$connection_ui_commit"
+printf '// connection presentation\n' >> SleepApp/DashboardHeader.swift
+printf '// chart geometry\n' >> SleepApp/DashboardChartGeometry.swift
+printf '// chart presentation\n' >> SleepApp/MetricTrendCard.swift
+git commit -qam dashboard_presentation
+dashboard_presentation_commit=$(git rev-parse HEAD)
+assert_mode fast --base "$storage_commit" --head "$dashboard_presentation_commit"
 
 printf '// bluetooth lifecycle\n' >> WhoopHandshakeApp/WhoopHandshakeProbe.swift
 git commit -qam bluetooth
 bluetooth_commit=$(git rev-parse HEAD)
-assert_mode protected --base "$connection_ui_commit" --head "$bluetooth_commit"
+assert_mode protected --base "$dashboard_presentation_commit" --head "$bluetooth_commit"
 
 sed -i '' 's/schemaVersion/currentSchemaVersion/' WhoopHandshakeApp/WhoopStore.swift
 printf 'struct HealthReporter { let sql = "PRAGMA user_version" }\n' > WhoopHandshakeApp/WhoopDeploymentHealthReporter.swift

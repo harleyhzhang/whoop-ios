@@ -104,6 +104,17 @@ extension WhoopSleepStateTests {
         XCTAssertEqual(opacity.area, 0.07, accuracy: 0.000_001)
     }
 
+    func testHeldDailyLineIsThinnerThanSummaryLine() {
+        let summaryWidth = DashboardChartGeometry.lineWidth(detailProgress: 0)
+        let halfwayWidth = DashboardChartGeometry.lineWidth(detailProgress: 0.5)
+        let detailWidth = DashboardChartGeometry.lineWidth(detailProgress: 1)
+
+        XCTAssertEqual(summaryWidth, 2.1, accuracy: 0.000_001)
+        XCTAssertEqual(detailWidth, 1.25, accuracy: 0.000_001)
+        XCTAssertGreaterThan(summaryWidth, halfwayWidth)
+        XCTAssertGreaterThan(halfwayWidth, detailWidth)
+    }
+
     func testHoldingChartMorphsEveryDailyPointIntoLine() {
         let start = Date(timeIntervalSinceReferenceDate: 0)
         let day: TimeInterval = 86_400
@@ -151,6 +162,22 @@ extension WhoopSleepStateTests {
         XCTAssertNil(state.activeMetric)
         XCTAssertNil(state.selectedDate)
         XCTAssertEqual(state.detailProgress, 0)
+    }
+
+    @MainActor
+    func testFirstChartSelectionStagesSummaryBeforeDetailTransition() async {
+        let state = DashboardChartState()
+        let date = Date(timeIntervalSinceReferenceDate: 123)
+
+        state.beginSelection(metric: .sleep, date: date, reduceMotion: false)
+
+        XCTAssertEqual(state.detailProgress, 0)
+        XCTAssertEqual(state.detailTargetProgress, 1)
+        let generation = state.detailGeneration
+
+        await state.runDetailTransition(generation: generation, reduceMotion: false)
+
+        XCTAssertEqual(state.detailProgress, 1)
     }
 
     func testPublishedDashboardMetricsShareOneDayKey() throws {

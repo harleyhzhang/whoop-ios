@@ -617,7 +617,8 @@ state file.
 
 - `none` means no production app code changed, so there is nothing to install.
 - `fast` is restricted to presentation-only changes in `RootView.swift`,
-  `DashboardComponents.swift`, `HandshakeView.swift`, or the asset catalog.
+  `DashboardComponents.swift`, `DashboardHeader.swift`,
+  `DashboardChartGeometry.swift`, `MetricTrendCard.swift`, or the asset catalog.
   Reuse a recent integrity-checked compact backup, install in place,
   launch, confirm the process remains alive, and confirm the database or WAL
   modification time advances. Do not copy the complete database before or after

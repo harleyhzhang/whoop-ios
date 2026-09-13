@@ -1,6 +1,9 @@
 import Foundation
 
 enum DashboardChartGeometry {
+    private static let summaryLineWidth = 2.1
+    private static let detailLineWidth = 1.25
+
     static func monthlyAxisDates(in points: [MetricPoint]) -> [Date] {
         guard let firstDate = points.first?.date, let lastDate = points.last?.date else {
             return []
@@ -113,6 +116,10 @@ enum DashboardChartGeometry {
     static func yAxisValues(for domain: ClosedRange<Double>) -> [Double] {
         let step = (domain.upperBound - domain.lowerBound) / 4
         return (0...4).map { domain.lowerBound + (Double($0) * step) }
+    }
+
+    static func lineWidth(detailProgress: Double) -> CGFloat {
+        CGFloat(interpolate(summaryLineWidth, detailLineWidth, smoothStep(detailProgress)))
     }
 
     private static func interpolate(_ source: Double, _ target: Double, _ progress: Double) -> Double {
