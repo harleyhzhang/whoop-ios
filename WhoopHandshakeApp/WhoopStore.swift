@@ -91,6 +91,11 @@ final class WhoopStore: Sendable {
                 queue.sync { closeDatabase() }
             }
         }
+
+        func ingestionTransactionCountForTesting() -> Int {
+            if sqlite.isOnQueue { return sqlite.ingestionTransactionCount }
+            return queue.sync { sqlite.ingestionTransactionCount }
+        }
     #endif
 
     private func closeDatabase() {
@@ -109,22 +114,54 @@ final class WhoopStore: Sendable {
         deliveredAt: Date = .now,
         completion: @escaping @Sendable (WhoopPacketPersistenceResult) -> Void
     ) {
+        let bytes = [UInt8](packet)
+        let integrityIsValid = frameType == nil ? false : WhoopFrameIntegrity.isValid(bytes)
+        let envelope = WhoopPacketEnvelope(
+            packet: packet,
+            peripheralID: peripheralID,
+            characteristicUUID: characteristicUUID,
+            frameType: frameType,
+            integrityIsValid: integrityIsValid,
+            realtime: realtime,
+            historical: historical,
+            ppg: WhoopDecodedPPG.decode(bytes: bytes, integrityIsValid: integrityIsValid),
+            metadata: WhoopHistoricalMetadata(
+                bytes: bytes,
+                frameType: frameType,
+                integrityIsValid: integrityIsValid
+            ),
+            freshWristState: nil,
+            offloadSessionID: offloadSessionID,
+            deduplicateTransportRetries: deduplicateTransportRetries,
+            deliveredAt: deliveredAt,
+            proprietaryOrdinal: nil
+        )
+        appendBatch([envelope]) { result in
+            completion(
+                WhoopPacketPersistenceResult(
+                    success: result.success,
+                    deliverySequence: result.deliverySequences.first
+                ))
+        }
+    }
+
+    /// Persists a FIFO packet slice in one SQLite transaction. A completion
+    /// containing a chunk terminator proves that every earlier envelope in the
+    /// slice committed before the caller can issue its destructive ACK.
+    func appendBatch(
+        _ envelopes: [WhoopPacketEnvelope],
+        completion: @escaping @Sendable (WhoopPacketBatchPersistenceResult) -> Void
+    ) {
+        guard !envelopes.isEmpty else {
+            completion(
+                WhoopPacketBatchPersistenceResult(success: true, deliverySequences: [])
+            )
+            return
+        }
         let enqueuedAt = DispatchTime.now().uptimeNanoseconds
         queue.async { [self] in
             let queueWait = DispatchTime.now().uptimeNanoseconds - enqueuedAt
-            completion(
-                insert(
-                    packet: packet,
-                    peripheralID: peripheralID,
-                    characteristicUUID: characteristicUUID,
-                    frameType: frameType,
-                    realtime: realtime,
-                    historical: historical,
-                    offloadSessionID: offloadSessionID,
-                    deduplicateTransportRetries: deduplicateTransportRetries,
-                    deliveredAt: deliveredAt,
-                    queueWaitNanoseconds: queueWait
-                ))
+            completion(insertBatch(envelopes, queueWaitNanoseconds: queueWait))
         }
     }
 
@@ -1627,57 +1664,121 @@ final class WhoopStore: Sendable {
         return statement
     }
 
-    private func insert(
-        packet: Data,
-        peripheralID: UUID,
-        characteristicUUID: String,
-        frameType: FrameType?,
-        realtime: WhoopDecodedRealtime?,
-        historical: WhoopDecodedHistorical?,
-        offloadSessionID: String?,
-        deduplicateTransportRetries: Bool,
-        deliveredAt: Date,
+    private func insertBatch(
+        _ envelopes: [WhoopPacketEnvelope],
         queueWaitNanoseconds: UInt64
-    ) -> WhoopPacketPersistenceResult {
+    ) -> WhoopPacketBatchPersistenceResult {
         let telemetryStartedAt = DispatchTime.now().uptimeNanoseconds
-        var telemetryFinishedAt: UInt64?
-        var telemetryOutcome = WhoopIngestionTelemetryOutcome.failed
-        defer {
-            if database != nil {
-                let elapsed =
-                    (telemetryFinishedAt ?? DispatchTime.now().uptimeNanoseconds)
-                    - telemetryStartedAt
-                storageTelemetry?.recordIngestion(
-                    outcome: telemetryOutcome,
-                    transactionNanoseconds: elapsed,
-                    queueWaitNanoseconds: queueWaitNanoseconds,
-                    frameType: frameType,
-                    payloadBytes: packet.count,
-                    retryDetectionEnabled: deduplicateTransportRetries,
-                    now: deliveredAt
+        guard let database, execute("BEGIN IMMEDIATE") else {
+            recordBatchTelemetry(
+                envelopes: envelopes,
+                outcomes: Array(repeating: .failed, count: envelopes.count),
+                transactionNanoseconds: DispatchTime.now().uptimeNanoseconds - telemetryStartedAt,
+                queueWaitNanoseconds: queueWaitNanoseconds
+            )
+            return WhoopPacketBatchPersistenceResult(success: false, deliverySequences: [])
+        }
+        #if DEBUG
+            sqlite.ingestionTransactionCount += 1
+        #endif
+        let pendingStepDaysBeforeTransaction = pendingStepDateKeys
+        var outcomes: [WhoopIngestionTelemetryOutcome] = []
+        outcomes.reserveCapacity(envelopes.count)
+        var deliverySequences: [Int64] = []
+        deliverySequences.reserveCapacity(envelopes.count)
+        var materializedStepDays: Set<String> = []
+
+        for envelope in envelopes {
+            guard
+                let insertion = insertInOpenTransaction(
+                    envelope,
+                    database: database
                 )
+            else {
+                _ = execute("ROLLBACK")
+                pendingStepDateKeys = pendingStepDaysBeforeTransaction
+                recordBatchTelemetry(
+                    envelopes: envelopes,
+                    outcomes: Array(repeating: .failed, count: envelopes.count),
+                    transactionNanoseconds:
+                        DispatchTime.now().uptimeNanoseconds - telemetryStartedAt,
+                    queueWaitNanoseconds: queueWaitNanoseconds
+                )
+                return WhoopPacketBatchPersistenceResult(success: false, deliverySequences: [])
             }
+            outcomes.append(insertion.outcome)
+            deliverySequences.append(insertion.deliverySequence)
+            materializedStepDays.formUnion(insertion.materializedStepDays)
         }
-        guard let database else {
-            return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
+        guard execute("COMMIT") else {
+            _ = execute("ROLLBACK")
+            pendingStepDateKeys = pendingStepDaysBeforeTransaction
+            recordBatchTelemetry(
+                envelopes: envelopes,
+                outcomes: Array(repeating: .failed, count: envelopes.count),
+                transactionNanoseconds: DispatchTime.now().uptimeNanoseconds - telemetryStartedAt,
+                queueWaitNanoseconds: queueWaitNanoseconds
+            )
+            return WhoopPacketBatchPersistenceResult(success: false, deliverySequences: [])
         }
+        let telemetryFinishedAt = DispatchTime.now().uptimeNanoseconds
+        finishCommittedStepMaterialization(materializedStepDays)
+        recordBatchTelemetry(
+            envelopes: envelopes,
+            outcomes: outcomes,
+            transactionNanoseconds: telemetryFinishedAt - telemetryStartedAt,
+            queueWaitNanoseconds: queueWaitNanoseconds
+        )
+        return WhoopPacketBatchPersistenceResult(
+            success: true,
+            deliverySequences: deliverySequences
+        )
+    }
+
+    private func recordBatchTelemetry(
+        envelopes: [WhoopPacketEnvelope],
+        outcomes: [WhoopIngestionTelemetryOutcome],
+        transactionNanoseconds: UInt64,
+        queueWaitNanoseconds: UInt64
+    ) {
+        guard storageTelemetry != nil, !envelopes.isEmpty else { return }
+        let perEnvelopeTransaction = transactionNanoseconds / UInt64(envelopes.count)
+        for (envelope, outcome) in zip(envelopes, outcomes) {
+            storageTelemetry?.recordIngestion(
+                outcome: outcome,
+                transactionNanoseconds: perEnvelopeTransaction,
+                queueWaitNanoseconds: queueWaitNanoseconds,
+                frameType: envelope.frameType,
+                payloadBytes: envelope.packet.count,
+                retryDetectionEnabled: envelope.deduplicateTransportRetries,
+                now: envelope.deliveredAt
+            )
+        }
+    }
+
+    private struct OpenTransactionInsertion {
+        let deliverySequence: Int64
+        let outcome: WhoopIngestionTelemetryOutcome
+        let materializedStepDays: Set<String>
+    }
+
+    private func insertInOpenTransaction(
+        _ envelope: WhoopPacketEnvelope,
+        database: OpaquePointer
+    ) -> OpenTransactionInsertion? {
+        let packet = envelope.packet
+        let deliveredAt = envelope.deliveredAt
         let deliverySequence = nextDeliverySequence
         nextDeliverySequence += 1
-        // The delivery sequence is already unique and durable. A compact ID
-        // avoids writing/indexing the same 36-byte UUID in every evidence and
-        // derived table while preserving stable foreign-key provenance.
         let packetID = "p" + String(deliverySequence, radix: 36)
         let receivedAt = deliveredAt.timeIntervalSince1970
-        guard execute("BEGIN IMMEDIATE") else {
-            return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
-        }
         let registration: PacketSignatureRegistration =
-            deduplicateTransportRetries
+            envelope.deduplicateTransportRetries
             ? registerPacketSignature(
                 database: database,
                 signature: Self.packetSignature(
-                    peripheralID: peripheralID,
-                    characteristicUUID: characteristicUUID,
+                    peripheralID: envelope.peripheralID,
+                    characteristicUUID: envelope.characteristicUUID,
                     payload: packet
                 ),
                 packetID: packetID,
@@ -1686,11 +1787,7 @@ final class WhoopStore: Sendable {
             : .new
         switch registration {
         case .duplicate(let canonicalPacketID):
-            // The canonical raw packet and its decoder projection committed in
-            // one transaction. A transport retry only advances arrival-time
-            // projections and offload progress; decoder upgrades replay the
-            // immutable raw table through their bounded backfill.
-            if let realtime,
+            if let realtime = envelope.realtime,
                 !insertRealtime(
                     database: database,
                     packetID: canonicalPacketID,
@@ -1698,39 +1795,31 @@ final class WhoopStore: Sendable {
                     realtime: realtime
                 )
             {
-                execute("ROLLBACK")
-                return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
+                return nil
             }
             guard
                 updateOffloadProgress(
                     database: database,
-                    sessionID: offloadSessionID,
+                    sessionID: envelope.offloadSessionID,
                     deliverySequence: deliverySequence,
                     packetID: canonicalPacketID,
-                    packet: packet
-                )
-            else {
-                execute("ROLLBACK")
-                return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
-            }
-            guard
+                    metadata: envelope.metadata,
+                    completedAt: deliveredAt
+                ),
                 let materializedStepDays = materializePendingStepsIfNeeded(
-                    for: packet,
+                    metadata: envelope.metadata,
                     database: database
-                ), execute("COMMIT")
-            else {
-                execute("ROLLBACK")
-                return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
-            }
-            telemetryFinishedAt = DispatchTime.now().uptimeNanoseconds
-            telemetryOutcome = .retry
-            finishCommittedStepMaterialization(materializedStepDays)
-            return WhoopPacketPersistenceResult(success: true, deliverySequence: deliverySequence)
+                )
+            else { return nil }
+            return OpenTransactionInsertion(
+                deliverySequence: deliverySequence,
+                outcome: .retry,
+                materializedStepDays: materializedStepDays
+            )
         case .new:
             break
         case .failed:
-            execute("ROLLBACK")
-            return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
+            return nil
         }
         guard
             insertPacket(
@@ -1738,58 +1827,51 @@ final class WhoopStore: Sendable {
                 id: packetID,
                 receivedAt: receivedAt,
                 deliverySequence: deliverySequence,
-                offloadSessionID: offloadSessionID,
-                peripheralID: peripheralID.uuidString,
-                characteristicUUID: characteristicUUID,
-                frameType: frameType,
+                offloadSessionID: envelope.offloadSessionID,
+                peripheralID: envelope.peripheralID.uuidString,
+                characteristicUUID: envelope.characteristicUUID,
+                frameType: envelope.frameType,
+                integrityIsValid: envelope.integrityIsValid,
                 payload: packet
             )
-        else {
-            execute("ROLLBACK")
-            return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
-        }
-        if let realtime,
-            !insertRealtime(database: database, packetID: packetID, receivedAt: receivedAt, realtime: realtime)
+        else { return nil }
+        if let realtime = envelope.realtime,
+            !insertRealtime(
+                database: database,
+                packetID: packetID,
+                receivedAt: receivedAt,
+                realtime: realtime
+            )
         {
-            execute("ROLLBACK")
-            return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
+            return nil
         }
         guard
             decodePacketIfNeeded(
                 database: database,
                 packetID: packetID,
                 packet: packet,
-                historical: historical
-            )
-        else {
-            execute("ROLLBACK")
-            return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
-        }
-        guard
+                historical: envelope.historical,
+                ppg: envelope.ppg,
+                integrityIsValid: envelope.integrityIsValid
+            ),
             updateOffloadProgress(
                 database: database,
-                sessionID: offloadSessionID,
+                sessionID: envelope.offloadSessionID,
                 deliverySequence: deliverySequence,
                 packetID: packetID,
-                packet: packet
-            )
-        else {
-            execute("ROLLBACK")
-            return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
-        }
-        guard
+                metadata: envelope.metadata,
+                completedAt: deliveredAt
+            ),
             let materializedStepDays = materializePendingStepsIfNeeded(
-                for: packet,
+                metadata: envelope.metadata,
                 database: database
-            ), execute("COMMIT")
-        else {
-            execute("ROLLBACK")
-            return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
-        }
-        telemetryFinishedAt = DispatchTime.now().uptimeNanoseconds
-        telemetryOutcome = .unique
-        finishCommittedStepMaterialization(materializedStepDays)
-        return WhoopPacketPersistenceResult(success: true, deliverySequence: deliverySequence)
+            )
+        else { return nil }
+        return OpenTransactionInsertion(
+            deliverySequence: deliverySequence,
+            outcome: .unique,
+            materializedStepDays: materializedStepDays
+        )
     }
 
     private enum PacketSignatureRegistration {
@@ -1853,6 +1935,7 @@ final class WhoopStore: Sendable {
         peripheralID: String,
         characteristicUUID: String,
         frameType: FrameType?,
+        integrityIsValid: Bool,
         payload: Data
     ) -> Bool {
         let sql = """
@@ -1878,7 +1961,7 @@ final class WhoopStore: Sendable {
             } else {
                 sqlite3_bind_null(statement, 8)
             }
-            sqlite3_bind_int(statement, 9, WhoopFrameIntegrity.isValid(payload) ? 1 : 0)
+            sqlite3_bind_int(statement, 9, integrityIsValid ? 1 : 0)
             _ = payload.withUnsafeBytes {
                 sqlite3_bind_blob(statement, 10, $0.baseAddress, Int32($0.count), Self.transient)
             }
@@ -1891,14 +1974,11 @@ final class WhoopStore: Sendable {
         sessionID: String?,
         deliverySequence: Int64,
         packetID: String,
-        packet: Data
+        metadata: WhoopHistoricalMetadata?,
+        completedAt: Date
     ) -> Bool {
         guard let sessionID else { return true }
-        let isCompletion =
-            packet.count > 10
-            && (packet[8] == 49 || packet[8] == 56)
-            && packet[10] == 3
-            && WhoopFrameIntegrity.isValid(packet)
+        let isCompletion = metadata?.type == .historyComplete
         let sql: String
         if isCompletion {
             sql = """
@@ -1922,7 +2002,7 @@ final class WhoopStore: Sendable {
             if isCompletion {
                 sqlite3_bind_int64(statement, 3, deliverySequence)
                 bind(packetID, to: 4, in: statement)
-                sqlite3_bind_double(statement, 5, Date().timeIntervalSince1970)
+                sqlite3_bind_double(statement, 5, completedAt.timeIntervalSince1970)
                 bind(sessionID, to: 6, in: statement)
             } else {
                 bind(sessionID, to: 3, in: statement)
@@ -1945,22 +2025,36 @@ final class WhoopStore: Sendable {
         database: OpaquePointer,
         packetID: String,
         packet: Data,
-        historical: WhoopDecodedHistorical?
+        historical: WhoopDecodedHistorical?,
+        ppg: WhoopDecodedPPG? = nil,
+        integrityIsValid: Bool? = nil
     ) -> Bool {
         guard packet.count > 9, packet[8] == 47 else { return true }
         let protocolVersion = Int(packet[9])
 
-        if let historical = historical ?? WhoopDecodedHistorical.decode(packet) {
+        if let historical {
             return insertHistorical(
                 database: database,
                 packetID: packetID,
                 sample: historical
             )
-        } else if let ppg = WhoopDecodedPPG.decode(packet) {
+        } else if integrityIsValid == nil,
+            let historical = WhoopDecodedHistorical.decode(packet)
+        {
+            return insertHistorical(
+                database: database,
+                packetID: packetID,
+                sample: historical
+            )
+        } else if let ppg {
+            return insertPPG(database: database, packetID: packetID, packet: ppg)
+        } else if integrityIsValid == nil,
+            let ppg = WhoopDecodedPPG.decode(packet)
+        {
             return insertPPG(database: database, packetID: packetID, packet: ppg)
         }
 
-        let integrityIsValid = WhoopFrameIntegrity.isValid(packet)
+        let integrityIsValid = integrityIsValid ?? WhoopFrameIntegrity.isValid(packet)
         return insertDecodeFailure(
             database: database,
             packetID: packetID,
@@ -2464,15 +2558,10 @@ final class WhoopStore: Sendable {
     /// Runs in the packet transaction so a history-complete acknowledgement
     /// cannot become durable before its UI-facing totals do.
     private func materializePendingStepsIfNeeded(
-        for packet: Data,
+        metadata: WhoopHistoricalMetadata?,
         database: OpaquePointer
     ) -> Set<String>? {
-        let isComplete =
-            packet.count > 10
-            && (packet[8] == 49 || packet[8] == 56)
-            && packet[10] == 3
-            && WhoopFrameIntegrity.isValid(packet)
-        guard isComplete else { return [] }
+        guard metadata?.type == .historyComplete else { return [] }
         let changedDays = pendingStepDateKeys
         return rebuildDailySteps(for: changedDays, database: database) ? changedDays : nil
     }

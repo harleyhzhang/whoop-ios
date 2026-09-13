@@ -42,27 +42,11 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     }
 
     nonisolated static func batteryLevelStatus(_ data: Data) -> BatteryStatus? {
-        guard data.count >= 3 else { return nil }
-        let powerState =
-            UInt16(data[data.startIndex + 1])
-            | (UInt16(data[data.startIndex + 2]) << 8)
-        let wiredPower = (powerState >> 1) & 0b11
-        let wirelessPower = (powerState >> 3) & 0b11
-        let chargeState = (powerState >> 5) & 0b11
-        let hasExternalPower = wiredPower == 1 || wirelessPower == 1
-
-        if chargeState == 1 || hasExternalPower { return .charging }
-        if chargeState == 2 || chargeState == 3 { return .notCharging }
-        return .unknown(rawValue: powerState)
+        WhoopBluetoothPolicy.batteryLevelStatus(data)
     }
 
     nonisolated static func legacyBatteryStatus(_ data: Data) -> BatteryStatus? {
-        guard let powerState = data.first else { return nil }
-        switch (powerState >> 4) & 0b11 {
-        case 3: return .charging
-        case 1, 2: return .notCharging
-        default: return .unknown(rawValue: UInt16(powerState))
-        }
+        WhoopBluetoothPolicy.legacyBatteryStatus(data)
     }
 
     nonisolated static func freshWhoop5WristState(
@@ -107,7 +91,6 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     private var helloAttemptID: UUID?
     private var commandSequence: UInt8 = 1
     private var lastTelemetryCacheWriteAt: Date?
-    private var receivedProprietaryPacketCount = 0
     private var realtimeKeepaliveTask: Task<Void, Never>?
     private var historicalRefreshTask: Task<Void, Never>?
     private var historicalWatchdogTask: Task<Void, Never>?
@@ -123,6 +106,19 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     private var lastSleepAnalysisAt: Date?
     private var lastFinalizedSleepID: String?
     private let store = WhoopStore.shared
+    private lazy var transportPipeline = WhoopTransportPipeline(
+        store: store,
+        didPublishUI: { [weak self] snapshot in
+            DispatchQueue.main.async { [weak self] in
+                self?.applyTransportUISnapshot(snapshot)
+            }
+        },
+        didPersist: { [weak self] result, summary in
+            DispatchQueue.main.async { [weak self] in
+                self?.handlePersistedTransportBatch(result, summary: summary)
+            }
+        }
+    )
     private let knownPeripheralKey = "WhoopHandshakeProbe.knownPeripheralIdentifier"
     private let confirmedBondKey = "WhoopHandshakeProbe.confirmedEncryptedBond"
     private let cachedHeartRateKey = "WhoopHandshakeProbe.cachedHeartRateBPM"
@@ -238,16 +234,6 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         lastTelemetryCacheWriteAt = receivedAt
     }
 
-    private func recordProprietaryMetadataPacket(
-        _ data: Data,
-        characteristicUUID: String
-    ) {
-        let preview = data.prefix(24).map { String(format: "%02X", $0) }.joined(separator: " ")
-        record(
-            "WHOOP metadata packet #\(receivedProprietaryPacketCount) on \(characteristicUUID), \(data.count) bytes: \(preview)\(data.count > 24 ? " …" : "")"
-        )
-    }
-
     private func cacheBatteryLevel(_ level: Int) {
         let clampedLevel = min(max(level, 0), 100)
         batteryStatus = WhoopBluetoothPolicy.inferredBatteryStatus(
@@ -259,6 +245,104 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         UserDefaults.standard.set(clampedLevel, forKey: cachedBatteryLevelKey)
         UserDefaults.standard.set(Date(), forKey: cachedBatteryLevelDateKey)
         WhoopNotificationManager.shared.observeBatteryLevel(clampedLevel)
+    }
+
+    private func applyTransportUISnapshot(_ snapshot: WhoopTransportUISnapshot) {
+        if let heartRate = snapshot.heartRate,
+            let receivedAt = snapshot.heartRateReceivedAt
+        {
+            cacheHeartRate(heartRate, receivedAt: receivedAt)
+        }
+        if let level = snapshot.batteryLevel {
+            cacheBatteryLevel(level)
+            record("Battery level: \(batteryLevel ?? 0)%")
+        }
+        if let status = snapshot.batteryStatus {
+            batteryStatus = status
+            record("Battery charging: \(status.isCharging ? "yes" : "no")")
+        }
+    }
+
+    private func handlePersistedTransportBatch(
+        _ result: WhoopPacketBatchPersistenceResult,
+        summary: WhoopTransportBatchSummary
+    ) {
+        guard result.success else {
+            if let first = summary.firstProprietaryOrdinal,
+                let last = summary.lastProprietaryOrdinal
+            {
+                record(
+                    "Failed to persist WHOOP packet batch #\(first)...#\(last); history was not acknowledged"
+                )
+            } else {
+                record("Failed to persist standard 2A37 heart-rate packet batch")
+            }
+            return
+        }
+        if let isWorn = summary.latestWristState,
+            isWorn != lastObservedWristState
+        {
+            lastObservedWristState = isWorn
+            WhoopNotificationManager.shared.observeWristState(isWorn: isWorn)
+            record("Wrist state: \(isWorn ? "on" : "off")")
+        }
+        let belongsToCurrentOffload =
+            summary.offloadSessionID == nil
+            || summary.offloadSessionID == historicalSessionID
+        guard belongsToCurrentOffload else {
+            record("Ignoring post-commit control events from a superseded historical session")
+            return
+        }
+        if let sampleAt = summary.latestHistoricalSampleAt,
+            newestHistoricalSampleAtInSync.map({ sampleAt > $0 }) ?? true
+        {
+            newestHistoricalSampleAtInSync = sampleAt
+            lastHistoricalProgressAt = .now
+        }
+        for event in summary.metadataEvents {
+            let metadata = WhoopHistoricalMetadata(
+                type: event.type,
+                chunkEndData: event.chunkEndData
+            )
+            if metadata.shouldForcePresentation(historicalSyncActive: historicalSyncActive) {
+                record(event.diagnostic)
+            }
+            switch event.type {
+            case .historyStart:
+                historicalSyncActive = true
+                newestHistoricalSampleAtInSync = nil
+                lastAcknowledgedHistoricalEndData = nil
+                lastHistoricalAcknowledgementAt = nil
+                startHistoricalWatchdog()
+            case .chunkEnd:
+                if let chunkEndData = event.chunkEndData {
+                    _ = acknowledgeHistoricalChunk(endData: chunkEndData)
+                }
+            case .historyComplete:
+                completeHistoricalSyncIfActive()
+            case .unknown:
+                break
+            }
+        }
+    }
+
+    private func completeHistoricalSyncIfActive() {
+        guard
+            WhoopBluetoothPolicy.shouldAnalyzeHistoryCompletion(
+                metadataType: .historyComplete,
+                historicalSyncActive: historicalSyncActive
+            )
+        else { return }
+        historicalSyncActive = false
+        historicalSessionID = nil
+        lastHistoricalProgressAt = nil
+        newestHistoricalSampleAtInSync = nil
+        lastAcknowledgedHistoricalEndData = nil
+        lastHistoricalAcknowledgementAt = nil
+        historicalWatchdogTask?.cancel()
+        historicalWatchdogTask = nil
+        refreshSleepSnapshot(force: true, allowAutomaticFinalization: true)
+        scheduleHistoricalSync()
     }
 
     func startScan() {
@@ -342,10 +426,14 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
 
     private func resetConnectionSession() {
         if let historicalSessionID {
-            store.abandonHistoricalOffload(
-                historicalSessionID,
-                reason: "Bluetooth connection session reset"
-            )
+            transportPipeline.flushAndWaitForPersistence { [store] in
+                store.abandonHistoricalOffload(
+                    historicalSessionID,
+                    reason: "Bluetooth connection session reset"
+                )
+            }
+        } else {
+            transportPipeline.flush()
         }
         historicalSessionID = nil
         commandCharacteristic = nil
@@ -614,24 +702,6 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         }
     }
 
-    @discardableResult
-    private func parseHeartRate(_ data: Data) -> WhoopDecodedRealtime? {
-        guard let measurement = WhoopDecodedRealtime.decodeStandardHeartRate(data) else { return nil }
-        cacheHeartRate(measurement.heartRate)
-        return measurement
-    }
-
-    @discardableResult
-    private func parseWhoop5Packet(_ data: Data) -> WhoopDecodedRealtime? {
-        guard let measurement = WhoopDecodedRealtime.decodeWhoop5Realtime(data) else { return nil }
-        cacheHeartRate(measurement.heartRate)
-        return measurement
-    }
-
-    private func parseWhoop5Historical(_ data: Data) -> WhoopDecodedHistorical? {
-        WhoopDecodedHistorical.decode(data)
-    }
-
 }
 
 extension WhoopHandshakeProbe: @preconcurrency CBCentralManagerDelegate {
@@ -816,127 +886,26 @@ extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
         guard errorDescription == nil, let data else { return }
         let uuid = CBUUID(string: characteristicUUID)
         if uuid == CBUUID(string: "2A37") {
-            guard let measurement = parseHeartRate(data) else { return }
-            store.append(
+            transportPipeline.submitStandardHeartRate(
                 packet: data,
                 peripheralID: peripheralID,
                 characteristicUUID: characteristicUUID,
-                frameType: nil,
-                realtime: measurement,
-                historical: nil,
-                deduplicateTransportRetries: false,
                 deliveredAt: deliveredAt
-            ) { [weak self] result in
-                guard !result.success else { return }
-                Task { @MainActor in
-                    self?.record("Failed to persist standard 2A37 heart-rate packet")
-                }
-            }
-        } else if uuid == batteryLevelUUID, let level = data.first {
-            cacheBatteryLevel(Int(level))
-            record("Battery level: \(batteryLevel ?? 0)%")
-        } else if uuid == batteryLevelStatusUUID,
-            let status = Self.batteryLevelStatus(data)
-        {
-            batteryStatus = status
-            record("Battery charging: \(status.isCharging ? "yes" : "no") (Battery Level Status)")
-        } else if uuid == batteryPowerStateUUID,
-            let status = Self.legacyBatteryStatus(data)
-        {
-            batteryStatus = status
-            record("Battery charging: \(status.isCharging ? "yes" : "no") (Battery Power State)")
+            )
+        } else if uuid == batteryLevelUUID {
+            transportPipeline.submitBatteryLevel(data, deliveredAt: deliveredAt)
+        } else if uuid == batteryLevelStatusUUID {
+            transportPipeline.submitBatteryLevelStatus(data, deliveredAt: deliveredAt)
+        } else if uuid == batteryPowerStateUUID {
+            transportPipeline.submitLegacyBatteryStatus(data, deliveredAt: deliveredAt)
         } else if notifyUUIDs.contains(uuid) {
-            receivedProprietaryPacketCount += 1
-            let packetOrdinal = receivedProprietaryPacketCount
-            let frameType = data.count > 8 ? FrameType(rawValue: data[8]) : nil
-            if let isWorn = Self.freshWhoop5WristState(data, receivedAt: deliveredAt),
-                isWorn != lastObservedWristState
-            {
-                lastObservedWristState = isWorn
-                WhoopNotificationManager.shared.observeWristState(isWorn: isWorn)
-                record("Wrist state: \(isWorn ? "on" : "off")")
-            }
-            let realtime = parseWhoop5Packet(data)
-            let historical = parseWhoop5Historical(data)
-            let metadata = WhoopHistoricalMetadata(data: data, frameType: frameType)
-            let metadataType = metadata?.type
-            let historicalEndData = metadata?.chunkEndData
-            if metadata?.shouldForcePresentation(historicalSyncActive: historicalSyncActive) == true {
-                recordProprietaryMetadataPacket(data, characteristicUUID: characteristicUUID)
-            }
-            // Count only forward movement through decoded history. The
-            // band may replay the same packet or chunk ending thousands of
-            // times while waiting for an acknowledgement; treating those
-            // duplicates as progress would defeat the stall watchdog.
-            if let sampleAt = historical?.sampleAt,
-                newestHistoricalSampleAtInSync.map({ sampleAt > $0 }) ?? true
-            {
-                newestHistoricalSampleAtInSync = sampleAt
-                lastHistoricalProgressAt = .now
-            }
-            if metadataType == .historyStart {
-                historicalSyncActive = true
-                newestHistoricalSampleAtInSync = nil
-                lastAcknowledgedHistoricalEndData = nil
-                lastHistoricalAcknowledgementAt = nil
-                startHistoricalWatchdog()
-            }
-            store.append(
+            transportPipeline.submitProprietary(
                 packet: data,
                 peripheralID: peripheralID,
                 characteristicUUID: characteristicUUID,
-                frameType: frameType,
-                realtime: realtime,
-                historical: historical,
                 offloadSessionID: historicalSessionID,
-                deduplicateTransportRetries: Self.shouldDeduplicateTransportRetries(
-                    frameType: frameType
-                ),
                 deliveredAt: deliveredAt
-            ) { [weak self] result in
-                let needsMainActor =
-                    !result.success
-                    || historicalEndData != nil
-                    || metadataType == .historyComplete
-                guard needsMainActor else { return }
-                Task { @MainActor in
-                    guard let self else { return }
-                    guard result.success else {
-                        self.record("Failed to persist WHOOP packet #\(packetOrdinal); history was not acknowledged")
-                        return
-                    }
-                    if let historicalEndData {
-                        // The store queue is serial: reaching this completion proves every
-                        // preceding raw and decoded sample in this chunk is durable.
-                        _ = self.acknowledgeHistoricalChunk(endData: historicalEndData)
-                    } else {
-                        guard
-                            WhoopBluetoothPolicy.shouldAnalyzeHistoryCompletion(
-                                metadataType: metadataType,
-                                historicalSyncActive: self.historicalSyncActive
-                            )
-                        else { return }
-                        self.historicalSyncActive = false
-                        self.historicalSessionID = nil
-                        self.lastHistoricalProgressAt = nil
-                        self.newestHistoricalSampleAtInSync = nil
-                        self.lastAcknowledgedHistoricalEndData = nil
-                        self.lastHistoricalAcknowledgementAt = nil
-                        self.historicalWatchdogTask?.cancel()
-                        self.historicalWatchdogTask = nil
-                        // HISTORY_COMPLETE is the only point where the
-                        // offload is a coherent whole. Automatic processing
-                        // is forbidden at chunk boundaries because that can
-                        // publish duration before the rest of the night,
-                        // HRV, and RHR have arrived.
-                        self.refreshSleepSnapshot(
-                            force: true,
-                            allowAutomaticFinalization: true
-                        )
-                        self.scheduleHistoricalSync()
-                    }
-                }
-            }
+            )
         }
     }
 }

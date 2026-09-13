@@ -21,7 +21,12 @@ while scoring features and model bundles live in `ScoreModels.swift`.
 `WhoopHandshakeApp` is the device and persistence layer:
 
 - `WhoopHandshakeProbe.swift` adapts CoreBluetooth callbacks and coordinates a
-  connection/offload session.
+  connection/offload session. Its main-actor callback only snapshots immutable
+  delivery values and forwards them; it does not parse protocol frames.
+- `WhoopPacketEnvelope.swift` is the typed immutable parse result. Proprietary
+  frames are converted to bytes and CRC-checked once before storage.
+- `WhoopTransportPipeline.swift` owns the dedicated serial protocol queue,
+  bounded packet batching, idle flushing, and throttled UI snapshots.
 - `WhoopBluetoothPolicy.swift` owns deterministic advertisement, framing,
   charging-inference, acknowledgement, and history-completion decisions. Its
   typed `WhoopCommand` values are the only production owners of wire opcodes and
@@ -46,10 +51,14 @@ Framework APIs belong behind small adapters so decisions can be unit tested.
 
 ## Data flow
 
-1. CoreBluetooth delivers a packet to the probe.
-2. Integrity and protocol policy classify it.
-3. The store serially persists raw evidence and decoded observations.
-4. Only the successful persistence completion may acknowledge a history chunk.
+1. CoreBluetooth delivers a packet to the probe, which snapshots its immutable
+   data and identifiers onto the serial transport queue.
+2. The transport pipeline performs one integrity check and constructs one typed
+   packet envelope containing all decoded protocol state.
+3. The store persists bounded FIFO envelope batches in one transaction while
+   retaining every unique raw delivery and compacting only exact retries.
+4. A chunk terminator closes its batch. Only that batch's successful persistence
+   completion may publish an acknowledgement decision to the main actor.
 5. A durable `HISTORY_COMPLETE` permits finalization and snapshot publication.
 6. SwiftUI observes the published snapshot; it does not infer missing evidence.
 

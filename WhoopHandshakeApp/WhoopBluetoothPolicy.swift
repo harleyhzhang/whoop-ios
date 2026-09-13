@@ -4,12 +4,29 @@ struct WhoopHistoricalMetadata: Equatable {
     let type: MetadataType
     let chunkEndData: [UInt8]?
 
+    init(type: MetadataType, chunkEndData: [UInt8]?) {
+        self.type = type
+        self.chunkEndData = chunkEndData
+    }
+
     init?(data: Data, frameType: FrameType?) {
         let bytes = [UInt8](data)
+        self.init(
+            bytes: bytes,
+            frameType: frameType,
+            integrityIsValid: WhoopFrameIntegrity.isValid(bytes)
+        )
+    }
+
+    init?(
+        bytes: [UInt8],
+        frameType: FrameType?,
+        integrityIsValid: Bool
+    ) {
         guard
             bytes.count > 10,
             frameType?.isHistoricalMetadata == true,
-            WhoopFrameIntegrity.isValid(data)
+            integrityIsValid
         else { return nil }
 
         type = MetadataType(rawValue: bytes[10])
@@ -68,6 +85,26 @@ enum WhoopCommand: Equatable {
 }
 
 enum WhoopBluetoothPolicy {
+    static func batteryLevelStatus(_ data: Data) -> BatteryStatus? {
+        guard data.count >= 3 else { return nil }
+        let powerState = UInt16(data[1]) | (UInt16(data[2]) << 8)
+        let wiredPower = (powerState >> 1) & 0b11
+        let wirelessPower = (powerState >> 3) & 0b11
+        let chargeState = (powerState >> 5) & 0b11
+        if chargeState == 1 || wiredPower == 1 || wirelessPower == 1 { return .charging }
+        if chargeState == 2 || chargeState == 3 { return .notCharging }
+        return .unknown(rawValue: powerState)
+    }
+
+    static func legacyBatteryStatus(_ data: Data) -> BatteryStatus? {
+        guard let powerState = data.first else { return nil }
+        switch (powerState >> 4) & 0b11 {
+        case 3: return .charging
+        case 1, 2: return .notCharging
+        default: return .unknown(rawValue: UInt16(powerState))
+        }
+    }
+
     static func matchesAdvertisement(
         serviceUUIDs: Set<String>,
         advertisedName: String?,

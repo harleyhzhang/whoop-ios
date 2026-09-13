@@ -85,3 +85,10 @@ struct WhoopPacketPersistenceResult: Sendable {
     let success: Bool
     let deliverySequence: Int64?
 }
+
+struct WhoopPacketBatchPersistenceResult: Sendable {
+    let success: Bool
+    let deliverySequences: [Int64]
+
+    var committedEnvelopeCount: Int { success ? deliverySequences.count : 0 }
+}

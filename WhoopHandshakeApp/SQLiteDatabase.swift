@@ -17,6 +17,9 @@ final class SQLiteDatabase: @unchecked Sendable {
     private var rawPublishedWakeBoundaries: [WhoopWakeBoundary]?
     private var rawStorageTelemetry: WhoopStorageTelemetry?
     private var rawNextDeliverySequence: Int64 = 1
+    #if DEBUG
+        private var rawIngestionTransactionCount = 0
+    #endif
 
     init() {
         queue.setSpecific(key: queueSpecificKey, value: ())
@@ -91,6 +94,19 @@ final class SQLiteDatabase: @unchecked Sendable {
             rawNextDeliverySequence = newValue
         }
     }
+
+    #if DEBUG
+        var ingestionTransactionCount: Int {
+            get {
+                requireQueue()
+                return rawIngestionTransactionCount
+            }
+            set {
+                requireQueue()
+                rawIngestionTransactionCount = newValue
+            }
+        }
+    #endif
 
     func close() {
         requireQueue()
