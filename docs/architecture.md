@@ -28,8 +28,15 @@ while scoring features and model bundles live in `ScoreModels.swift`.
   payloads.
 - `WhoopProtocol.swift` owns frame integrity and pure protocol decoders.
 - `WhoopStoreModels.swift` owns persistence, snapshot, and diagnostics contracts.
-- `WhoopStore.swift` owns SQLite schema/migrations, evidence persistence,
-  decoding, projections, and snapshot queries.
+- `SQLiteDatabase.swift` is the single owner of the queue-confined SQLite C
+  connection, prepared-statement cache, and persistence-working state. Its
+  narrow `@unchecked Sendable` connection boundary exists because SQLite C
+  pointers are explicitly non-Sendable; runtime queue preconditions guard every
+  access.
+- `DashboardRepository.swift` owns read-only dashboard SQL and result mapping.
+- `WhoopStore.swift` remains the persistence façade while schema migration,
+  seed import, ingestion, step/sleep/recovery materialization, and diagnostics
+  move behind focused collaborators one vertical slice at a time.
 - `HandshakeView.swift` is diagnostic presentation only; collection is owned by
   the app-lifetime probe.
 
@@ -67,6 +74,13 @@ backup. The store retains one app-created rollback snapshot, prunes only older
 snapshots matching its own naming contract, and attempts `VACUUM` after a
 successful migration. A failed `VACUUM` is non-fatal: SQLite keeps the released
 pages on its freelist and reuses them as collection continues.
+
+The store split is deliberately incremental. Each extracted collaborator uses
+the same `SQLiteDatabase` owner and serial queue; no collaborator opens a second
+writer. A slice keeps its existing façade API until deterministic parity tests
+pass. Packet ingestion remains on the owner's queue, and the Bluetooth probe may
+acknowledge a history chunk only from the successful persistence completion,
+preserving persist-before-ACK ordering throughout the migration.
 
 ## Change rules
 
