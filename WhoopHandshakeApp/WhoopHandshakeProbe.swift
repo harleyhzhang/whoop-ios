@@ -12,16 +12,19 @@ enum WhoopReconnectPolicy {
 @MainActor
 final class WhoopHandshakeProbe: NSObject, ObservableObject {
     @Published private(set) var deviceName = "—"
-    @Published private(set) var handshakeState = "Waiting for WHOOP 5"
+    @Published private(set) var handshakePhase = HandshakePhase.waitingForDevice
     @Published private(set) var batteryLevel: Int?
-    @Published private(set) var isCharging = false
+    @Published private(set) var batteryStatus = BatteryStatus.unavailable
     @Published private(set) var isSleeping = false
     @Published private(set) var lastConnectedAt: Date?
     private var lastHeartRateReceivedAt: Date?
     private var canAttemptHandshake = false
 
+    var handshakeState: String { handshakePhase.displayText }
+    var isCharging: Bool { batteryStatus.isCharging }
+
     var isConnected: Bool {
-        peripheral?.state == .connected && handshakeState.hasPrefix("Acknowledged")
+        peripheral?.state == .connected && handshakePhase.isAcknowledged
     }
 
     nonisolated static func heartRateIsFresh(
@@ -34,12 +37,11 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         return age >= 0 && age <= maxAge
     }
 
-    nonisolated static func shouldDeduplicateTransportRetries(frameType: UInt8?) -> Bool {
-        guard let frameType else { return false }
-        return [36, 38, 47, 49, 50, 56].contains(frameType)
+    nonisolated static func shouldDeduplicateTransportRetries(frameType: FrameType?) -> Bool {
+        frameType?.isReplayProne == true
     }
 
-    nonisolated static func batteryLevelStatusCharging(_ data: Data) -> Bool? {
+    nonisolated static func batteryLevelStatus(_ data: Data) -> BatteryStatus? {
         guard data.count >= 3 else { return nil }
         let powerState =
             UInt16(data[data.startIndex + 1])
@@ -49,17 +51,17 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         let chargeState = (powerState >> 5) & 0b11
         let hasExternalPower = wiredPower == 1 || wirelessPower == 1
 
-        if chargeState == 1 || hasExternalPower { return true }
-        if chargeState == 2 || chargeState == 3 { return false }
-        return nil
+        if chargeState == 1 || hasExternalPower { return .charging }
+        if chargeState == 2 || chargeState == 3 { return .notCharging }
+        return .unknown(rawValue: powerState)
     }
 
-    nonisolated static func legacyBatteryPowerStateCharging(_ data: Data) -> Bool? {
+    nonisolated static func legacyBatteryStatus(_ data: Data) -> BatteryStatus? {
         guard let powerState = data.first else { return nil }
         switch (powerState >> 4) & 0b11 {
-        case 3: return true
-        case 1, 2: return false
-        default: return nil
+        case 3: return .charging
+        case 1, 2: return .notCharging
+        default: return .unknown(rawValue: UInt16(powerState))
         }
     }
 
@@ -70,7 +72,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     ) -> Bool? {
         let bytes = [UInt8](data)
         guard bytes.count >= 20,
-            bytes[8] == 48,
+            FrameType(rawValue: bytes[8]) == .wristState,
             WhoopFrameIntegrity.isValid(data)
         else { return nil }
 
@@ -99,7 +101,6 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     private var heartRateCharacteristic: CBCharacteristic?
     private var batteryPowerStateCharacteristic: CBCharacteristic?
     private var batteryLevelStatusCharacteristic: CBCharacteristic?
-    private var hasExplicitChargingState = false
     private var lastObservedWristState: Bool?
     private var notifyCharacteristics: [CBCharacteristic] = []
     private var helloOutstanding = false
@@ -249,11 +250,10 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
 
     private func cacheBatteryLevel(_ level: Int) {
         let clampedLevel = min(max(level, 0), 100)
-        isCharging = WhoopBluetoothPolicy.inferredCharging(
+        batteryStatus = WhoopBluetoothPolicy.inferredBatteryStatus(
             previousLevel: batteryLevel,
             currentLevel: clampedLevel,
-            hasExplicitChargingState: hasExplicitChargingState,
-            currentChargingState: isCharging
+            currentStatus: batteryStatus
         )
         batteryLevel = clampedLevel
         UserDefaults.standard.set(clampedLevel, forKey: cachedBatteryLevelKey)
@@ -277,7 +277,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         resetConnectionSession()
         commandSequence = 1
         canAttemptHandshake = false
-        handshakeState = "Waiting for WHOOP 5"
+        handshakePhase = .waitingForDevice
         if let savedIdentifier = UserDefaults.standard.string(forKey: knownPeripheralKey),
             let uuid = UUID(uuidString: savedIdentifier),
             let known = central.retrievePeripherals(withIdentifiers: [uuid]).first
@@ -317,7 +317,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         let attemptID = UUID()
         helloAttemptID = attemptID
         canAttemptHandshake = false
-        handshakeState = "Writing CLIENT_HELLO"
+        handshakePhase = .writingClientHello
         record("Writing 16-byte CLIENT_HELLO with response to \(commandCharacteristic.uuid.uuidString)")
         peripheral.writeValue(clientHello, for: commandCharacteristic, type: .withResponse)
 
@@ -332,7 +332,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
             self.helloOutstanding = false
             self.helloAttemptID = nil
             self.handshakeTask = nil
-            self.handshakeState = "Handshake timed out; resetting connection"
+            self.handshakePhase = .timedOut
             self.record("CLIENT_HELLO had no write callback after 8 seconds; resetting the link")
             if let peripheral = self.peripheral {
                 self.central.cancelPeripheralConnection(peripheral)
@@ -352,8 +352,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         heartRateCharacteristic = nil
         batteryPowerStateCharacteristic = nil
         batteryLevelStatusCharacteristic = nil
-        hasExplicitChargingState = false
-        isCharging = false
+        batteryStatus = .unavailable
         notifyCharacteristics.removeAll(keepingCapacity: true)
         helloOutstanding = false
         helloAttemptID = nil
@@ -429,7 +428,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         guard !historicalSyncActive,
             let peripheral,
             peripheral.state == .connected,
-            handshakeState.hasPrefix("Acknowledged"),
+            handshakePhase.isAcknowledged,
             commandCharacteristic != nil
         else { return }
         historicalSyncActive = true
@@ -569,7 +568,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
                 guard !Task.isCancelled,
                     let self,
                     self.peripheral?.state == .connected,
-                    self.handshakeState.hasPrefix("Acknowledged")
+                    self.handshakePhase.isAcknowledged
                 else { continue }
                 self.record("30-second live-stream keepalive")
                 self.realtimeKeepaliveTask = nil
@@ -586,7 +585,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
             guard let self,
                 self.canAttemptHandshake,
                 !self.helloOutstanding,
-                self.handshakeState == "Ready"
+                self.handshakePhase.canAutomaticallyAttempt
             else { return }
             self.record("Automatically reopening the previously confirmed encrypted bond")
             self.attemptHandshake()
@@ -699,7 +698,7 @@ extension WhoopHandshakeProbe: @preconcurrency CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        if helloOutstanding { handshakeState = "Link dropped before CLIENT_HELLO acknowledgement" }
+        if helloOutstanding { handshakePhase = .disconnectedBeforeAcknowledgement }
         let detail = error?.localizedDescription ?? "no error"
         record(
             helloOutstanding
@@ -736,7 +735,7 @@ extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
             if characteristic.uuid == commandUUID {
                 commandCharacteristic = characteristic
                 canAttemptHandshake = characteristic.properties.contains(.write)
-                handshakeState = canAttemptHandshake ? "Ready" : "Confirmed writes unavailable"
+                handshakePhase = canAttemptHandshake ? .ready : .confirmedWritesUnavailable
             } else if characteristic.uuid == CBUUID(string: "2A37") {
                 heartRateCharacteristic = characteristic
                 if characteristic.properties.contains(.notify) || characteristic.properties.contains(.indicate) {
@@ -783,11 +782,11 @@ extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
         handshakeTask = nil
         canAttemptHandshake = true
         if let error {
-            handshakeState = "Refused: \(error.localizedDescription)"
+            handshakePhase = .refused(reason: error.localizedDescription)
             record("CLIENT_HELLO refused: \(error.localizedDescription)")
             central.cancelPeripheralConnection(peripheral)
         } else {
-            handshakeState = "Acknowledged — encrypted link established"
+            handshakePhase = .acknowledged
             UserDefaults.standard.set(true, forKey: confirmedBondKey)
             record("CLIENT_HELLO acknowledged; encrypted bond established")
             subscribeAfterHandshake()
@@ -837,21 +836,19 @@ extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
             cacheBatteryLevel(Int(level))
             record("Battery level: \(batteryLevel ?? 0)%")
         } else if uuid == batteryLevelStatusUUID,
-            let charging = Self.batteryLevelStatusCharging(data)
+            let status = Self.batteryLevelStatus(data)
         {
-            hasExplicitChargingState = true
-            isCharging = charging
-            record("Battery charging: \(charging ? "yes" : "no") (Battery Level Status)")
+            batteryStatus = status
+            record("Battery charging: \(status.isCharging ? "yes" : "no") (Battery Level Status)")
         } else if uuid == batteryPowerStateUUID,
-            let charging = Self.legacyBatteryPowerStateCharging(data)
+            let status = Self.legacyBatteryStatus(data)
         {
-            hasExplicitChargingState = true
-            isCharging = charging
-            record("Battery charging: \(charging ? "yes" : "no") (Battery Power State)")
+            batteryStatus = status
+            record("Battery charging: \(status.isCharging ? "yes" : "no") (Battery Power State)")
         } else if notifyUUIDs.contains(uuid) {
             receivedProprietaryPacketCount += 1
             let packetOrdinal = receivedProprietaryPacketCount
-            let frameType = data.count > 8 ? data[8] : nil
+            let frameType = data.count > 8 ? FrameType(rawValue: data[8]) : nil
             if let isWorn = Self.freshWhoop5WristState(data, receivedAt: deliveredAt),
                 isWorn != lastObservedWristState
             {
@@ -877,7 +874,7 @@ extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
                 newestHistoricalSampleAtInSync = sampleAt
                 lastHistoricalProgressAt = .now
             }
-            if metadataType == 1 {
+            if metadataType == .historyStart {
                 historicalSyncActive = true
                 newestHistoricalSampleAtInSync = nil
                 lastAcknowledgedHistoricalEndData = nil
@@ -900,7 +897,7 @@ extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
                 let needsMainActor =
                     !result.success
                     || historicalEndData != nil
-                    || metadataType == 3
+                    || metadataType == .historyComplete
                 guard needsMainActor else { return }
                 Task { @MainActor in
                     guard let self else { return }

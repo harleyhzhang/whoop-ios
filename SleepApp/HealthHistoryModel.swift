@@ -31,7 +31,11 @@ final class HealthHistoryModel: ObservableObject {
             records[index] = record
         } else {
             records.append(record)
-            records.sort { $0.dateKey < $1.dateKey }
+            records.sort { lhs, rhs in
+                guard let lhsKey = DayKey(rawValue: lhs.dateKey) else { return false }
+                guard let rhsKey = DayKey(rawValue: rhs.dateKey) else { return true }
+                return lhsKey < rhsKey
+            }
         }
         seriesCache.removeAll(keepingCapacity: true)
         dateCache[record.dateKey] = record.date

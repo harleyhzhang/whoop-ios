@@ -5,26 +5,26 @@ enum WhoopAutomaticSleepPolicy {
     static let reopenWindow: TimeInterval = 90 * 60
 
     static func reportsSleeping(
-        latestState: Int,
+        latestState: SleepState,
         secondsSinceLastAsleep: TimeInterval,
         latestSampleIsCurrent: Bool
     ) -> Bool {
         latestSampleIsCurrent
-            && (latestState == 2
-                || (latestState == 3 && secondsSinceLastAsleep < provisionalWakeDelay))
+            && (latestState == .asleep
+                || (latestState == .up && secondsSinceLastAsleep < provisionalWakeDelay))
     }
 
     static func canFinalize(
-        latestState: Int,
+        latestState: SleepState,
         secondsSinceLastAsleep: TimeInterval,
         latestSampleIsCurrent: Bool
     ) -> Bool {
         switch latestState {
-        case 0, 1:
+        case .awakePrimary, .awakeAlternate:
             return secondsSinceLastAsleep >= 0
-        case 3:
+        case .up:
             return latestSampleIsCurrent && secondsSinceLastAsleep >= provisionalWakeDelay
-        default:
+        case .asleep, .unknown:
             return false
         }
     }

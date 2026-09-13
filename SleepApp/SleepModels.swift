@@ -188,8 +188,9 @@ struct PublishedDashboardDay: Sendable {
         recoveryRecords: [DailyRecoveryRecord]
     ) {
         guard let health = healthRecords.last,
-            let steps = stepRecords.last(where: { $0.dateKey == health.dateKey }),
-            let recovery = recoveryRecords.last(where: { $0.dateKey == health.dateKey })
+            let dayKey = DayKey(rawValue: health.dateKey),
+            let steps = stepRecords.last(where: { DayKey(rawValue: $0.dateKey) == dayKey }),
+            let recovery = recoveryRecords.last(where: { DayKey(rawValue: $0.dateKey) == dayKey })
         else {
             self.health = nil
             self.steps = nil

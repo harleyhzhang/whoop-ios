@@ -91,7 +91,7 @@ struct WhoopDecodedRealtime: Sendable {
     static func decodeWhoop5Realtime(_ data: Data) -> WhoopDecodedRealtime? {
         let bytes = [UInt8](data)
         guard bytes.count >= 22,
-            bytes[8] == 40,
+            FrameType(rawValue: bytes[8]) == .realtimeHeartRate,
             WhoopFrameIntegrity.isValid(data)
         else { return nil }
         let count = min(Int(bytes[17]), (bytes.count - 22) / 2)
@@ -122,7 +122,7 @@ struct WhoopDecodedHistorical: Sendable {
     let sampleAt: Date
     let heartRate: Int
     let rrIntervals: [UInt16]
-    let sleepState: Int
+    let sleepState: SleepState
     /// Candidate WHOOP 5 motion fields retained with their wire-level meaning.
     /// The counter is cumulative and must be differenced with UInt16 wrapping;
     /// neither cadence nor class is assigned an invented physical unit.
@@ -136,7 +136,7 @@ struct WhoopDecodedHistorical: Sendable {
     static func decode(_ data: Data) -> WhoopDecodedHistorical? {
         let bytes = [UInt8](data)
         guard bytes.count == 124,
-            bytes[8] == 47,
+            FrameType(rawValue: bytes[8]) == .historicalSample,
             bytes[9] == 18,
             WhoopFrameIntegrity.isValid(data)
         else { return nil }
@@ -156,7 +156,7 @@ struct WhoopDecodedHistorical: Sendable {
             sampleAt: Date(timeIntervalSince1970: TimeInterval(timestamp)),
             heartRate: Int(bytes[22]),
             rrIntervals: intervals,
-            sleepState: Int((bytes[81] >> 4) & 3),
+            sleepState: SleepState(rawValue: Int((bytes[81] >> 4) & 3)),
             stepMotionCounter: UInt16(bytes[57]) | (UInt16(bytes[58]) << 8),
             stepCadenceRaw: bytes[59],
             motionClassRaw: bytes[63]
@@ -170,7 +170,9 @@ struct WhoopDecodedHistorical: Sendable {
         let bytes = [UInt8](data)
         guard bytes.count >= 10 else { return "shorter than 10 bytes" }
         if bytes.count != 124 { return "length \(bytes.count), expected 124" }
-        if bytes[8] != 47 { return "type \(bytes[8]), expected 47" }
+        if FrameType(rawValue: bytes[8]) != .historicalSample {
+            return "type \(bytes[8]), expected 47"
+        }
         if bytes[9] != 18 { return "version \(bytes[9]), expected 18" }
         if !WhoopFrameIntegrity.isValid(data) { return "CRC mismatch" }
         return "decodes"
@@ -264,7 +266,7 @@ struct WhoopStepDaySummary: Sendable, Equatable {
 }
 
 struct WhoopWakeBoundary: Sendable, Equatable {
-    let dateKey: String
+    let dateKey: DayKey
     let wokeAt: Date
 }
 
@@ -275,8 +277,8 @@ enum WhoopPhysiologicalDay {
     static func dateKey(
         for sampleAt: Date,
         publishedWakes: [WhoopWakeBoundary],
-        civilFallback: String
-    ) -> String {
+        civilFallback: DayKey
+    ) -> DayKey {
         var lower = 0
         var upper = publishedWakes.count
         while lower < upper {
@@ -303,7 +305,7 @@ struct WhoopDecodedPPG: Sendable, Equatable {
     static func decode(_ data: Data) -> WhoopDecodedPPG? {
         let bytes = [UInt8](data)
         guard bytes.count == 88,
-            bytes[8] == 47,
+            FrameType(rawValue: bytes[8]) == .historicalSample,
             bytes[9] == 26,
             bytes[21] != 0,
             WhoopFrameIntegrity.isValid(data)

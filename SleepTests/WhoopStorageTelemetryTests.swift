@@ -12,7 +12,7 @@ final class WhoopStorageTelemetryTests: XCTestCase {
             outcome: .unique,
             transactionNanoseconds: 750_000,
             queueWaitNanoseconds: 250_000,
-            frameType: 47,
+            frameType: .historicalSample,
             payloadBytes: 80,
             retryDetectionEnabled: true
         )
@@ -20,7 +20,7 @@ final class WhoopStorageTelemetryTests: XCTestCase {
             outcome: .retry,
             transactionNanoseconds: 6_000_000,
             queueWaitNanoseconds: 1_500_000,
-            frameType: 47,
+            frameType: .historicalSample,
             payloadBytes: 80,
             retryDetectionEnabled: true
         )
@@ -57,7 +57,7 @@ final class WhoopStorageTelemetryTests: XCTestCase {
                     outcome: index.isMultiple(of: 10) ? .retry : .unique,
                     transactionNanoseconds: UInt64(index + 1),
                     queueWaitNanoseconds: UInt64(index),
-                    frameType: 47,
+                    frameType: .historicalSample,
                     payloadBytes: 80,
                     retryDetectionEnabled: true
                 )
@@ -72,7 +72,7 @@ final class WhoopStorageTelemetryTests: XCTestCase {
             outcome: .unique,
             transactionNanoseconds: 500_000,
             queueWaitNanoseconds: 500_001,
-            frameType: 1,
+            frameType: .unknown(1),
             payloadBytes: 1,
             retryDetectionEnabled: true
         )
@@ -174,7 +174,7 @@ final class WhoopStorageTelemetryTests: XCTestCase {
             outcome: .unique,
             transactionNanoseconds: 2_000_000,
             queueWaitNanoseconds: 1_000_000,
-            frameType: 47,
+            frameType: .historicalSample,
             payloadBytes: 3,
             retryDetectionEnabled: true,
             now: startedAt
@@ -244,7 +244,7 @@ final class WhoopStorageTelemetryTests: XCTestCase {
             outcome: .unique,
             transactionNanoseconds: 1,
             queueWaitNanoseconds: 2,
-            frameType: 47,
+            frameType: .historicalSample,
             payloadBytes: 3,
             retryDetectionEnabled: true
         )
@@ -253,7 +253,7 @@ final class WhoopStorageTelemetryTests: XCTestCase {
             outcome: .retry,
             transactionNanoseconds: 4,
             queueWaitNanoseconds: 5,
-            frameType: 47,
+            frameType: .historicalSample,
             payloadBytes: 6,
             retryDetectionEnabled: true
         )
