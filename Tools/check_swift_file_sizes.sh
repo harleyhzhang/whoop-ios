@@ -14,7 +14,7 @@ while IFS= read -r swift_file; do
     echo "$swift_file has $line_count lines; split it below $maximum_lines lines." >&2
     violations=1
   fi
-done < <(rg --files SleepApp SleepTests -g '*.swift' | sort)
+done < <(find SleepApp SleepTests -type f -name '*.swift' -print | sort)
 
 if [ "$violations" -ne 0 ]; then
   exit 1

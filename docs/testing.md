@@ -4,25 +4,38 @@
 
 `Tools/verify_local.sh` is the single merge gate. It runs:
 
-1. strict `swift-format`, presentation/test Swift file-size budgets, shellcheck,
+1. the exact `Tools/toolchain.json` Xcode/SDK/runtime/formula contract;
+2. strict `swift-format`, presentation/test Swift file-size budgets, shellcheck,
    actionlint, Ruff, strict mypy, and Python tests;
-2. Xcode project-generation drift and phone-policy tests;
-3. tracked private-data checks plus gitleaks over history and the worktree;
-4. Swift unit and UI tests with zero failures and zero skips;
-5. a 58% line-coverage floor for the private-data-free `WHOOP.app` build;
-6. a Release simulator build and Xcode static analysis.
+3. generated Xcode/model-feature drift, documentation drift, and phone-policy tests;
+4. tracked private-data checks plus gitleaks over history and the worktree;
+5. Swift unit and UI tests with zero failures and zero skips;
+6. a 58% whole-app line-coverage floor plus higher file-specific floors for
+   scoring, protocol, persistence, and migration-critical modules;
+7. a Release simulator build and Xcode static analysis.
 
 The gate creates and deletes an isolated simulator per run, preventing an open
 development simulator or another test process from making CI flaky.
 
-Run it before every push:
+Use the warm-cache inner loop while editing:
+
+```bash
+Tools/check_fast.sh
+```
+
+It reuses `DerivedData-fast` and one `WHOOP Fast Loop` simulator and runs the
+unit target by default; pass an explicit Xcode `-only-testing:` selector to
+narrow or switch the test layer. The exhaustive gate deliberately reuses
+neither cache. Run it on the final clean commit:
 
 ```bash
 Tools/verify_local.sh
 ```
 
-The committed pre-push hook invokes this command. Install it with
-`Tools/install_git_hooks.sh`.
+The committed pre-push hook first looks for a successful gate attestation less
+than 24 hours old whose exact HEAD, Git tree, and observed toolchain fingerprint
+match. A miss runs the complete gate. CI always runs the gate and never trusts a
+developer-machine attestation. Install the hook with `Tools/install_git_hooks.sh`.
 
 ## Test layers
 
@@ -30,10 +43,12 @@ The committed pre-push hook invokes this command. Install it with
   migration, and state-machine unit/integration tests using synthetic data.
 - `SleepUITests`: critical dashboard behavior and diagnostic navigation under
   explicit mock launch environment values.
-- `ToolsTests`: Python feature construction and private-seed projection logic.
+- `ToolsTests`: Python feature construction, build-gate, model-promotion, and
+  private-seed projection logic.
 - `SleepPrivateTests`: opt-in checks against local personal models. Run with
   `Tools/verify_private_models.sh`; missing private inputs are failures here, not
-  skipped public tests.
+  skipped public tests. Its generated synthetic fixture is the same golden vector
+  consumed by Python, which catches feature-order drift across languages.
 - `Tools/verify_sanitizers.sh`: AddressSanitizer and ThreadSanitizer runs for
   risky memory, concurrency, persistence, or protocol changes.
 - `ToolsTests/test_phone_shipping.py`: deterministic private-asset contracts,

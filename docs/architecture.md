@@ -22,6 +22,13 @@ generation instead of exposing independently changing history families. Data
 contracts remain in `SleepModels.swift`, while scoring features and model
 bundles live in `ScoreModels.swift`.
 
+`Tools/model_features.json` is the single semantic feature-order manifest.
+`Tools/generate_model_features.py` deterministically emits the Swift and Python
+contracts plus one synthetic cross-language golden vector; the merge gate
+rejects generated drift. Private fitted artifacts are promoted only through
+`Tools/promote_private_models.sh`, which keeps chronological validation and
+runtime decoding ahead of the external private-file replacement boundary.
+
 `WhoopHandshakeApp` is the device and persistence layer:
 
 - `WhoopHandshakeProbe.swift` adapts CoreBluetooth callbacks and coordinates a
@@ -119,3 +126,6 @@ test protocol fixtures are constructed by `WhoopTestFrameFactory`.
 The large store integration suite is partitioned by migrations, packet
 persistence, sleep analysis, step materialization, recovery models, and
 dashboard behavior; shared SQLite/frame helpers live in `WhoopTestFixtures.swift`.
+`Tools/toolchain.json` is the exact accepted build environment. The warm-cache
+inner loop is intentionally separate from the isolated final gate; only a clean
+commit can cache a short-lived full-gate attestation, and CI ignores it.

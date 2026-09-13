@@ -8,6 +8,11 @@ The central rule is simple: source evidence is immutable, derived data is
 rebuildable, and UI projections never become the only surviving copy of a
 measurement.
 
+The current implementation contract is schema 10 and automatic-only sleep
+publication. There is no manual Process control or loading state: explicit
+awake evidence finalizes immediately, ambiguous `up` evidence waits ten
+minutes, and sleep returning within 90 minutes silently grows the same night.
+
 ## Data sources and authority
 
 Use every source that is available, but do not pretend that the sources are
@@ -47,8 +52,9 @@ overwrite official targets with model predictions.
 
 You need:
 
-- macOS with Xcode, Command Line Tools, Python 3.11 or later, Node.js, SQLite,
-  and `xcodegen`;
+- the exact Xcode build, iPhoneOS SDK, simulator runtime, Python, and Homebrew
+  formula versions recorded in `Tools/toolchain.json`; run
+  `Tools/doctor.sh --toolchain-only` before building;
 - an iPhone on which you can install a development-signed build;
 - a WHOOP account and personally owned WHOOP 5;
 - a WHOOP Developer app for the supported API path; and
@@ -409,7 +415,7 @@ python3 -m venv /private/path/whoop-model-venv
 /private/path/whoop-model-venv/bin/python \
   "$WORKSPACE/Tools/backtest_sleep_score.py" \
   "$PUBLIC_ARCHIVE" \
-  --model-output "$APP_SEED_ROOT/whoop-score-model.json"
+  --model-output /private/path/candidates/whoop-score-model.json
 ```
 
 The production feature contract uses only values available after cloud access
@@ -447,7 +453,7 @@ official daily Steps projection:
   "$WORKSPACE/Tools/backtest_recovery_score.py" \
   "$PUBLIC_ARCHIVE" \
   "$APP_SEED_ROOT/whoop-official-metrics.json" \
-  --model-output "$APP_SEED_ROOT/whoop-recovery-model.json"
+  --model-output /private/path/candidates/whoop-recovery-model.json
 ```
 
 The v1 feature contract has 169 values built only from signals the independent
@@ -478,6 +484,28 @@ history. Store model version, feature version, training count/date, validation
 metrics, every prediction input, confidence, component counterfactuals,
 baselines, and derivation time. A changed feature contract requires a new model
 version and a full rebuild; never silently reinterpret old rows.
+
+### Canonical model promotion
+
+The standalone trainers above are for experiments and candidate inspection;
+they must not overwrite the active private bundle. Promote the sleep/Recovery
+pair together with:
+
+```sh
+Tools/promote_private_models.sh \
+  --archive "$PUBLIC_ARCHIVE" \
+  --private-root "$APP_SEED_ROOT"
+```
+
+Add `--dry-run` to exercise every gate without replacing either file. The
+command reruns both chronological backtests, validates all numeric parameters
+for finiteness, enforces the exact model/feature versions and 50/169 feature
+counts, rejects MAE/RMSE/p90 error above the absolute or current-model
+regression limits in `Tools/model_promotion_policy.json`, checks the generated
+feature contract, runs the same synthetic Python/Swift golden vectors, and
+loads/predicts with the candidate bundles in `SleepPrivateTests`. Only after
+all checks pass does it replace the model pair, with rollback if the second
+replacement fails.
 
 ## 9. Rebuild, retry, and idempotency rules
 
@@ -697,10 +725,11 @@ xcrun devicectl device process launch \
 ```
 
 Installation can finish while the phone remains locked, but iOS will deny the
-launch until the device is unlocked. Unlock the phone or approve iPhone
-Mirroring, rerun only the launch command, and then continue with post-install
+launch until the device is unlocked. Unlock the phone, rerun only the launch or
+printed shipping-resume command, and then continue with post-install
 verification; do not uninstall/reinstall in response to this harmless launch
-denial because uninstalling would erase the retained container.
+denial because uninstalling would erase the retained container. iPhone
+Mirroring is not part of the shipping path.
 
 If command-line automatic signing reports that Xcode has no configured account
 but an appropriate development certificate and provisioning profile already

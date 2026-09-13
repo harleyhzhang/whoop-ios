@@ -29,6 +29,7 @@ from phone_shipping_core import (
     validate_private_assets,
     validate_recent_full_backup,
 )
+from toolchain import ToolchainError, load_contract, mismatches, observe
 
 MINIMUM_FREE_BYTES = {"fast": 3 * 1024**3, "full": 12 * 1024**3}
 MINIMUM_DEVICE_FREE_BYTES = {"fast": 512 * 1024**2, "full": 4 * 1024**3}
@@ -370,6 +371,7 @@ def doctor(
 ) -> DoctorResult:
     require_commands(
         (
+            "brew",
             "codesign",
             "git",
             "ideviceinfo",
@@ -379,8 +381,18 @@ def doctor(
             "xcodebuild",
             "xcodegen",
             "xcrun",
+            "uv",
         )
     )
+    try:
+        contract = load_contract(repo_root / "Tools/toolchain.json")
+        toolchain_problems = mismatches(contract, observe(contract, repo_root))
+    except (OSError, KeyError, ToolchainError, ValueError) as error:
+        raise ShippingError(f"Cannot validate the tested toolchain: {error}") from error
+    if toolchain_problems:
+        raise ShippingError(
+            "Toolchain differs from Tools/toolchain.json: " + "; ".join(toolchain_problems)
+        )
     if mode not in MINIMUM_FREE_BYTES:
         raise ShippingError(f"Unsupported doctor mode: {mode}")
     if repo_root in private_root.parents or private_root == repo_root:

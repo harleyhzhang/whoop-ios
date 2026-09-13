@@ -270,7 +270,10 @@ extension WhoopSleepStateTests {
             ),
             SQLITE_OK
         )
-        guard let checkpointConnection else { throw XCTSkip("Could not open checkpoint fixture") }
+        guard let checkpointConnection else {
+            XCTFail("Could not open checkpoint fixture")
+            return
+        }
         defer { sqlite3_close(checkpointConnection) }
         var logFrames: Int32 = 0
         var checkpointedFrames: Int32 = 0

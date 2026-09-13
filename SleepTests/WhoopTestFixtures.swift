@@ -45,7 +45,10 @@ extension WhoopSleepStateTests {
     ) throws {
         var database: OpaquePointer?
         XCTAssertEqual(sqlite3_open(databaseURL.path, &database), SQLITE_OK)
-        guard let database else { throw XCTSkip("Could not open SQLite fixture") }
+        guard let database else {
+            XCTFail("Could not open SQLite fixture")
+            return
+        }
         defer { sqlite3_close(database) }
         let sql = """
             INSERT INTO daily_health_metric
@@ -54,7 +57,10 @@ extension WhoopSleepStateTests {
             """
         var statement: OpaquePointer?
         XCTAssertEqual(sqlite3_prepare_v2(database, sql, -1, &statement, nil), SQLITE_OK)
-        guard let statement else { throw XCTSkip("Could not prepare SQLite fixture") }
+        guard let statement else {
+            XCTFail("Could not prepare SQLite fixture")
+            return
+        }
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_text(statement, 1, dateKey, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
         let wake = ISO8601DateFormatter().string(from: wokeAt)

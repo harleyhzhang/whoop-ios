@@ -16,17 +16,22 @@ from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
+from generated_model_features import (
+    SLEEP_AGREEMENT_WEIGHTS,
+    SLEEP_FEATURE_COUNT,
+    SLEEP_FEATURE_VERSION,
+)
 from sklearn.ensemble import ExtraTreesRegressor, GradientBoostingRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVR
 
-FEATURE_VERSION = "whoop_local_features_v1"
+FEATURE_VERSION = SLEEP_FEATURE_VERSION
 MODEL_VERSION = "whoop5_local_v5_score_staged_1"
 FOREST_WEIGHT = 0.75
 DIRECT_WEIGHT = 0.10
-RECENCY_WEIGHTS = (0.52, 0.27, 0.14, 0.07)
+RECENCY_WEIGHTS = SLEEP_AGREEMENT_WEIGHTS
 
 
 def load_records(path: Path) -> list[dict[str, Any]]:
@@ -149,7 +154,7 @@ def local_features(nights: list[dict[str, Any]], index: int) -> list[float]:
     values.append(
         sum(value * weight for value, weight in zip(agreements, RECENCY_WEIGHTS, strict=False))
     )
-    if len(values) != 50:
+    if len(values) != SLEEP_FEATURE_COUNT:
         raise RuntimeError(f"Feature contract changed unexpectedly: {len(values)}")
     return [float(value) for value in values]
 
@@ -276,6 +281,7 @@ def export_model(
     payload = {
         "version": MODEL_VERSION,
         "featureVersion": FEATURE_VERSION,
+        "featureCount": SLEEP_FEATURE_COUNT,
         "trainedNightCount": len(nights),
         "trainedThrough": nights[-1]["date"].isoformat(),
         "forwardValidation": validation,

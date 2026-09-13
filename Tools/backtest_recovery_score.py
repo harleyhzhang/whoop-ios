@@ -21,6 +21,7 @@ from typing import Any, cast
 
 import backtest_sleep_score as sleep_model
 import numpy as np
+from generated_model_features import RECOVERY_FEATURE_COUNT, RECOVERY_FEATURE_VERSION
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import Ridge
@@ -28,9 +29,9 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-FEATURE_VERSION = "whoop_local_recovery_features_v1"
+FEATURE_VERSION = RECOVERY_FEATURE_VERSION
 MODEL_VERSION = "whoop5_local_recovery_v1_gbt_ridge"
-FEATURE_COUNT = 169
+FEATURE_COUNT = RECOVERY_FEATURE_COUNT
 BOOSTED_WEIGHT = 0.70
 
 

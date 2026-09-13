@@ -26,6 +26,9 @@ for command_name in "${required_commands[@]}"; do
   fi
 done
 
+echo "Checking exact toolchain contract..."
+Tools/doctor.sh --toolchain-only
+
 export WHOOP_HISTORY_SEED_PATH="$derived_data_path/missing-whoop-history.json"
 export WHOOP_SCORE_MODEL_PATH="$derived_data_path/missing-whoop-score-model.json"
 export WHOOP_RECOVERY_MODEL_PATH="$derived_data_path/missing-whoop-recovery-model.json"
@@ -41,6 +44,7 @@ xcrun swift-format lint \
 
 echo "Checking Swift presentation and test file sizes..."
 Tools/check_swift_file_sizes.sh
+Tools/check_test_contract.sh
 
 echo "Checking shell scripts..."
 shellcheck Tools/*.sh .githooks/*
@@ -50,6 +54,12 @@ actionlint
 
 echo "Checking Python tools..."
 Tools/check_python.sh
+
+echo "Checking generated model feature contract..."
+uv run --frozen python Tools/generate_model_features.py --check
+
+echo "Checking documentation contract..."
+Tools/check_documentation.sh
 
 echo "Checking generated Xcode project..."
 Tools/check_project_generation.sh
@@ -66,12 +76,9 @@ Tools/test_embed_private_assets.sh
 echo "Checking private-data boundary and secrets..."
 Tools/check_private_data.sh
 
-runtime_id="$(
-  xcrun simctl list runtimes available -j \
-    | jq -r '[.runtimes[] | select(.isAvailable and (.name | startswith("iOS ")))] | sort_by(.version | split(".") | map(tonumber)) | last.identifier'
-)"
+runtime_id="$(jq -r '.simulatorRuntime.identifier' Tools/toolchain.json)"
 if [ -z "$runtime_id" ] || [ "$runtime_id" = "null" ]; then
-  echo "No available iOS Simulator runtime was found." >&2
+  echo "Tools/toolchain.json does not define a simulator runtime." >&2
   exit 1
 fi
 simulator_udid="$(
@@ -115,6 +122,7 @@ if ! awk -v actual="$coverage" -v minimum="$minimum_coverage" 'BEGIN { exit !(ac
   exit 1
 fi
 echo "WHOOP.app coverage: ${coverage}% (minimum ${minimum_coverage}%)."
+uv run --frozen python Tools/check_critical_coverage.py "$result_bundle_path"
 
 echo "Building Release for iOS Simulator..."
 xcodebuild build -quiet \
@@ -135,3 +143,6 @@ xcodebuild analyze -quiet \
   CODE_SIGNING_ALLOWED=NO
 
 echo "Local verification passed."
+if [ "${CI:-}" != "true" ]; then
+  uv run --frozen python Tools/full_gate_attestation.py record
+fi

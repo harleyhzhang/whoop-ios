@@ -6,11 +6,13 @@ check.
 
 ## Setup
 
-Requirements are the current Xcode selected by `xcode-select`, Homebrew, and an
-iOS Simulator. Install the remaining pinned tools and the local pre-push hook:
+`Tools/toolchain.json` is the exact tested Xcode build, iPhoneOS SDK, simulator
+runtime, Python, and Homebrew-formula contract. The Brewfile bootstraps named
+formulae but does not itself pin versions; the doctor fails closed on drift.
 
 ```bash
 brew bundle --file Brewfile
+Tools/doctor.sh --toolchain-only
 Tools/install_git_hooks.sh
 ```
 
@@ -25,7 +27,10 @@ Tools/install_git_hooks.sh
   tests, warning suppressions, or broad secret-scan exclusions as shortcuts.
 - Format Swift with `swift-format`; format and type-check Python through
   `Tools/check_python.sh`.
-- Run `Tools/verify_local.sh` and fix every failure before requesting review.
+- Use `Tools/check_fast.sh` for the warm-cache inner loop.
+- Run `Tools/verify_local.sh` on the final clean commit and fix every failure
+  before requesting review. The pre-push hook may reuse only a fresh attestation
+  for the exact HEAD, tree, and tested toolchain; CI never reuses local evidence.
 - For storage, concurrency, or unsafe-memory work, also run
   `Tools/verify_sanitizers.sh`.
 - Use `Tools/ship_phone.sh --commit <exact-merged-sha>` for every physical

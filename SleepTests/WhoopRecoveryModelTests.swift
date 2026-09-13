@@ -79,12 +79,12 @@ extension WhoopSleepStateTests {
             ))
 
         XCTAssertEqual(features.count, RecoveryScoreFeatureBuilder.featureCount)
-        XCTAssertEqual(features[50], 80)
-        XCTAssertEqual(features[51], 48)
-        XCTAssertEqual(features[52], 10_000)
-        XCTAssertEqual(features[54], 70)
-        XCTAssertEqual(features[55], 51)
-        XCTAssertEqual(features[89], 70)
+        XCTAssertEqual(features[GeneratedModelFeatures.Recovery.currentHRVIndex], 80)
+        XCTAssertEqual(features[GeneratedModelFeatures.Recovery.currentRHRIndex], 48)
+        XCTAssertEqual(features[GeneratedModelFeatures.Recovery.currentStepsIndex], 10_000)
+        XCTAssertEqual(features[GeneratedModelFeatures.Recovery.lag1HRVIndex], 70)
+        XCTAssertEqual(features[GeneratedModelFeatures.Recovery.lag1RHRIndex], 51)
+        XCTAssertEqual(features[GeneratedModelFeatures.Recovery.rolling7HRVMeanIndex], 70)
     }
 
     func testSerializedRecoveryModelBlendsAndBoundsPrediction() throws {
@@ -110,7 +110,7 @@ extension WhoopSleepStateTests {
             from: JSONSerialization.data(withJSONObject: payload)
         )
         var features = zeros
-        features[52] = .nan
+        features[GeneratedModelFeatures.Recovery.currentStepsIndex] = .nan
 
         let prediction = try XCTUnwrap(model.prediction(features))
 

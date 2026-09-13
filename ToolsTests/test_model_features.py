@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Any
 
 import backtest_recovery_score as recovery
 import backtest_sleep_score as sleep
 import numpy as np
+from generated_model_features import RECOVERY_FEATURE_NAMES, SLEEP_FEATURE_NAMES
 
 
 def night(day: date, target: float = 80) -> dict[str, Any]:
@@ -67,3 +70,30 @@ def test_metrics_report_exact_predictions() -> None:
     assert measured["rmse"] == 0
     assert measured["r2"] == 1
     assert measured["withinTwoPoints"] == 1
+
+
+def test_python_features_match_shared_golden_vectors() -> None:
+    fixture_path = (
+        Path(__file__).resolve().parents[1] / "SleepPrivateTests/Fixtures/model-feature-golden.json"
+    )
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    sleep_fixture = fixture["sleep"]
+    sleep_input = sleep_fixture["input"]
+    current = night(date.fromisoformat(sleep_input["dateKey"]), target=85)
+
+    sleep_features = sleep.local_features([current], 0)
+    assert sleep_fixture["featureNames"] == SLEEP_FEATURE_NAMES
+    assert np.allclose(sleep_features, sleep_fixture["features"], atol=1e-12)
+
+    recovery_fixture = fixture["recovery"]
+    recovery_input = recovery_fixture["input"]
+    current_day = current["date"]
+    recovery_features = recovery.recovery_features(
+        [current],
+        0,
+        {current_day: recovery_input["hrv"]},
+        {current_day: recovery_input["rhr"]},
+        {current_day: recovery_input["steps"]},
+    )
+    assert recovery_fixture["featureNames"] == RECOVERY_FEATURE_NAMES
+    assert np.allclose(recovery_features, recovery_fixture["features"], atol=1e-12)

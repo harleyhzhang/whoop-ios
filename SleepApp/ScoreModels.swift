@@ -9,8 +9,8 @@ struct SleepScoreNight: Sendable, Equatable {
 }
 
 enum SleepScoreFeatureBuilder {
-    static let version = "whoop_local_features_v1"
-    static let featureCount = 50
+    static let version = GeneratedModelFeatures.Sleep.version
+    static let featureCount = GeneratedModelFeatures.Sleep.featureCount
 
     static func features(current: SleepScoreNight, history: [SleepScoreNight]) -> [Double] {
         let currentKey = DayKey(rawValue: current.dateKey)
@@ -69,7 +69,9 @@ enum SleepScoreFeatureBuilder {
             )
         }
         values.append(contentsOf: agreements)
-        values.append(zip(agreements, [0.52, 0.27, 0.14, 0.07]).map(*).reduce(0, +))
+        values.append(
+            zip(agreements, GeneratedModelFeatures.Sleep.agreementWeights).map(*).reduce(0, +)
+        )
         precondition(values.count == featureCount)
         return values
     }
@@ -162,6 +164,7 @@ struct SleepScoreModelBundle: Decodable, Sendable {
 
     let version: String
     let featureVersion: String
+    let featureCount: Int
     let directWeight: Double
     let extraTreesWeight: Double
     let trees: [ExtraTree]
@@ -172,6 +175,7 @@ struct SleepScoreModelBundle: Decodable, Sendable {
 
     func prediction(_ features: [Double]) -> Prediction? {
         guard featureVersion == SleepScoreFeatureBuilder.version,
+            featureCount == SleepScoreFeatureBuilder.featureCount,
             features.count == SleepScoreFeatureBuilder.featureCount,
             !trees.isEmpty,
             let svrPrediction = svr.predict(features),
@@ -184,10 +188,15 @@ struct SleepScoreModelBundle: Decodable, Sendable {
         let directPrediction =
             extraTreesWeight * forestPrediction
             + (1 - extraTreesWeight) * svrPrediction
-        let sufficiency = min(100, features[0] / need * 100)
+        let sufficiency = min(
+            100,
+            features[GeneratedModelFeatures.Sleep.durationIndex] / need * 100
+        )
         guard
             let pillarPrediction = pillarSVR.predict([
-                sufficiency, consistency, features[1],
+                sufficiency,
+                consistency,
+                features[GeneratedModelFeatures.Sleep.efficiencyIndex],
             ])
         else { return nil }
         return Prediction(
@@ -216,8 +225,8 @@ struct SleepScoreModelBundle: Decodable, Sendable {
 }
 
 enum RecoveryScoreFeatureBuilder {
-    static let version = "whoop_local_recovery_features_v1"
-    static let featureCount = 169
+    static let version = GeneratedModelFeatures.Recovery.version
+    static let featureCount = GeneratedModelFeatures.Recovery.featureCount
 
     static func isEligibleHistoryRecord(_ record: DailyHealthRecord) -> Bool {
         DayKey(rawValue: record.dateKey) != nil && sleepNight(record) != nil
@@ -400,15 +409,16 @@ struct RecoveryScoreModelBundle: Decodable, Sendable {
         }
         return Prediction(
             score: min(99, max(0, full)),
-            confidence: input[52].isFinite ? 0.90 : 0.82,
-            hrvComponent: component(Self.hrvIndices),
-            rhrComponent: component(Self.rhrIndices),
-            sleepComponent: component(Self.sleepIndices),
-            stepsComponent: component(Self.stepsIndices),
-            hrvBaseline: prepared.indices.contains(129) ? prepared[129] : nil,
-            rhrBaseline: prepared.indices.contains(134) ? prepared[134] : nil,
-            sleepBaseline: prepared.indices.contains(144) ? prepared[144] : nil,
-            stepsBaseline: prepared.indices.contains(139) ? prepared[139] : nil
+            confidence: input[GeneratedModelFeatures.Recovery.currentStepsIndex].isFinite
+                ? 0.90 : 0.82,
+            hrvComponent: component(GeneratedModelFeatures.Recovery.hrvIndices),
+            rhrComponent: component(GeneratedModelFeatures.Recovery.rhrIndices),
+            sleepComponent: component(GeneratedModelFeatures.Recovery.sleepIndices),
+            stepsComponent: component(GeneratedModelFeatures.Recovery.stepsIndices),
+            hrvBaseline: prepared[GeneratedModelFeatures.Recovery.hrvBaselineIndex],
+            rhrBaseline: prepared[GeneratedModelFeatures.Recovery.rhrBaselineIndex],
+            sleepBaseline: prepared[GeneratedModelFeatures.Recovery.sleepBaselineIndex],
+            stepsBaseline: prepared[GeneratedModelFeatures.Recovery.stepsBaselineIndex]
         )
     }
 
@@ -417,32 +427,6 @@ struct RecoveryScoreModelBundle: Decodable, Sendable {
             let ridge = ridgeModel.predict(prepared)
         else { return nil }
         return boostedWeight * boosted + (1 - boostedWeight) * ridge
-    }
-
-    private static let hrvIndices = featureIndices(
-        current: [50], lagOffset: 54, rollingOffset: 89
-    )
-    private static let rhrIndices = featureIndices(
-        current: [51], lagOffset: 55, rollingOffset: 94
-    )
-    private static let stepsIndices = featureIndices(
-        current: [52], lagOffset: 56, rollingOffset: 99
-    )
-    private static let sleepIndices = featureIndices(
-        current: Array(0..<50) + [53], lagOffset: 57, rollingOffset: 104
-    )
-
-    private static func featureIndices(
-        current: [Int],
-        lagOffset: Int,
-        rollingOffset: Int
-    ) -> [Int] {
-        var indices = current
-        for lag in 0..<7 { indices.append(lagOffset + lag * 5) }
-        for window in 0..<4 {
-            indices.append(contentsOf: (rollingOffset + window * 20)..<(rollingOffset + window * 20 + 5))
-        }
-        return indices
     }
 
     static func load(from bundle: Bundle = .main) -> RecoveryScoreModelBundle? {
