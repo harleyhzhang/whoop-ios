@@ -221,6 +221,22 @@ def test_coredevice_app_process_file_and_lock_parsers() -> None:
     assert app.data_container_uuid == container
     assert app.version == "0.7.1"
     assert app.build == "13"
+    app_without_exposed_container = core.parse_app_info(
+        {
+            "result": {
+                "apps": [
+                    {
+                        "bundleIdentifier": core.BUNDLE_IDENTIFIER,
+                        "bundleVersion": "13",
+                        "version": "0.7.1",
+                        "url": "file:///private/var/containers/Bundle/Application/"
+                        "AABB8339-88AB-4DED-B1C5-1A80433B6C7C/WHOOP.app/",
+                    }
+                ]
+            }
+        }
+    )
+    assert app_without_exposed_container.data_container_uuid == ""
 
     process = {"result": {"runningProcesses": [{"name": "WHOOP", "pid": 1234}]}}
     assert core.find_process_id(process) == 1234
@@ -250,13 +266,30 @@ def test_coredevice_app_process_file_and_lock_parsers() -> None:
             "sleep.sqlite3-wal": core.FileStamp("sleep.sqlite3-wal", "now", 1),
         },
     )
-    assert core.parse_lock_state({"result": {"lockState": "locked"}}) is True
-    assert (
-        core.parse_available_storage(
-            {"result": {"deviceProperties": {"availableCapacity": 8 * 1024**3}}}
-        )
-        == 8 * 1024**3
+    actual_coredevice_shape = core.parse_file_stamps(
+        {
+            "result": {
+                "files": [
+                    {
+                        "metadata": {
+                            "lastModDate": "2026-09-12T20:01:00Z",
+                            "size": 321,
+                        },
+                        "name": "sleep.sqlite3-wal",
+                        "relativePath": "Library/Application Support/Sleep/sleep.sqlite3-wal",
+                    }
+                ]
+            }
+        }
     )
+    assert actual_coredevice_shape[
+        "Library/Application Support/Sleep/sleep.sqlite3-wal"
+    ] == core.FileStamp(
+        "Library/Application Support/Sleep/sleep.sqlite3-wal",
+        "2026-09-12T20:01:00Z",
+        321,
+    )
+    assert core.parse_lock_state({"result": {"lockState": "locked"}}) is True
 
 
 def test_profile_requires_bundle_team_device_and_future_expiration() -> None:
@@ -434,6 +467,44 @@ def test_real_schema_constant_and_commit_bound_build_number() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     assert environment.project_schema_version(repo_root) == 10
     assert environment.shipping_build_number("a" * 40) == str(int("a" * 12, 16))
+
+
+class StorageRunner(phone_shipping.CommandRunner):
+    def __init__(self) -> None:
+        super().__init__(verbose=False)
+        self.arguments: list[str] = []
+
+    def run(
+        self,
+        arguments: list[str],
+        *,
+        cwd: Path | None = None,
+        environment: dict[str, str] | None = None,
+        check: bool = True,
+        timeout: int | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, environment, check, timeout
+        self.arguments = arguments
+        return subprocess.CompletedProcess(arguments, 0, "97051308032\n", "")
+
+
+def test_phone_storage_uses_direct_network_disk_usage_query(tmp_path: Path) -> None:
+    runner = StorageRunner()
+    device = core.Device("CORE-1", "UDID-1", "IP", "iPhone", "27.0", "24A1", "")
+
+    available = environment.device_available_storage(runner, tmp_path, device)
+
+    assert available == 97_051_308_032
+    assert runner.arguments == [
+        "ideviceinfo",
+        "--network",
+        "--udid",
+        "UDID-1",
+        "--domain",
+        "com.apple.disk_usage",
+        "--key",
+        "AmountDataAvailable",
+    ]
 
 
 class RecordingRunner(phone_shipping.CommandRunner):

@@ -1,6 +1,7 @@
 brew "actionlint"
 brew "gitleaks"
 brew "jq"
+brew "libimobiledevice"
 brew "shellcheck"
 brew "uv"
 brew "xcodegen"

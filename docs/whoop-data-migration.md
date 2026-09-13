@@ -582,14 +582,19 @@ state file.
 - `none` means no production app code changed, so there is nothing to install.
 - `fast` is restricted to presentation-only changes in `RootView.swift` or the
   asset catalog. Reuse a recent integrity-checked full backup, install in place,
-  verify that CoreDevice reports the same data-container UUID, launch, confirm
-  the process remains alive, and confirm the database or WAL modification time
-  advances. Do not copy the complete database before or after this tier.
+  launch, confirm the process remains alive, and confirm the database or WAL
+  modification time advances. Do not copy the complete database before or after
+  this tier.
 - `full` covers any data store, schema, migration, model, collector, lifecycle,
   app identity, project configuration, or unclassified production change. Use
   the coherent pre/post snapshot procedure below. Connect the iPhone by USB
   when practical because CoreDevice otherwise transfers the entire database
   over Wi-Fi without delta compression.
+
+Current CoreDevice app inventory does not expose a physical data-container UUID.
+The command therefore proves preservation from the in-place install plus pre/post
+database, schema, integrity, foreign-key, file-hash, and raw-row checks; it does
+not depend on a private path identifier that iOS may rotate.
 
 The policy intentionally fails closed to `full` if the installed baseline is
 missing, unavailable, divergent, or ambiguous. A fast install is a verification

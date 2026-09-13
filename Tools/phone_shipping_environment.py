@@ -17,14 +17,12 @@ from phone_shipping_core import (
     AppInfo,
     AssetManifest,
     Device,
-    IntegrityError,
     ShippingError,
     SigningProfile,
     choose_device,
     load_json,
     object_dict,
     parse_app_info,
-    parse_available_storage,
     parse_profile,
     required_string,
     sha256,
@@ -284,13 +282,26 @@ def installed_app(
 
 
 def device_available_storage(runner: CommandRunner, scratch: Path, device: Device) -> int:
-    payload, _ = runner.devicectl_json(
-        ["device", "info", "details", "--device", device.identifier, "--timeout", "30"],
-        scratch,
+    del scratch
+    completed = runner.run(
+        [
+            "ideviceinfo",
+            "--network",
+            "--udid",
+            device.udid,
+            "--domain",
+            "com.apple.disk_usage",
+            "--key",
+            "AmountDataAvailable",
+        ],
+        timeout=30,
     )
-    available = parse_available_storage(payload) if payload is not None else None
-    if available is None:
-        raise ShippingError("CoreDevice did not report the iPhone's available storage.")
+    try:
+        available = int(completed.stdout.strip())
+    except ValueError as error:
+        raise ShippingError("ideviceinfo returned no valid iPhone free-space value.") from error
+    if available <= 0:
+        raise ShippingError("ideviceinfo reported no available iPhone storage.")
     return available
 
 
@@ -361,6 +372,7 @@ def doctor(
         (
             "codesign",
             "git",
+            "ideviceinfo",
             "jq",
             "security",
             "sqlite3",
@@ -401,16 +413,6 @@ def doctor(
         raise ShippingError(
             f"Only {device_available_bytes / 1024**3:.1f} GiB is free on the iPhone; "
             f"{mode} shipping requires at least {required_device_bytes / 1024**3:.1f} GiB."
-        )
-    recorded_container = state.get("dataContainerUUID")
-    if (
-        isinstance(recorded_container, str)
-        and recorded_container
-        and app.data_container_uuid != recorded_container.upper()
-    ):
-        raise IntegrityError(
-            f"Installed data container {app.data_container_uuid} does not match recorded "
-            f"container {recorded_container}."
         )
     if mode == "fast":
         validate_recent_full_backup(state)

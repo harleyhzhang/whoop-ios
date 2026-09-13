@@ -697,13 +697,11 @@ def parse_app_info(payload: object, bundle_identifier: str = BUNDLE_IDENTIFIER) 
                             break
                 if container_match is not None:
                     break
-        if container_match is None:
-            raise ShippingError(
-                f"Installed {bundle_identifier} has no readable data-container UUID."
-            )
         return AppInfo(
             bundle_identifier=found_bundle,
-            data_container_uuid=container_match.group(1).upper(),
+            data_container_uuid=(
+                container_match.group(1).upper() if container_match is not None else ""
+            ),
             version=string_value(
                 mapping, ("shortVersion", "bundleShortVersion", "marketingVersion", "version")
             ),
@@ -718,11 +716,17 @@ def parse_file_stamps(payload: object) -> dict[str, FileStamp]:
         path = string_value(mapping, ("path", "relativePath", "url", "fileURL", "name"))
         if not path or "sleep.sqlite3" not in path:
             continue
+        metadata_value = mapping.get("metadata")
+        metadata = metadata_value if isinstance(metadata_value, dict) else {}
         modified = string_value(
-            mapping,
+            {**metadata, **mapping},
             ("modifiedAt", "modificationDate", "lastModifiedDate", "fileModificationDate"),
         )
-        size_value = mapping.get("size", mapping.get("fileSize", 0))
+        if not modified:
+            modified = string_value(metadata, ("lastModDate",))
+        size_value = mapping.get(
+            "size", mapping.get("fileSize", metadata.get("size", metadata.get("fileSize", 0)))
+        )
         size = (
             int(size_value)
             if isinstance(size_value, int) and not isinstance(size_value, bool)
@@ -759,27 +763,6 @@ def find_process_id(payload: object, app_name: str = "WHOOP") -> int | None:
             if isinstance(value, int) and not isinstance(value, bool) and value > 0:
                 return value
     return None
-
-
-def parse_available_storage(payload: object) -> int | None:
-    candidates: list[int] = []
-    explicit_keys = {
-        "availableCapacity",
-        "availableDiskSpace",
-        "availableStorage",
-        "freeDiskSpace",
-        "freeStorage",
-    }
-    for mapping in nested_dicts(payload):
-        for key, value in mapping.items():
-            normalized = key.lower()
-            relevant = key in explicit_keys or (
-                ("available" in normalized or "free" in normalized)
-                and any(word in normalized for word in ("capacity", "disk", "storage"))
-            )
-            if relevant and isinstance(value, int) and not isinstance(value, bool) and value > 0:
-                candidates.append(value)
-    return max(candidates) if candidates else None
 
 
 def parse_lock_state(payload: object) -> bool | None:

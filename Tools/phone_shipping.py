@@ -85,7 +85,6 @@ def manifest_base(
         "mode": mode,
         "bundleIdentifier": BUNDLE_IDENTIFIER,
         "device": asdict(doctor_result.device),
-        "dataContainerUUIDBefore": doctor_result.app.data_container_uuid,
         "version": build.version,
         "build": build.build,
         "beforeFileStamps": {key: asdict(value) for key, value in before_stamps.items()},
@@ -141,10 +140,13 @@ def final_state(
 ) -> dict[str, object]:
     timestamp = iso_now()
     state = dict(old_state)
+    state.pop("dataContainerUUID", None)
     state.update(
         {
             "bundleIdentifier": BUNDLE_IDENTIFIER,
-            "dataContainerUUID": app.data_container_uuid,
+            "dataPreservationVerification": (
+                "backup-row-and-hash" if mode == "full" else "in-place-install-and-database-advance"
+            ),
             "deviceIdentifier": doctor_result.device.identifier,
             "deviceUDID": doctor_result.device.udid,
             "installedAt": timestamp,
@@ -198,12 +200,6 @@ def complete_after_install(
     mode = required_string(manifest, "mode", "shipping manifest")
     before_stamps = stamps_from_manifest(manifest.get("beforeFileStamps"))
     app = installed_app(runner, scratch, doctor_result.device)
-    expected_container = required_string(manifest, "dataContainerUUIDBefore", "shipping manifest")
-    if app.data_container_uuid != expected_container:
-        raise IntegrityError(
-            f"Data container changed from {expected_container} to {app.data_container_uuid}; "
-            "install state was not updated."
-        )
     if app.version != str(manifest.get("version", "")) or app.build != str(
         manifest.get("build", "")
     ):
@@ -254,7 +250,7 @@ def complete_after_install(
         manifest["postinstallBackup"] = backup_to_json(postinstall)
     atomic_write_json(manifest_path, manifest)
     print(f"status=installed\nmode={mode}\ncommit={commit}\nprocess={pid}")
-    print(f"dataContainerUUID={app.data_container_uuid}\nstate={state_path}")
+    print(f"dataPreservation=verified-{mode}\nstate={state_path}")
 
 
 def complete_or_request_resume(
@@ -577,7 +573,8 @@ def run_doctor(args: argparse.Namespace, runner: CommandRunner) -> None:
     print(
         f"status=ready\ndevice={result.device.identifier}\nudid={result.device.udid}\n"
         f"model={result.device.model}\nios={result.device.os_version} ({result.device.os_build})\n"
-        f"bundle={result.app.bundle_identifier}\ncontainer={result.app.data_container_uuid}\n"
+        f"bundle={result.app.bundle_identifier}\n"
+        "containerIdentity=not-exposed-by-coredevice\n"
         f"profile={result.signing_profile.name}\nteam={result.development_team}\n"
         f"identity={result.signing_profile.code_sign_identity}\n"
         f"xcode={result.xcode_version}\niphoneosSDK={result.iphoneos_sdk}\n"
