@@ -2966,10 +2966,15 @@ final class WhoopStore: Sendable {
         }
         sqlite3_finalize(statement)
         guard let latest = rows.last, execute("BEGIN IMMEDIATE") else { return }
-        let groups = Self.groupedAsleepRows(rows.filter { $0.sleepState == .asleep })
-        for group in groups {
+        let ranges = WhoopBackfillPlanner.indexedSleepRanges(
+            in: rows,
+            timestamp: { $0.timestamp },
+            isAsleep: { $0.sleepState == .asleep }
+        )
+        for range in ranges {
+            let session = Array(rows[range.sessionRange])
+            let group = range.asleepIndices.map { rows[$0] }
             guard let first = group.first, let last = group.last else { continue }
-            let session = rows.filter { $0.timestamp >= first.timestamp && $0.timestamp <= last.timestamp }
             let cadence = Self.cadenceSeconds(of: session)
             let candidate = SleepCandidate(
                 sessionRows: session,
@@ -3122,13 +3127,16 @@ final class WhoopStore: Sendable {
             return
         }
         let encoder = JSONEncoder()
-        for (index, record) in records.enumerated() {
+        var rollingHistory = WhoopRollingRecoveryHistory()
+        for record in records {
+            let features = RecoveryScoreFeatureBuilder.features(
+                current: record,
+                history: rollingHistory.records,
+                stepsByDate: stepsByDate
+            )
+            rollingHistory.append(record)
             guard
-                let features = RecoveryScoreFeatureBuilder.features(
-                    current: record,
-                    history: Array(records[..<index]),
-                    stepsByDate: stepsByDate
-                ), let prediction = model.prediction(features),
+                let features, let prediction = model.prediction(features),
                 let inputs = try? encoder.encode(features.map { $0.isFinite ? Optional($0) : nil }),
                 let inputJSON = String(data: inputs, encoding: .utf8)
             else { continue }

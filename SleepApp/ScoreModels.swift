@@ -219,6 +219,10 @@ enum RecoveryScoreFeatureBuilder {
     static let version = "whoop_local_recovery_features_v1"
     static let featureCount = 169
 
+    static func isEligibleHistoryRecord(_ record: DailyHealthRecord) -> Bool {
+        DayKey(rawValue: record.dateKey) != nil && sleepNight(record) != nil
+    }
+
     static func features(
         current: DailyHealthRecord,
         history: [DailyHealthRecord],
@@ -231,7 +235,7 @@ enum RecoveryScoreFeatureBuilder {
         else { return nil }
         guard let currentKey = DayKey(rawValue: current.dateKey) else { return nil }
         let eligible = history.compactMap { record -> (DailyHealthRecord, DayKey)? in
-            guard let key = DayKey(rawValue: record.dateKey), sleepNight(record) != nil else {
+            guard let key = DayKey(rawValue: record.dateKey), isEligibleHistoryRecord(record) else {
                 return nil
             }
             return (record, key)

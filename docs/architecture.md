@@ -39,6 +39,8 @@ while scoring features and model bundles live in `ScoreModels.swift`.
   pointers are explicitly non-Sendable; runtime queue preconditions guard every
   access.
 - `DashboardRepository.swift` owns read-only dashboard SQL and result mapping.
+- `WhoopBackfillPlanner.swift` owns bounded recovery history and the single-pass
+  sleep-range index used by model backfills.
 - `WhoopStore.swift` remains the persistence façade while schema migration,
   seed import, ingestion, step/sleep/recovery materialization, and diagnostics
   move behind focused collaborators one vertical slice at a time.
