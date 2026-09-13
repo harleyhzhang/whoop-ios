@@ -25,7 +25,7 @@ final class HealthHistoryModel: ObservableObject {
     }
 
     /// Applies one freshly derived night without waiting for the full reload, so
-    /// the dashboard can update on the frame after a manual process.
+    /// the dashboard can update immediately after automatic publication.
     func merge(_ record: DailyHealthRecord) {
         if let index = records.firstIndex(where: { $0.dateKey == record.dateKey }) {
             records[index] = record

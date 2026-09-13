@@ -27,7 +27,7 @@ while scoring features and model bundles live in `ScoreModels.swift`.
   typed `WhoopCommand` values are the only production owners of wire opcodes and
   payloads.
 - `WhoopProtocol.swift` owns frame integrity and pure protocol decoders.
-- `WhoopStoreModels.swift` owns persistence and process result contracts.
+- `WhoopStoreModels.swift` owns persistence, snapshot, and diagnostics contracts.
 - `WhoopStore.swift` owns SQLite schema/migrations, evidence persistence,
   decoding, projections, and snapshot queries.
 - `HandshakeView.swift` is diagnostic presentation only; collection is owned by

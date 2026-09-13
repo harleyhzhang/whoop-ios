@@ -232,30 +232,6 @@ final class WhoopSleepStateTests: XCTestCase {
         XCTAssertEqual(WhoopReconnectPolicy.delaySeconds(forAttempt: 100), 60)
     }
 
-    func testManualSleepProcessingAlwaysUsesCurrentOrFreshOffload() {
-        XCTAssertEqual(
-            WhoopHandshakeProbe.sleepProcessStart(
-                isConnected: true,
-                historicalSyncActive: true
-            ),
-            .waitForCurrentOffload
-        )
-        XCTAssertEqual(
-            WhoopHandshakeProbe.sleepProcessStart(
-                isConnected: true,
-                historicalSyncActive: false
-            ),
-            .startFreshOffload
-        )
-        XCTAssertEqual(
-            WhoopHandshakeProbe.sleepProcessStart(
-                isConnected: false,
-                historicalSyncActive: false
-            ),
-            .unavailable
-        )
-    }
-
     func testReplayIndexIsLimitedToReplayPronePacketClasses() {
         XCTAssertFalse(WhoopHandshakeProbe.shouldDeduplicateTransportRetries(frameType: nil))
         XCTAssertFalse(WhoopHandshakeProbe.shouldDeduplicateTransportRetries(frameType: 40))
@@ -433,12 +409,6 @@ final class WhoopSleepStateTests: XCTestCase {
         let snapshot = await sleepSnapshot(store: store, now: now)
 
         XCTAssertTrue(snapshot.isSleeping)
-        XCTAssertNotNil(snapshot.pendingSleep)
-        XCTAssertEqual(snapshot.pendingSleep?.startedAt, startedAt)
-        XCTAssertEqual(
-            snapshot.pendingSleep?.endedAt,
-            now.addingTimeInterval(-60)
-        )
     }
 
     func testAutomaticSleepPolicyFinalizesUpAfterTenMinutes() {
@@ -591,86 +561,6 @@ final class WhoopSleepStateTests: XCTestCase {
             provisionalRecord.sleepDurationMinutes ?? 0
         )
         XCTAssertEqual(correctedRecord.sleepEndAt, ISO8601DateFormatter().string(from: resumedUntil))
-    }
-
-    func testManualEndCapsLaterAsleepSamplesAndOverridesDetector() async throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let store = WhoopStore(
-            databaseURL: directory.appendingPathComponent("sleep.sqlite3"),
-            runBackgroundDecoding: false
-        )
-        defer { store.shutdownForTesting() }
-        let peripheral = UUID()
-        let manualEnd = Date(timeIntervalSince1970: 1_800_000_000)
-        let startedAt = manualEnd.addingTimeInterval(-(3 * 60 * 60 + 5 * 60))
-        let observedAt = manualEnd.addingTimeInterval(30 * 60)
-
-        for timestamp in stride(
-            from: startedAt.timeIntervalSince1970,
-            through: observedAt.timeIntervalSince1970,
-            by: 60
-        ) {
-            _ = try await append(
-                version18Frame(timestamp: UInt32(timestamp), sleepState: 2),
-                store: store,
-                peripheral: peripheral,
-                sessionID: nil
-            )
-        }
-
-        let snapshot = await sleepSnapshot(
-            store: store,
-            now: observedAt,
-            manualEndAt: manualEnd
-        )
-
-        XCTAssertFalse(snapshot.isSleeping)
-        XCTAssertEqual(snapshot.pendingSleep?.startedAt, startedAt)
-        XCTAssertEqual(snapshot.pendingSleep?.endedAt, manualEnd)
-        XCTAssertLessThanOrEqual(
-            snapshot.pendingSleep?.endedAt ?? .distantFuture,
-            manualEnd
-        )
-    }
-
-    func testPersistedManualEndKeepsLaterAsleepSamplesOutOfSession() async throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let store = WhoopStore(
-            databaseURL: directory.appendingPathComponent("sleep.sqlite3"),
-            runBackgroundDecoding: false
-        )
-        defer { store.shutdownForTesting() }
-        let peripheral = UUID()
-        let manualEnd = Date(timeIntervalSince1970: 1_800_000_000)
-        let startedAt = manualEnd.addingTimeInterval(-(3 * 60 * 60 + 5 * 60))
-        let observedAt = manualEnd.addingTimeInterval(30 * 60)
-
-        for timestamp in stride(
-            from: startedAt.timeIntervalSince1970,
-            through: observedAt.timeIntervalSince1970,
-            by: 60
-        ) {
-            _ = try await append(
-                version18Frame(timestamp: UInt32(timestamp), sleepState: 2),
-                store: store,
-                peripheral: peripheral,
-                sessionID: nil
-            )
-        }
-        XCTAssertTrue(
-            store.setManualSleepEndForTesting(
-                startedAt: startedAt,
-                endedAt: manualEnd
-            ))
-
-        let snapshot = await sleepSnapshot(store: store, now: observedAt)
-
-        XCTAssertFalse(snapshot.isSleeping)
-        XCTAssertEqual(snapshot.pendingSleep?.endedAt, manualEnd)
     }
 
     func testObservedAsleepRangesExcludeLongUpInterval() {
@@ -2073,13 +1963,11 @@ final class WhoopSleepStateTests: XCTestCase {
     private func sleepSnapshot(
         store: WhoopStore,
         now: Date,
-        manualEndAt: Date? = nil,
         allowAutomaticFinalization: Bool = false
     ) async -> WhoopSleepSnapshot {
         await withCheckedContinuation { continuation in
             store.refreshSleepSnapshot(
                 now: now,
-                manualEndAt: manualEndAt,
                 allowAutomaticFinalization: allowAutomaticFinalization
             ) {
                 continuation.resume(returning: $0)

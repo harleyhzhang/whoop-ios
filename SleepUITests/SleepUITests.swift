@@ -29,9 +29,8 @@ final class SleepUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Close"].exists)
     }
 
-    func testSleepProcessingHasNoRoutineCardOrLoadingState() {
+    func testDashboardHasNoManualSleepProcessingControls() {
         let app = configuredApplication()
-        app.launchEnvironment["WHOOP_MOCK_PENDING_SLEEP_MINUTES"] = "480"
         app.launch()
 
         XCTAssertTrue(app.staticTexts["Trends"].waitForExistence(timeout: 5))

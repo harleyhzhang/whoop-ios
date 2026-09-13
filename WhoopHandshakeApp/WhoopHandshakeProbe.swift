@@ -9,41 +9,15 @@ enum WhoopReconnectPolicy {
     }
 }
 
-enum WhoopSleepProcessStart: Equatable {
-    case unavailable
-    case waitForCurrentOffload
-    case startFreshOffload
-}
-
-private struct WhoopPendingSleepProcessRequest {
-    let candidate: WhoopPendingSleep?
-    let manualEndAt: Date
-}
-
 @MainActor
 final class WhoopHandshakeProbe: NSObject, ObservableObject {
-    private var bluetoothState = "Starting"
-    private var status = "Waiting for Bluetooth"
     @Published private(set) var deviceName = "—"
     @Published private(set) var handshakeState = "Waiting for WHOOP 5"
-    private var notificationState = "Not requested"
-    private var heartRate = "—"
     @Published private(set) var batteryLevel: Int?
     @Published private(set) var isCharging = false
     @Published private(set) var isSleeping = false
-    /// A detected main sleep that is not stored yet. The dashboard shows its
-    /// "Sleep detected" row exactly while this is non-nil.
-    @Published private(set) var pendingSleep: WhoopPendingSleep?
-    @Published private(set) var isProcessingSleep = false
-    @Published private(set) var sleepProcessFailure: String?
     @Published private(set) var lastConnectedAt: Date?
-    private var lastDataReceivedAt: Date?
     private var lastHeartRateReceivedAt: Date?
-    private var rrSummary = "—"
-    private var realtimeState = "Not armed"
-    private var proprietaryPacketCount = 0
-    private var persistedPacketCount = 0
-    private var latestPacket = "—"
     private var canAttemptHandshake = false
 
     var isConnected: Bool {
@@ -63,17 +37,6 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     nonisolated static func shouldDeduplicateTransportRetries(frameType: UInt8?) -> Bool {
         guard let frameType else { return false }
         return [36, 38, 47, 49, 50, 56].contains(frameType)
-    }
-
-    /// A manual Process request may never finalize from an earlier completion
-    /// marker. It either joins the offload already in flight or starts a fresh
-    /// one, so the calculation sees everything currently banked on the strap.
-    nonisolated static func sleepProcessStart(
-        isConnected: Bool,
-        historicalSyncActive: Bool
-    ) -> WhoopSleepProcessStart {
-        guard isConnected else { return .unavailable }
-        return historicalSyncActive ? .waitForCurrentOffload : .startFreshOffload
     }
 
     nonisolated static func batteryLevelStatusCharging(_ data: Data) -> Bool? {
@@ -143,8 +106,6 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     private var helloAttemptID: UUID?
     private var commandSequence: UInt8 = 1
     private var lastTelemetryCacheWriteAt: Date?
-    private var lastHeartRatePresentationAt: Date?
-    private var lastPacketPresentationAt: Date?
     private var receivedProprietaryPacketCount = 0
     private var realtimeKeepaliveTask: Task<Void, Never>?
     private var historicalRefreshTask: Task<Void, Never>?
@@ -160,14 +121,6 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     private var lastHistoricalAcknowledgementAt: Date?
     private var lastSleepAnalysisAt: Date?
     private var lastFinalizedSleepID: String?
-    /// Suppresses the pending row between an optimistic tap and the refresh that
-    /// observes the stored night, so it cannot flicker back in mid-animation.
-    private var optimisticallyProcessedSleepID: String?
-    /// A Process tap waiting for the in-flight historical offload to become a
-    /// coherent whole. It is retried exactly when HISTORY_COMPLETE is durable.
-    private var pendingProcessRequest: WhoopPendingSleepProcessRequest?
-    private var processFinalizationInFlight = false
-    private var processFailureResetTask: Task<Void, Never>?
     private let store = WhoopStore.shared
     private let knownPeripheralKey = "WhoopHandshakeProbe.knownPeripheralIdentifier"
     private let confirmedBondKey = "WhoopHandshakeProbe.confirmedEncryptedBond"
@@ -222,7 +175,6 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         if defaults.object(forKey: cachedHeartRateKey) != nil {
             let bpm = defaults.integer(forKey: cachedHeartRateKey)
             if bpm > 0 {
-                heartRate = "\(bpm) bpm"
                 lastHeartRateReceivedAt = defaults.object(forKey: cachedHeartRateDateKey) as? Date
             }
         }
@@ -257,7 +209,6 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 self.isSleeping = snapshot.isSleeping
-                self.applyPendingSleep(snapshot.pendingSleep)
                 if let record = snapshot.finalizedRecord,
                     record.sleepID != self.lastFinalizedSleepID
                 {
@@ -274,163 +225,26 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         }
     }
 
-    private func applyPendingSleep(_ pending: WhoopPendingSleep?) {
-        // A night that has just been processed optimistically stays hidden until
-        // the store stops reporting it, which is what actually settles the row.
-        if let optimisticallyProcessedSleepID {
-            guard pending?.sleepID != optimisticallyProcessedSleepID else {
-                pendingSleep = nil
-                return
-            }
-            self.optimisticallyProcessedSleepID = nil
-        }
-        pendingSleep = pending
-    }
-
-    /// Finishes the detected night only after the current or a newly requested
-    /// history offload reaches its durable completion marker. A prior complete
-    /// offload can be coherent but stale, so it is never enough for a new tap.
-    func processPendingSleep(manualEndAt: Date = .now) {
-        guard !isProcessingSleep else { return }
-        let candidate = pendingSleep
-        let start = Self.sleepProcessStart(
-            isConnected: isConnected,
-            historicalSyncActive: historicalSyncActive
-        )
-        guard start != .unavailable else {
-            sleepProcessFailure = "Reconnect WHOOP to finish"
-            AppHaptics.warning()
-            scheduleProcessFailureReset()
-            return
-        }
-
-        isProcessingSleep = true
-        sleepProcessFailure = nil
-        processFailureResetTask?.cancel()
-        optimisticallyProcessedSleepID = candidate?.sleepID
-        pendingProcessRequest = WhoopPendingSleepProcessRequest(
-            candidate: candidate,
-            manualEndAt: manualEndAt
-        )
-        pendingSleep = nil
-        AppHaptics.softImpact()
-
-        // If a sync is already active, HISTORY_COMPLETE will resume this exact
-        // request. Otherwise deliberately start a new sync before finalizing.
-        if start == .startFreshOffload {
-            beginHistoricalSync()
-        }
-    }
-
-    private func finalizeProcessRequest() {
-        guard !processFinalizationInFlight,
-            let request = pendingProcessRequest
-        else { return }
-        processFinalizationInFlight = true
-        store.finalizePendingSleep(endingAt: request.manualEndAt) { [weak self] result in
-            Task { @MainActor in
-                guard let self else { return }
-                self.processFinalizationInFlight = false
-                switch result {
-                case .success(let record):
-                    self.pendingProcessRequest = nil
-                    self.lastFinalizedSleepID = record.sleepID
-                    self.optimisticallyProcessedSleepID = record.sleepID
-                    self.pendingSleep = nil
-                    self.isProcessingSleep = false
-                    AppHaptics.success()
-                    WhoopHealthHistoryEvents.post(.dayPublished(record))
-                    self.refreshSleepSnapshot(force: true)
-
-                case .failure(.historyStillLoading):
-                    // Keep the tap pending. The existing collector/offload will
-                    // call us again only after its completion packet is stored.
-                    guard self.isConnected else {
-                        self.pendingProcessRequest = nil
-                        self.isProcessingSleep = false
-                        self.optimisticallyProcessedSleepID = nil
-                        self.pendingSleep = request.candidate
-                        self.sleepProcessFailure = "Reconnect WHOOP to finish"
-                        AppHaptics.warning()
-                        self.scheduleProcessFailureReset()
-                        return
-                    }
-                    self.refreshHistoricalData()
-
-                case .failure(let error):
-                    self.pendingProcessRequest = nil
-                    self.isProcessingSleep = false
-                    self.optimisticallyProcessedSleepID = nil
-                    self.pendingSleep = request.candidate
-                    self.sleepProcessFailure = error.message
-                    AppHaptics.warning()
-                    self.scheduleProcessFailureReset()
-                }
-            }
-        }
-    }
-
-    private func scheduleProcessFailureReset() {
-        processFailureResetTask?.cancel()
-        processFailureResetTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(6))
-            guard !Task.isCancelled else { return }
-            self?.sleepProcessFailure = nil
-        }
-    }
-
-    @discardableResult
-    private func cacheHeartRate(_ bpm: Int, receivedAt: Date = .now) -> Bool {
-        guard bpm > 0 else { return false }
-        let shouldPresent =
-            lastHeartRatePresentationAt.map {
-                receivedAt.timeIntervalSince($0) >= 2
-            } ?? true
-        if shouldPresent {
-            heartRate = "\(bpm) bpm"
-            lastHeartRateReceivedAt = receivedAt
-            lastHeartRatePresentationAt = receivedAt
-        }
-        presentDataReceived(at: receivedAt)
+    private func cacheHeartRate(_ bpm: Int, receivedAt: Date = .now) {
+        guard bpm > 0 else { return }
+        lastHeartRateReceivedAt = receivedAt
         guard lastTelemetryCacheWriteAt.map({ receivedAt.timeIntervalSince($0) >= 30 }) ?? true else {
-            return shouldPresent
+            return
         }
         let defaults = UserDefaults.standard
         defaults.set(bpm, forKey: cachedHeartRateKey)
         defaults.set(receivedAt, forKey: cachedHeartRateDateKey)
         lastTelemetryCacheWriteAt = receivedAt
-        return shouldPresent
     }
 
-    private func presentDataReceived(at receivedAt: Date = .now, force: Bool = false) {
-        guard force || lastDataReceivedAt.map({ receivedAt.timeIntervalSince($0) >= 2 }) ?? true else {
-            return
-        }
-        lastDataReceivedAt = receivedAt
-    }
-
-    private func presentProprietaryPacket(
+    private func recordProprietaryMetadataPacket(
         _ data: Data,
-        characteristicUUID: String,
-        force: Bool
+        characteristicUUID: String
     ) {
-        let now = Date()
-        guard force || lastPacketPresentationAt.map({ now.timeIntervalSince($0) >= 2 }) ?? true else {
-            return
-        }
-        lastPacketPresentationAt = now
-        proprietaryPacketCount = receivedProprietaryPacketCount
-        presentDataReceived(at: now, force: force)
-        let frameType = data.count > 8 ? data[8] : nil
-        latestPacket =
-            frameType.map { String(format: "Type 0x%02X · %d B", $0, data.count) }
-            ?? "Short frame (\(data.count) B)"
-        if force {
-            let preview = data.prefix(24).map { String(format: "%02X", $0) }.joined(separator: " ")
-            record(
-                "WHOOP metadata packet #\(receivedProprietaryPacketCount) on \(characteristicUUID), \(data.count) bytes: \(preview)\(data.count > 24 ? " …" : "")"
-            )
-        }
+        let preview = data.prefix(24).map { String(format: "%02X", $0) }.joined(separator: " ")
+        record(
+            "WHOOP metadata packet #\(receivedProprietaryPacketCount) on \(characteristicUUID), \(data.count) bytes: \(preview)\(data.count > 24 ? " …" : "")"
+        )
     }
 
     private func cacheBatteryLevel(_ level: Int) {
@@ -449,8 +263,7 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
 
     func startScan() {
         guard central.state == .poweredOn else {
-            status = "Bluetooth is not ready"
-            record("Scan requested while Bluetooth was \(bluetoothState)")
+            record("Scan requested while Bluetooth state was \(central.state.rawValue)")
             return
         }
         central.stopScan()
@@ -463,8 +276,6 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         peripheral = nil
         resetConnectionSession()
         commandSequence = 1
-        realtimeState = "Not armed"
-        latestPacket = "—"
         canAttemptHandshake = false
         handshakeState = "Waiting for WHOOP 5"
         if let savedIdentifier = UserDefaults.standard.string(forKey: knownPeripheralKey),
@@ -481,7 +292,6 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
             connect(first, description: "system-connected WHOOP")
             return
         }
-        status = "Scanning all nearby advertisements"
         record("Scanning for WHOOP 5 advertisements")
         central.scanForPeripherals(withServices: nil, options: nil)
     }
@@ -492,7 +302,6 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         UserDefaults.standard.set(candidate.identifier.uuidString, forKey: knownPeripheralKey)
         central.stopScan()
         deviceName = candidate.name ?? "WHOOP"
-        status = "Found \(description); connecting"
         record("Connecting to \(deviceName) [\(candidate.identifier.uuidString)] (\(description))")
         candidate.delegate = self
         central.connect(candidate)
@@ -509,7 +318,6 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         helloAttemptID = attemptID
         canAttemptHandshake = false
         handshakeState = "Writing CLIENT_HELLO"
-        status = "Attempting encrypted WHOOP 5 handshake"
         record("Writing 16-byte CLIENT_HELLO with response to \(commandCharacteristic.uuid.uuidString)")
         peripheral.writeValue(clientHello, for: commandCharacteristic, type: .withResponse)
 
@@ -525,7 +333,6 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
             self.helloAttemptID = nil
             self.handshakeTask = nil
             self.handshakeState = "Handshake timed out; resetting connection"
-            self.status = "Reconnecting after handshake timeout"
             self.record("CLIENT_HELLO had no write callback after 8 seconds; resetting the link")
             if let peripheral = self.peripheral {
                 self.central.cancelPeripheralConnection(peripheral)
@@ -572,7 +379,6 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         let attempt = reconnectAttempt
         reconnectAttempt += 1
         let delay = WhoopReconnectPolicy.delaySeconds(forAttempt: attempt)
-        status = "Reconnecting in \(Int(delay))s"
         record("Scheduling reconnect attempt \(attempt + 1) in \(Int(delay)) seconds after \(reason)")
         connectionRetryTask = Task { @MainActor [weak self, weak candidate] in
             try? await Task.sleep(for: .seconds(delay))
@@ -584,7 +390,6 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
                 candidate.state == .disconnected
             else { return }
             self.connectionRetryTask = nil
-            self.status = "Reconnecting automatically"
             self.record("Starting reconnect attempt \(attempt + 1)")
             self.central.connect(candidate)
         }
@@ -749,8 +554,6 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         let heartRateFrame = WhoopCommand.realtimeHeartRate(enabled: true).frame(
             sequence: commandSequence
         )
-        realtimeState = "Lightweight HR armed"
-        status = "Encrypted link active; lightweight HR armed"
         record(
             "Sending reversible TOGGLE_REALTIME_HR(1), seq \(commandSequence): \(heartRateFrame.map { String(format: "%02X", $0) }.joined(separator: " "))"
         )
@@ -793,52 +596,36 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
     private func applyState(_ state: CBManagerState) {
         switch state {
         case .poweredOn:
-            bluetoothState = "On"
             record("Bluetooth powered on")
             startScan()
         case .poweredOff:
             connectionRetryTask?.cancel()
             connectionRetryTask = nil
-            bluetoothState = "Off"
-            status = "Turn Bluetooth on"
             record("Bluetooth powered off")
         case .unauthorized:
-            bluetoothState = "Permission denied"
-            status = "Bluetooth permission is required"
+            record("Bluetooth permission denied")
         case .unsupported:
-            bluetoothState = "Unsupported"
+            record("Bluetooth unsupported")
         case .resetting:
-            bluetoothState = "Resetting"
+            record("Bluetooth resetting")
         case .unknown:
-            bluetoothState = "Starting"
+            record("Bluetooth state unknown")
         @unknown default:
-            bluetoothState = "Unknown"
+            record("Unrecognized Bluetooth state")
         }
     }
 
     @discardableResult
     private func parseHeartRate(_ data: Data) -> WhoopDecodedRealtime? {
         guard let measurement = WhoopDecodedRealtime.decodeStandardHeartRate(data) else { return nil }
-        let shouldPresent = cacheHeartRate(measurement.heartRate)
-        if shouldPresent {
-            rrSummary =
-                measurement.rrIntervals.isEmpty
-                ? "No R–R values"
-                : measurement.rrIntervals.map { "\($0) ms" }.joined(separator: ", ")
-        }
+        cacheHeartRate(measurement.heartRate)
         return measurement
     }
 
     @discardableResult
     private func parseWhoop5Packet(_ data: Data) -> WhoopDecodedRealtime? {
         guard let measurement = WhoopDecodedRealtime.decodeWhoop5Realtime(data) else { return nil }
-        let shouldPresent = cacheHeartRate(measurement.heartRate)
-        if shouldPresent {
-            rrSummary =
-                measurement.rrIntervals.isEmpty
-                ? "No R–R values"
-                : measurement.rrIntervals.map { "\($0) ms" }.joined(separator: ", ")
-        }
+        cacheHeartRate(measurement.heartRate)
         return measurement
     }
 
@@ -865,10 +652,8 @@ extension WhoopHandshakeProbe: @preconcurrency CBCentralManagerDelegate {
         UserDefaults.standard.set(restored.identifier.uuidString, forKey: knownPeripheralKey)
         record("CoreBluetooth restored WHOOP [\(restored.identifier.uuidString)] in state \(restored.state.rawValue)")
         if restored.state == .connected {
-            status = "Restored connection; discovering services"
             restored.discoverServices([whoop5Service, heartRateService, batteryService])
         } else {
-            status = "Restoring WHOOP connection"
             central.connect(restored)
         }
     }
@@ -902,14 +687,12 @@ extension WhoopHandshakeProbe: @preconcurrency CBCentralManagerDelegate {
         reconnectAttempt = 0
         resetConnectionSession()
         lastConnectedAt = .now
-        status = "Connected; discovering services"
         record("Connected; discovering WHOOP 5 and Heart Rate services")
         peripheral.discoverServices([whoop5Service, heartRateService, batteryService])
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         let detail = error?.localizedDescription ?? "unknown error"
-        status = "Connection failed: \(detail)"
         record("Connection failed: \(detail)")
         resetConnectionSession()
         scheduleReconnect(peripheral, reason: "connection failure")
@@ -923,7 +706,6 @@ extension WhoopHandshakeProbe: @preconcurrency CBCentralManagerDelegate {
                 ? "Disconnected with CLIENT_HELLO outstanding: \(detail)"
                 : "Disconnected: \(detail)")
         resetConnectionSession()
-        status = "Disconnected: \(detail)"
         scheduleReconnect(peripheral, reason: "disconnect")
     }
 }
@@ -931,7 +713,6 @@ extension WhoopHandshakeProbe: @preconcurrency CBCentralManagerDelegate {
 extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         if let error {
-            status = "Service discovery failed: \(error.localizedDescription)"
             record("Service discovery failed: \(error.localizedDescription)")
             central.cancelPeripheralConnection(peripheral)
             return
@@ -944,7 +725,6 @@ extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         if let error {
-            status = "Characteristic discovery failed: \(error.localizedDescription)"
             record("Characteristic discovery failed for \(service.uuid.uuidString): \(error.localizedDescription)")
             central.cancelPeripheralConnection(peripheral)
             return
@@ -992,7 +772,6 @@ extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
                 }
             }
         }
-        if commandCharacteristic != nil { status = "Ready for approved handshake" }
         if commandCharacteristic != nil { scheduleAutomaticHandshakeIfTrusted() }
     }
 
@@ -1005,12 +784,10 @@ extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
         canAttemptHandshake = true
         if let error {
             handshakeState = "Refused: \(error.localizedDescription)"
-            status = "Encrypted handshake failed"
             record("CLIENT_HELLO refused: \(error.localizedDescription)")
             central.cancelPeripheralConnection(peripheral)
         } else {
             handshakeState = "Acknowledged — encrypted link established"
-            status = "Encrypted link active"
             UserDefaults.standard.set(true, forKey: confirmedBondKey)
             record("CLIENT_HELLO acknowledged; encrypted bond established")
             subscribeAfterHandshake()
@@ -1021,16 +798,12 @@ extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
         _ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?
     ) {
         if let error {
-            notificationState = "Failed: \(error.localizedDescription)"
             record(
                 "Notification subscription failed for \(characteristic.uuid.uuidString): \(error.localizedDescription)")
             if notifyUUIDs.contains(characteristic.uuid) {
                 central.cancelPeripheralConnection(peripheral)
             }
         } else {
-            let active = notifyCharacteristics.filter(\.isNotifying).count
-            let hrActive = heartRateCharacteristic?.isNotifying == true
-            notificationState = "WHOOP \(active)/\(notifyCharacteristics.count); HR \(hrActive ? "on" : "off")"
             record("Notification state \(characteristic.uuid.uuidString): \(characteristic.isNotifying ? "on" : "off")")
         }
     }
@@ -1091,13 +864,9 @@ extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
             let metadata = WhoopHistoricalMetadata(data: data, frameType: frameType)
             let metadataType = metadata?.type
             let historicalEndData = metadata?.chunkEndData
-            presentProprietaryPacket(
-                data,
-                characteristicUUID: characteristicUUID,
-                force: metadata?.shouldForcePresentation(
-                    historicalSyncActive: historicalSyncActive
-                ) ?? false
-            )
+            if metadata?.shouldForcePresentation(historicalSyncActive: historicalSyncActive) == true {
+                recordProprietaryMetadataPacket(data, characteristicUUID: characteristicUUID)
+            }
             // Count only forward movement through decoded history. The
             // band may replay the same packet or chunk ending thousands of
             // times while waiting for an acknowledgement; treating those
@@ -1130,7 +899,6 @@ extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
             ) { [weak self] result in
                 let needsMainActor =
                     !result.success
-                    || packetOrdinal.isMultiple(of: 250)
                     || historicalEndData != nil
                     || metadataType == 3
                 guard needsMainActor else { return }
@@ -1140,20 +908,17 @@ extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
                         self.record("Failed to persist WHOOP packet #\(packetOrdinal); history was not acknowledged")
                         return
                     }
-                    if packetOrdinal.isMultiple(of: 250) {
-                        self.persistedPacketCount = max(self.persistedPacketCount, packetOrdinal)
-                    }
                     if let historicalEndData {
                         // The store queue is serial: reaching this completion proves every
                         // preceding raw and decoded sample in this chunk is durable.
                         _ = self.acknowledgeHistoricalChunk(endData: historicalEndData)
                     } else {
-                        let completionAction = WhoopBluetoothPolicy.historyCompletionAction(
-                            metadataType: metadataType,
-                            historicalSyncActive: self.historicalSyncActive,
-                            hasPendingProcess: self.pendingProcessRequest != nil
-                        )
-                        guard completionAction != .ignore else { return }
+                        guard
+                            WhoopBluetoothPolicy.shouldAnalyzeHistoryCompletion(
+                                metadataType: metadataType,
+                                historicalSyncActive: self.historicalSyncActive
+                            )
+                        else { return }
                         self.historicalSyncActive = false
                         self.historicalSessionID = nil
                         self.lastHistoricalProgressAt = nil
@@ -1167,14 +932,10 @@ extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
                         // is forbidden at chunk boundaries because that can
                         // publish duration before the rest of the night,
                         // HRV, and RHR have arrived.
-                        if completionAction == .finalizeManualProcess {
-                            self.finalizeProcessRequest()
-                        } else {
-                            self.refreshSleepSnapshot(
-                                force: true,
-                                allowAutomaticFinalization: true
-                            )
-                        }
+                        self.refreshSleepSnapshot(
+                            force: true,
+                            allowAutomaticFinalization: true
+                        )
                         self.scheduleHistoricalSync()
                     }
                 }

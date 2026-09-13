@@ -190,37 +190,23 @@ final class WhoopBluetoothPolicyTests: XCTestCase {
         XCTAssertFalse(complete.shouldForcePresentation(historicalSyncActive: false))
         XCTAssertTrue(complete.shouldForcePresentation(historicalSyncActive: true))
 
-        XCTAssertEqual(
-            WhoopBluetoothPolicy.historyCompletionAction(
+        XCTAssertFalse(
+            WhoopBluetoothPolicy.shouldAnalyzeHistoryCompletion(
                 metadataType: 2,
-                historicalSyncActive: true,
-                hasPendingProcess: true
-            ),
-            .ignore
+                historicalSyncActive: true
+            )
         )
-        XCTAssertEqual(
-            WhoopBluetoothPolicy.historyCompletionAction(
+        XCTAssertTrue(
+            WhoopBluetoothPolicy.shouldAnalyzeHistoryCompletion(
                 metadataType: 3,
-                historicalSyncActive: true,
-                hasPendingProcess: false
-            ),
-            .analyzeAutomatically
+                historicalSyncActive: true
+            )
         )
-        XCTAssertEqual(
-            WhoopBluetoothPolicy.historyCompletionAction(
+        XCTAssertFalse(
+            WhoopBluetoothPolicy.shouldAnalyzeHistoryCompletion(
                 metadataType: 3,
-                historicalSyncActive: false,
-                hasPendingProcess: true
-            ),
-            .finalizeManualProcess
-        )
-        XCTAssertEqual(
-            WhoopBluetoothPolicy.historyCompletionAction(
-                metadataType: 3,
-                historicalSyncActive: false,
-                hasPendingProcess: false
-            ),
-            .ignore
+                historicalSyncActive: false
+            )
         )
     }
 

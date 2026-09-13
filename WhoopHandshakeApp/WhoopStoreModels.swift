@@ -34,17 +34,6 @@ struct WhoopSleepSnapshot: Sendable {
     let isSleeping: Bool
     let sampleAt: Date?
     let finalizedRecord: DailyHealthRecord?
-    /// A main sleep the strap has detected but has not atomically stored with
-    /// all four primary metrics yet. Retained for diagnostics and non-routine
-    /// repair tooling; the dashboard intentionally does not surface it.
-    let pendingSleep: WhoopPendingSleep?
-}
-
-struct WhoopPendingSleep: Sendable, Equatable {
-    let sleepID: String
-    let startedAt: Date
-    let endedAt: Date
-    let durationMinutes: Double
 }
 
 /// A factual account of what the strap actually banked and how each gate judged
@@ -85,30 +74,6 @@ struct WhoopSleepSessionDiagnostics: Codable, Sendable {
     let storedSleepID: String?
     let storedSummary: String?
     let verdict: String
-}
-
-enum WhoopSleepProcessError: Error, Sendable {
-    case storeUnavailable
-    case noRecentData
-    case stillAsleep
-    case noSleepDetected
-    case insufficientEvidence
-    case historyStillLoading
-    case metricsStillLoading
-    case writeFailed
-
-    var message: String {
-        switch self {
-        case .storeUnavailable: return "Local store unavailable"
-        case .noRecentData: return "No recent strap data"
-        case .stillAsleep: return "Still asleep"
-        case .noSleepDetected: return "No sleep detected"
-        case .insufficientEvidence: return "Not enough data to score"
-        case .historyStillLoading: return "Still receiving sleep history"
-        case .metricsStillLoading: return "Still receiving sleep data"
-        case .writeFailed: return "Could not save"
-        }
-    }
 }
 
 struct WhoopLatestHeartRateSample: Sendable {
