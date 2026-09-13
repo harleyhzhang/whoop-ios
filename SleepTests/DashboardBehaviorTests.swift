@@ -115,6 +115,34 @@ extension WhoopSleepStateTests {
         XCTAssertGreaterThan(halfwayWidth, detailWidth)
     }
 
+    func testReleasedSelectionEasesTowardLatestAndFadesItsOverlay() {
+        XCTAssertEqual(
+            DashboardChartGeometry.returningPosition(from: 0.2, progress: 0),
+            0.2,
+            accuracy: 0.000_001
+        )
+        XCTAssertEqual(
+            DashboardChartGeometry.returningPosition(from: 0.2, progress: 0.5),
+            0.6,
+            accuracy: 0.000_001
+        )
+        XCTAssertEqual(
+            DashboardChartGeometry.returningPosition(from: 0.2, progress: 1),
+            1,
+            accuracy: 0.000_001
+        )
+        XCTAssertEqual(
+            DashboardChartGeometry.selectionOverlayOpacity(releaseProgress: 0),
+            1,
+            accuracy: 0.000_001
+        )
+        XCTAssertEqual(
+            DashboardChartGeometry.selectionOverlayOpacity(releaseProgress: 1),
+            0,
+            accuracy: 0.000_001
+        )
+    }
+
     func testHoldingChartMorphsEveryDailyPointIntoLine() {
         let start = Date(timeIntervalSinceReferenceDate: 0)
         let day: TimeInterval = 86_400
@@ -178,6 +206,28 @@ extension WhoopSleepStateTests {
         await state.runDetailTransition(generation: generation, reduceMotion: false)
 
         XCTAssertEqual(state.detailProgress, 1)
+    }
+
+    @MainActor
+    func testReleaseKeepsVisualSelectionUntilEndpointAnimationFinishes() async {
+        let state = DashboardChartState()
+        let date = Date(timeIntervalSinceReferenceDate: 123)
+        state.beginSelection(metric: .sleep, date: date, reduceMotion: true)
+
+        state.endSelection(metric: .sleep, reduceMotion: false)
+
+        XCTAssertNil(state.activeMetric)
+        XCTAssertEqual(state.releasingMetric, .sleep)
+        XCTAssertEqual(state.selectedDate, date)
+        XCTAssertEqual(state.releaseProgress, 0)
+        let generation = state.detailGeneration
+
+        await state.runDetailTransition(generation: generation, reduceMotion: false)
+
+        XCTAssertNil(state.releasingMetric)
+        XCTAssertNil(state.selectedDate)
+        XCTAssertEqual(state.releaseProgress, 1)
+        XCTAssertEqual(state.detailProgress, 0)
     }
 
     func testPublishedDashboardMetricsShareOneDayKey() throws {

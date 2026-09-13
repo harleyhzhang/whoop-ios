@@ -188,8 +188,10 @@ discipline, and the limits of historical recovery.
   restrained monotone rendering. The summary and daily line share one stable
   topology during the hold morph, and the complete-detail state lands on every
   retained daily value. Selection overlays a translucent future region after
-  the selected point, then adds the rule and dot. The headline and current-card
-  numbers use a brief restrained digit pop while retaining the previous value
+  the selected point, then adds the rule and dot. On release, the dot eases
+  along the settling curve to the latest endpoint while the selection overlay
+  fades and the passive summary returns. The headline and current-card numbers
+  use a brief restrained digit pop while retaining the previous value
   underneath; Reduce Motion makes the detail transition immediate and direct
   chart scrubbing does not replay the number animation.
 - Haptics are limited to selection ticks when the exact selected night changes.
