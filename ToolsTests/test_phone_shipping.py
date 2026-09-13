@@ -533,9 +533,11 @@ def test_real_schema_constant_and_commit_bound_build_number() -> None:
 
 
 class StorageRunner(phone_shipping.CommandRunner):
-    def __init__(self) -> None:
+    def __init__(self, returncode: int = 0, output: str = "97051308032\n") -> None:
         super().__init__(verbose=False)
         self.arguments: list[str] = []
+        self.returncode = returncode
+        self.output = output
 
     def run(
         self,
@@ -546,9 +548,10 @@ class StorageRunner(phone_shipping.CommandRunner):
         check: bool = True,
         timeout: int | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        del cwd, environment, check, timeout
+        del cwd, environment, timeout
         self.arguments = arguments
-        return subprocess.CompletedProcess(arguments, 0, "97051308032\n", "")
+        assert check is False
+        return subprocess.CompletedProcess(arguments, self.returncode, self.output, "unavailable")
 
 
 def test_phone_storage_uses_direct_network_disk_usage_query(tmp_path: Path) -> None:
@@ -568,6 +571,15 @@ def test_phone_storage_uses_direct_network_disk_usage_query(tmp_path: Path) -> N
         "--key",
         "AmountDataAvailable",
     ]
+
+
+def test_phone_storage_is_optional_when_legacy_network_query_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    runner = StorageRunner(returncode=255, output="")
+    device = core.Device("CORE-1", "UDID-1", "IP", "iPhone", "27.0", "24A1", "localNetwork")
+
+    assert environment.device_available_storage(runner, tmp_path, device) is None
 
 
 class RecordingRunner(phone_shipping.CommandRunner):

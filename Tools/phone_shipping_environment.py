@@ -61,7 +61,7 @@ class DoctorResult:
     xcode_version: str
     iphoneos_sdk: str
     available_bytes: int
-    device_available_bytes: int
+    device_available_bytes: int | None
 
 
 @dataclass(frozen=True)
@@ -296,7 +296,7 @@ def installed_app(
     return parse_app_info(payload, bundle_identifier)
 
 
-def device_available_storage(runner: CommandRunner, scratch: Path, device: Device) -> int:
+def device_available_storage(runner: CommandRunner, scratch: Path, device: Device) -> int | None:
     del scratch
     completed = runner.run(
         [
@@ -309,8 +309,11 @@ def device_available_storage(runner: CommandRunner, scratch: Path, device: Devic
             "--key",
             "AmountDataAvailable",
         ],
+        check=False,
         timeout=30,
     )
+    if completed.returncode != 0:
+        return None
     try:
         available = int(completed.stdout.strip())
     except ValueError as error:
@@ -388,7 +391,6 @@ def doctor(
             "brew",
             "codesign",
             "git",
-            "ideviceinfo",
             "jq",
             "security",
             "sqlite3",
@@ -440,7 +442,12 @@ def doctor(
     app = installed_app(runner, scratch, device)
     device_available_bytes = device_available_storage(runner, scratch, device)
     required_device_bytes = MINIMUM_DEVICE_FREE_BYTES[mode]
-    if device_available_bytes < required_device_bytes:
+    if device_available_bytes is None and mode == "migration":
+        raise ShippingError(
+            "Cannot verify free iPhone storage for a migration install; connect by USB "
+            "with a compatible device-info service."
+        )
+    if device_available_bytes is not None and device_available_bytes < required_device_bytes:
         raise ShippingError(
             f"Only {device_available_bytes / 1024**3:.1f} GiB is free on the iPhone; "
             f"{mode} shipping requires at least {required_device_bytes / 1024**3:.1f} GiB."
