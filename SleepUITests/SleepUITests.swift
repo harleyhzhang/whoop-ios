@@ -26,6 +26,7 @@ final class SleepUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["WHOOP 5.0"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Connected"].exists)
         XCTAssertTrue(app.staticTexts["73%"].exists)
+        XCTAssertTrue(app.staticTexts["Now"].exists)
         XCTAssertTrue(app.buttons["Close"].exists)
     }
 

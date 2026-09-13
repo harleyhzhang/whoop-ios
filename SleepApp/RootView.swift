@@ -5,10 +5,9 @@ struct RootView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("selectedHealthRange") private var selectedRange: HealthRange = .month
     @State private var chartState = DashboardChartState()
-    @State private var currentDate = Date()
     @State private var showsConnectionDetails = false
     @State private var history = HealthHistoryModel()
-    @ObservedObject var whoopCollector: WhoopHandshakeProbe
+    var whoopCollector: WhoopHandshakeProbe
 
     private var publishedDay: PublishedDashboardDay {
         PublishedDashboardDay(
@@ -16,10 +15,6 @@ struct RootView: View {
             stepRecords: history.snapshot.stepRecords,
             recoveryRecords: history.snapshot.recoveryRecords
         )
-    }
-
-    private var referenceDate: Date {
-        publishedDay.date ?? currentDate
     }
 
     private var availableRanges: [HealthRange] {
@@ -47,41 +42,8 @@ struct RootView: View {
     }
 
     var body: some View {
-        ZStack {
-            Color(uiColor: .systemGroupedBackground).ignoresSafeArea()
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    DashboardHeader(
-                        referenceDate: referenceDate,
-                        errorMessage: history.errorMessage,
-                        batteryLevel: batteryLevel,
-                        isCharging: isCharging,
-                        isConnected: isConnected,
-                        showConnectionDetails: { showsConnectionDetails = true }
-                    )
-                    SummaryGrid(day: publishedDay)
-                    RangePicker(selection: $selectedRange, availableRanges: availableRanges)
-
-                    ForEach(MetricKind.trendOrder, id: \.self) { metric in
-                        MetricTrendCard(
-                            metric: metric,
-                            series: metricSeries(for: metric),
-                            selectedRange: selectedRange,
-                            publishedDate: publishedDay.date,
-                            currentValue: metricValue(for: metric),
-                            chartState: chartState,
-                            seriesForRange: { range in
-                                metricSeries(for: metric, range: range)
-                            }
-                        )
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, 32)
-            }
-            .scrollIndicators(.hidden)
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            dashboard(currentDate: context.date)
         }
         .preferredColorScheme(.dark)
         .onChange(of: selectedRange) { oldRange, _ in
@@ -112,14 +74,12 @@ struct RootView: View {
                 WhoopStore.shared.flushStorageTelemetry()
                 return
             }
-            currentDate = .now
             history.reload()
             whoopCollector.refreshHistoricalData()
             WhoopStore.shared.writeSleepDiagnostics()
         }
         .onReceive(NotificationCenter.default.publisher(for: .whoopDailyHealthUpdated)) {
             notification in
-            currentDate = .now
             guard let update = notification.object as? WhoopHealthHistoryUpdate else {
                 history.reload()
                 return
@@ -131,25 +91,61 @@ struct RootView: View {
             }
             history.reload()
         }
-        .task {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(60))
-                currentDate = .now
-            }
-        }
         .sheet(isPresented: $showsConnectionDetails) {
             HandshakeView(probe: whoopCollector)
         }
     }
 
+    private func dashboard(currentDate: Date) -> some View {
+        let referenceDate = publishedDay.date ?? currentDate
+        return ZStack {
+            Color(uiColor: .systemGroupedBackground).ignoresSafeArea()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    DashboardHeader(
+                        referenceDate: referenceDate,
+                        errorMessage: history.errorMessage,
+                        batteryLevel: batteryLevel,
+                        isCharging: isCharging,
+                        isConnected: isConnected,
+                        showConnectionDetails: { showsConnectionDetails = true }
+                    )
+                    SummaryGrid(day: publishedDay)
+                    RangePicker(selection: $selectedRange, availableRanges: availableRanges)
+
+                    ForEach(MetricKind.trendOrder, id: \.self) { metric in
+                        MetricTrendCard(
+                            metric: metric,
+                            series: metricSeries(for: metric, currentDate: currentDate),
+                            selectedRange: selectedRange,
+                            publishedDate: publishedDay.date,
+                            currentValue: metricValue(for: metric),
+                            chartState: chartState,
+                            seriesForRange: { range in
+                                metricSeries(for: metric, range: range, currentDate: currentDate)
+                            }
+                        )
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 32)
+            }
+            .scrollIndicators(.hidden)
+        }
+    }
+
     private func metricSeries(
         for metric: MetricKind,
-        range: HealthRange? = nil
+        range: HealthRange? = nil,
+        currentDate: Date
     ) -> MetricSeries {
         history.metricSeries(
             for: metric,
             range: range ?? selectedRange,
-            referenceDate: (metric == .steps || metric == .recovery) ? currentDate : referenceDate
+            referenceDate: (metric == .steps || metric == .recovery)
+                ? currentDate : (publishedDay.date ?? currentDate)
         )
     }
 

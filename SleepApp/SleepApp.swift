@@ -46,7 +46,7 @@ final class SystemWhoopNotificationScheduler: WhoopNotificationScheduling {
 
 @main
 struct SleepApp: App {
-    @StateObject private var whoopCollector = WhoopHandshakeProbe()
+    @State private var whoopCollector = WhoopHandshakeProbe()
 
     init() {
         WhoopNotificationManager.shared.configure()
