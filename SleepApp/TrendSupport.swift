@@ -91,14 +91,81 @@ struct MorphingMetricPoint: Identifiable {
     let value: Double
 }
 
+struct ChartCurvePoint: Equatable {
+    let position: Double
+    let value: Double
+}
+
 enum ChartPointAlignment {
-    static func nearestCurvePoint(
-        to requestedPosition: Double,
+    /// Samples the same shape-preserving cubic topology used by the rendered
+    /// monotone line. Release markers must derive both coordinates from the
+    /// current curve instead of letting SwiftUI tween a straight chord between
+    /// two independently animated endpoints.
+    static func pointOnCurve(
+        at requestedPosition: Double,
         in points: [MorphingMetricPoint]
-    ) -> MorphingMetricPoint? {
-        points.min {
-            abs($0.position - requestedPosition) < abs($1.position - requestedPosition)
+    ) -> ChartCurvePoint? {
+        guard let first = points.first, let last = points.last else { return nil }
+        let position = min(max(requestedPosition, first.position), last.position)
+        guard points.count > 1 else {
+            return ChartCurvePoint(position: position, value: first.value)
         }
+
+        var widths: [Double] = []
+        var slopes: [Double] = []
+        widths.reserveCapacity(points.count - 1)
+        slopes.reserveCapacity(points.count - 1)
+        for index in 0..<(points.count - 1) {
+            let width = points[index + 1].position - points[index].position
+            widths.append(width)
+            slopes.append(
+                width > 0 ? (points[index + 1].value - points[index].value) / width : 0
+            )
+        }
+
+        var tangents = Array(repeating: 0.0, count: points.count)
+        tangents[0] = slopes[0]
+        tangents[points.count - 1] = slopes[slopes.count - 1]
+        if points.count > 2 {
+            for index in 1..<(points.count - 1) {
+                let before = slopes[index - 1]
+                let after = slopes[index]
+                guard before != 0, after != 0, before.sign == after.sign else { continue }
+
+                let previousWidth = widths[index - 1]
+                let nextWidth = widths[index]
+                let previousWeight = (2 * nextWidth) + previousWidth
+                let nextWeight = nextWidth + (2 * previousWidth)
+                tangents[index] =
+                    (previousWeight + nextWeight)
+                    / ((previousWeight / before) + (nextWeight / after))
+            }
+        }
+
+        let upperIndex =
+            points.firstIndex(where: { $0.position >= position }) ?? (points.count - 1)
+        guard upperIndex > 0 else {
+            return ChartCurvePoint(position: position, value: first.value)
+        }
+        let lowerIndex = upperIndex - 1
+        let width = widths[lowerIndex]
+        guard width > 0 else {
+            return ChartCurvePoint(position: position, value: points[upperIndex].value)
+        }
+
+        let progress = (position - points[lowerIndex].position) / width
+        let squared = progress * progress
+        let cubed = squared * progress
+        let lowerBasis = (2 * cubed) - (3 * squared) + 1
+        let lowerTangentBasis = cubed - (2 * squared) + progress
+        let upperBasis = (-2 * cubed) + (3 * squared)
+        let upperTangentBasis = cubed - squared
+        let value =
+            (lowerBasis * points[lowerIndex].value)
+            + (lowerTangentBasis * width * tangents[lowerIndex])
+            + (upperBasis * points[upperIndex].value)
+            + (upperTangentBasis * width * tangents[upperIndex])
+        return ChartCurvePoint(position: position, value: value)
     }
 }
 

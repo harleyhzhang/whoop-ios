@@ -55,7 +55,7 @@ extension WhoopSleepStateTests {
         XCTAssertEqual(ChartCurveSampler.resampledValues(from: year, count: 48).count, 48)
     }
 
-    func testChartMarkerSnapsToExactSmoothedCurveAnchor() throws {
+    func testChartMarkerSamplesSmoothedCurveBetweenAnchors() throws {
         let curve = [
             MorphingMetricPoint(id: 0, position: 0, value: 40),
             MorphingMetricPoint(id: 1, position: 0.25, value: 60),
@@ -65,12 +65,11 @@ extension WhoopSleepStateTests {
         ]
 
         let aligned = try XCTUnwrap(
-            ChartPointAlignment.nearestCurvePoint(to: 0.68, in: curve)
+            ChartPointAlignment.pointOnCurve(at: 0.625, in: curve)
         )
 
-        XCTAssertEqual(aligned.id, 3)
-        XCTAssertEqual(aligned.position, 0.75)
-        XCTAssertEqual(aligned.value, 80)
+        XCTAssertEqual(aligned.position, 0.625)
+        XCTAssertEqual(aligned.value, 62.5, accuracy: 0.000_001)
     }
 
     func testChartMarkerAlignmentPreservesCurveEndpoints() throws {
@@ -81,13 +80,41 @@ extension WhoopSleepStateTests {
         ]
 
         XCTAssertEqual(
-            try XCTUnwrap(ChartPointAlignment.nearestCurvePoint(to: 0, in: curve)).id,
-            0
+            try XCTUnwrap(ChartPointAlignment.pointOnCurve(at: 0, in: curve)).value,
+            40
         )
         XCTAssertEqual(
-            try XCTUnwrap(ChartPointAlignment.nearestCurvePoint(to: 1, in: curve)).id,
-            2
+            try XCTUnwrap(ChartPointAlignment.pointOnCurve(at: 1, in: curve)).value,
+            50
         )
+    }
+
+    func testReleasedMarkerFollowsSimultaneouslyMorphingCurveInsteadOfStraightChord() throws {
+        let start = Date(timeIntervalSinceReferenceDate: 0)
+        let day: TimeInterval = 86_400
+        let daily = [0.0, 100.0, 0.0].enumerated().map { index, value in
+            MetricPoint(date: start.addingTimeInterval(Double(index) * day), value: value)
+        }
+        let summary = [
+            MetricPoint(date: daily[0].date, value: 20),
+            MetricPoint(date: daily[2].date, value: 20),
+        ]
+        let currentCurve = DashboardChartGeometry.detailMorphingPoints(
+            in: MetricSeries(daily: daily, plotted: summary),
+            progress: 0.5
+        )
+        let currentPosition = DashboardChartGeometry.returningPosition(
+            from: 0,
+            progress: 0.5
+        )
+
+        let marker = try XCTUnwrap(
+            ChartPointAlignment.pointOnCurve(at: currentPosition, in: currentCurve)
+        )
+
+        XCTAssertEqual(marker.position, 0.5, accuracy: 0.000_001)
+        XCTAssertEqual(marker.value, 60, accuracy: 0.000_001)
+        XCTAssertNotEqual(marker.value, 10, "A straight endpoint chord would put the marker here")
     }
 
     func testHoldingChartRestoresOpaqueDailyHistory() {
