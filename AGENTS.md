@@ -26,25 +26,33 @@
   records success. Do not substitute an ad hoc Xcode, `devicectl`, or iPhone
   Mirroring flow. The internal classifier selects:
   - `none`: do not reinstall.
-  - `fast`: for presentation-only changes, verify a recent known-good full
+  - `fast`: for presentation-only changes, verify a recent known-good compact
     backup exists, install the exact merged build in place, launch it, and
     confirm the process plus database/WAL modification times advance. Current
     CoreDevice inventory does not expose a physical data-container UUID, so
     preservation is proved from in-place installation and content checks. Do
     not transfer the 1+ GB database.
-  - `full`: for storage, schema, migration, model, collector, lifecycle, bundle-
-    identity, build-system, or unclassified production changes, take coherent
-    suspended pre- and post-install snapshots and validate standalone SQLite
-    images. Prefer a wired CoreDevice connection for these large transfers.
-  The classifier fails closed to `full` when its baseline or classification is
-  uncertain. The shipping command owns suspension/resumption, coherent backup
-  validation, data-container preservation, and install-state updates. If it
+  - `protected`: for runtime, collector, or storage implementation changes that
+    do not alter schema or app identity, take one coherent preinstall snapshot,
+    then require the launched app's commit-bound database health attestation.
+  - `migration`: for schema, migration, signing, entitlement, project identity,
+    or uncertain changes, require USB and take coherent pre/post snapshots with
+    exact preserved-row comparison.
+  The classifier fails closed to `migration` when its baseline or classification
+  is uncertain. Snapshots retain one standalone database and required sidecars,
+  never the copied live database/WAL or recursive app migration backups. The
+  shipping command owns suspension/resumption, coherent backup validation,
+  manifest-driven retention, data preservation, and install-state updates. If it
   reports `needs-unlock` or `needs-verification`, rerun only its printed
   `--resume` command; never uninstall. Never commit its private state or backup
   manifests.
 - Run `Tools/verify_local.sh` before merging code changes. Hosted iOS CI is a
   manual fallback only; do not trigger it unless local verification is blocked
   or Harley explicitly requests a hosted run.
+- Use `Tools/ship_phone.sh --plan --commit <merged-sha>` to inspect pending
+  commits and the required install tier without connecting a phone. Batch
+  routine merged changes into one chosen checkpoint instead of reinstalling
+  every commit.
 - Treat `project.yml` as the source of truth for Xcode targets and build
   settings. Run `xcodegen generate` after changing it and commit the generated
   `Sleep.xcodeproj`; the local gate rejects drift.

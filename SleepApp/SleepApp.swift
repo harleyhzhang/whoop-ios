@@ -51,6 +51,7 @@ struct SleepApp: App {
     init() {
         WhoopNotificationManager.shared.configure()
         WhoopRuntimeDiagnostics.shared.start()
+        WhoopDeploymentHealthReporter.start()
     }
 
     var body: some Scene {

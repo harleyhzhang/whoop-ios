@@ -9,6 +9,7 @@ from pathlib import Path
 from phone_shipping_core import (
     BUNDLE_IDENTIFIER,
     BackupResult,
+    DeploymentHealthReport,
     Device,
     FileStamp,
     ShippingError,
@@ -19,6 +20,7 @@ from phone_shipping_core import (
     parse_file_stamps,
     parse_lock_state,
     validate_backup,
+    validate_deployment_health_report,
 )
 from phone_shipping_environment import CommandRunner
 
@@ -28,6 +30,12 @@ from phone_shipping_environment import CommandRunner
 # final WAL write.  A short settle interval produced coherent snapshots on the
 # physical device where immediate copies did not.
 BACKUP_SUSPEND_QUIESCE_SECONDS = 5
+BACKUP_REQUIRED_FILES = ("sleep.sqlite3", "whoop-official-archive.sqlite3")
+BACKUP_OPTIONAL_FILES = (
+    "sleep.sqlite3-wal",
+    "sleep.sqlite3-shm",
+    "storage-telemetry-v1.json",
+)
 
 
 def wait_for_backup_quiescence() -> None:
@@ -200,27 +208,10 @@ def take_backup(
         directory.chmod(0o700)
     try:
         with suspended_application(runner, scratch, device):
-            runner.devicectl_json(
-                [
-                    "device",
-                    "copy",
-                    "from",
-                    "--device",
-                    device.identifier,
-                    "--domain-type",
-                    "appDataContainer",
-                    "--domain-identifier",
-                    BUNDLE_IDENTIFIER,
-                    "--source",
-                    "Library/Application Support/Sleep",
-                    "--destination",
-                    str(raw_root),
-                    "--timeout",
-                    "1800",
-                ],
-                scratch,
-                timeout=1810,
-            )
+            for name in BACKUP_REQUIRED_FILES:
+                copy_app_file(runner, scratch, device, name, raw_root / name, required=True)
+            for name in BACKUP_OPTIONAL_FILES:
+                copy_app_file(runner, scratch, device, name, raw_root / name, required=False)
         result = validate_backup(raw_root, expected_schema, exact_schema)
         atomic_write_json(destination / "backup-result.json", backup_to_json(result))
         return result
@@ -229,6 +220,81 @@ def take_backup(
         if destination.exists() and not quarantine.exists():
             destination.rename(quarantine)
         raise
+
+
+def copy_app_file(
+    runner: CommandRunner,
+    scratch: Path,
+    device: Device,
+    name: str,
+    destination: Path,
+    *,
+    required: bool,
+) -> None:
+    _, completed = runner.devicectl_json(
+        [
+            "device",
+            "copy",
+            "from",
+            "--device",
+            device.identifier,
+            "--domain-type",
+            "appDataContainer",
+            "--domain-identifier",
+            BUNDLE_IDENTIFIER,
+            "--source",
+            f"Library/Application Support/Sleep/{name}",
+            "--destination",
+            str(destination),
+            "--timeout",
+            "1800",
+        ],
+        scratch,
+        check=required,
+        timeout=1810,
+    )
+    if required and (completed.returncode != 0 or not destination.is_file()):
+        raise ShippingError(f"CoreDevice did not copy required backup file {name}.")
+
+
+def fetch_deployment_health_report(
+    runner: CommandRunner,
+    scratch: Path,
+    device: Device,
+    expected_commit: str,
+    expected_schema: int,
+    expected_archive_hash: str,
+    timeout_seconds: int = 120,
+) -> DeploymentHealthReport:
+    destination = scratch / "deployment-health-v1.json"
+    deadline = time.monotonic() + timeout_seconds
+    last_error: ShippingError | None = None
+    while time.monotonic() < deadline:
+        destination.unlink(missing_ok=True)
+        copy_app_file(
+            runner,
+            scratch,
+            device,
+            "deployment-health-v1.json",
+            destination,
+            required=False,
+        )
+        if destination.is_file():
+            try:
+                return validate_deployment_health_report(
+                    destination,
+                    expected_commit,
+                    expected_schema,
+                    expected_archive_hash,
+                )
+            except ShippingError as error:
+                last_error = error
+        time.sleep(2)
+    detail = f" Last report error: {last_error}" if last_error is not None else ""
+    raise ShippingError(
+        "The installed app did not publish a valid deployment health report before timeout."
+        + detail
+    )
 
 
 def install_app(runner: CommandRunner, scratch: Path, device: Device, app_path: Path) -> None:

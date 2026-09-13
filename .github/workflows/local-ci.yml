@@ -10,6 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  checks: read
   contents: read
   pull-requests: read
 
@@ -74,5 +75,24 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Run canonical verification
+      - name: Run canonical pull-request verification
+        if: github.event_name != 'push'
         run: Tools/verify_local.sh
+
+      - name: Reuse exact pull-request result or verify main
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          uv run --frozen python Tools/check_main_ci_reuse.py
+          reuse_status=$?
+          set -e
+          if [ "$reuse_status" -eq 0 ]; then
+            exit 0
+          fi
+          if [ "$reuse_status" -ne 75 ]; then
+            exit "$reuse_status"
+          fi
+          echo "No exact trusted PR result; running the canonical gate."
+          Tools/verify_local.sh

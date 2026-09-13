@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import shlex
 import shutil
 import sys
@@ -9,15 +10,23 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
+from backup_retention import (
+    apply_retention,
+    plan_retention,
+    prune_build_caches,
+    purge_expired_retirements,
+)
 from phone_shipping_core import (
     BUNDLE_IDENTIFIER,
     AppInfo,
     BackupResult,
+    DeploymentHealthReport,
     DeviceUnavailable,
     FileStamp,
     IntegrityError,
     ShippingError,
     assert_database_rows_preserved,
+    assert_health_preserved,
     assert_preserved,
     atomic_write_json,
     backup_to_json,
@@ -32,6 +41,7 @@ from phone_shipping_core import (
 )
 from phone_shipping_device import (
     ResumeRequired,
+    fetch_deployment_health_report,
     install_app,
     launch_and_verify,
     prepare_launch_baseline,
@@ -51,6 +61,7 @@ from phone_shipping_environment import (
     project_schema_version,
     read_state,
     repository_root,
+    resolve_merged_commit,
     validate_staged_app,
 )
 from phone_shipping_environment import (
@@ -63,6 +74,7 @@ from phone_shipping_environment import (
 DEFAULT_PRIVATE_ROOT = Path.home() / "Documents/personal/data/whoop/app-seeds"
 DEFAULT_STATE_PATH = Path.home() / "Documents/personal/data/whoop/device-install-state.json"
 DEFAULT_BACKUP_ROOT = Path.home() / "Documents/personal/data/whoop/device-backups"
+DEFAULT_DERIVED_DATA = Path.home() / "Library/Caches/whoop-ios/device-derived-data"
 RESUME_EXIT_CODE = 75
 
 
@@ -137,6 +149,7 @@ def final_state(
     app: AppInfo,
     preinstall: BackupResult | None,
     postinstall: BackupResult | None,
+    health_report: DeploymentHealthReport | None,
 ) -> dict[str, object]:
     timestamp = iso_now()
     state = dict(old_state)
@@ -144,9 +157,11 @@ def final_state(
     state.update(
         {
             "bundleIdentifier": BUNDLE_IDENTIFIER,
-            "dataPreservationVerification": (
-                "backup-row-and-hash" if mode == "full" else "in-place-install-and-database-advance"
-            ),
+            "dataPreservationVerification": {
+                "fast": "in-place-install-and-database-advance",
+                "protected": "preinstall-backup-and-app-health-attestation",
+                "migration": "pre-post-backup-row-and-hash",
+            }[mode],
             "deviceIdentifier": doctor_result.device.identifier,
             "deviceUDID": doctor_result.device.udid,
             "installedAt": timestamp,
@@ -157,7 +172,7 @@ def final_state(
             "verifiedAt": timestamp,
         }
     )
-    if preinstall is not None and postinstall is not None:
+    if preinstall is not None:
         state["latestPreinstallBackup"] = {
             "path": preinstall.path,
             "quickCheck": preinstall.quick_check,
@@ -165,6 +180,7 @@ def final_state(
             "schemaVersion": preinstall.schema_version,
             "verifiedAt": timestamp,
         }
+    if postinstall is not None:
         state["latestPostinstallBackup"] = {
             "path": postinstall.path,
             "quickCheck": postinstall.quick_check,
@@ -173,6 +189,7 @@ def final_state(
             "hashes": postinstall.hashes,
             "verifiedAt": timestamp,
         }
+    if preinstall is not None and postinstall is not None:
         state["lastFullBackup"] = {
             "preinstall": preinstall.path,
             "postinstall": postinstall.path,
@@ -182,6 +199,18 @@ def final_state(
             "hashes": postinstall.hashes,
             "verifiedAt": timestamp,
         }
+    verified_backup = postinstall or preinstall
+    if verified_backup is not None:
+        state["lastVerifiedBackup"] = {
+            "path": verified_backup.path,
+            "quickCheck": verified_backup.quick_check,
+            "foreignKeyViolations": verified_backup.foreign_key_violations,
+            "schemaVersion": verified_backup.schema_version,
+            "hashes": verified_backup.hashes,
+            "verifiedAt": timestamp,
+        }
+    if health_report is not None:
+        state["latestDeploymentHealth"] = asdict(health_report)
     return state
 
 
@@ -209,9 +238,23 @@ def complete_after_install(
     pid = launch_and_verify(runner, scratch, doctor_result.device, before_stamps, manifest_path)
     preinstall: BackupResult | None = None
     postinstall: BackupResult | None = None
-    if mode == "full":
+    health_report: DeploymentHealthReport | None = None
+    if mode in {"protected", "migration"}:
         preinstall = backup_from_manifest(manifest.get("preinstallBackup"))
         validate_backup_result(preinstall)
+    if mode == "protected":
+        assert preinstall is not None
+        health_report = fetch_deployment_health_report(
+            runner,
+            scratch,
+            doctor_result.device,
+            commit,
+            project_schema_version(repo_root),
+            doctor_result.assets.hashes["whoop-official-archive.sqlite3"],
+        )
+        assert_health_preserved(preinstall, health_report)
+    elif mode == "migration":
+        assert preinstall is not None
         postinstall = take_backup(
             runner,
             scratch,
@@ -241,13 +284,22 @@ def complete_after_install(
         app,
         preinstall,
         postinstall,
+        health_report,
     )
     atomic_write_json(state_path, state)
+    try:
+        retention_plan = plan_retention(backup_root, state_path)
+        apply_retention(retention_plan, backup_root)
+        purge_expired_retirements(backup_root)
+    except (OSError, ShippingError, ValueError) as error:
+        print(f"warning: backup retention requires attention: {error}", file=sys.stderr)
     manifest["phase"] = "complete"
     manifest["completedAt"] = iso_now()
     manifest["processIdentifier"] = pid
     if postinstall is not None:
         manifest["postinstallBackup"] = backup_to_json(postinstall)
+    if health_report is not None:
+        manifest["deploymentHealth"] = asdict(health_report)
     atomic_write_json(manifest_path, manifest)
     print(f"status=installed\nmode={mode}\ncommit={commit}\nprocess={pid}")
     print(f"dataPreservation=verified-{mode}\nstate={state_path}")
@@ -373,6 +425,10 @@ def _run_ship_locked(
             }:
                 raise ShippingError("The shipping manifest is not awaiting verification.")
             mode = required_string(manifest, "mode", "shipping manifest")
+            if mode == "full":
+                mode = "migration"
+                manifest["mode"] = mode
+                atomic_write_json(manifest_path, manifest)
             device_mapping = object_dict(manifest.get("device"), "shipping manifest.device")
             requested_device = required_string(
                 device_mapping, "identifier", "shipping manifest.device"
@@ -460,84 +516,86 @@ def _run_ship_locked(
             print(f"status=dry-run\nmode={mode}\ncommit={commit}")
             return
         if args.derived_data:
-            derived_data_context: tempfile.TemporaryDirectory[str] | None = None
             derived_data = Path(args.derived_data).expanduser().resolve()
-            derived_data.mkdir(parents=True, exist_ok=True)
         else:
-            derived_data_context = tempfile.TemporaryDirectory(prefix="whoop-device-build.")
-            derived_data = Path(derived_data_context.name)
-        try:
-            build = build_app(
-                runner,
-                repo_root,
-                private_root,
-                doctor_result,
-                commit,
-                derived_data,
-            )
-            preinstall: BackupResult | None = None
-            if mode == "full":
-                preinstall = take_backup(
-                    runner,
-                    scratch,
-                    doctor_result.device,
-                    backup_root,
-                    "preinstall",
-                    commit,
-                    project_schema_version(repo_root),
-                    False,
-                )
-            shipping_runs = backup_root / "shipping-runs"
-            shipping_runs.mkdir(parents=True, exist_ok=True, mode=0o700)
-            shipping_runs.chmod(0o700)
-            run_root = shipping_runs / (f"{commit}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}")
-            run_root.mkdir(mode=0o700)
-            staged_app_path = run_root / "WHOOP.app"
-            shutil.copytree(build.app_path, staged_app_path, copy_function=shutil.copy2)
-            validate_staged_app(
-                runner,
-                staged_app_path,
-                doctor_result,
-                commit,
-                expected_version=build.version,
-                expected_build=build.build,
-            )
-            manifest_path = run_root / "manifest.json"
-            manifest = manifest_base(
-                commit,
-                mode,
-                doctor_result,
-                build,
-                {},
-                preinstall,
-                private_root,
-                state_path,
-                backup_root,
-                staged_app_path,
-            )
-            atomic_write_json(manifest_path, manifest)
-            install_and_transition(
+            toolchain = f"{doctor_result.xcode_version}|{doctor_result.iphoneos_sdk}"
+            cache_key = hashlib.sha256(toolchain.encode()).hexdigest()[:12]
+            derived_data = DEFAULT_DERIVED_DATA / cache_key
+        derived_data.mkdir(parents=True, exist_ok=True, mode=0o700)
+        derived_data.chmod(0o700)
+        build = build_app(
+            runner,
+            repo_root,
+            private_root,
+            doctor_result,
+            commit,
+            derived_data,
+        )
+        if not args.derived_data:
+            try:
+                prune_build_caches(DEFAULT_DERIVED_DATA, derived_data)
+            except (OSError, ShippingError) as error:
+                print(f"warning: device build-cache cleanup requires attention: {error}")
+        preinstall: BackupResult | None = None
+        if mode in {"protected", "migration"}:
+            preinstall = take_backup(
                 runner,
                 scratch,
-                doctor_result,
-                staged_app_path,
-                manifest_path,
-                manifest,
-            )
-            complete_or_request_resume(
-                runner,
-                repo_root,
-                private_root,
-                state_path,
+                doctor_result.device,
                 backup_root,
-                scratch,
-                manifest_path,
-                manifest,
-                doctor_result,
+                "preinstall",
+                commit,
+                project_schema_version(repo_root),
+                False,
             )
-        finally:
-            if derived_data_context is not None:
-                derived_data_context.cleanup()
+        shipping_runs = backup_root / "shipping-runs"
+        shipping_runs.mkdir(parents=True, exist_ok=True, mode=0o700)
+        shipping_runs.chmod(0o700)
+        run_root = shipping_runs / (f"{commit}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}")
+        run_root.mkdir(mode=0o700)
+        staged_app_path = run_root / "WHOOP.app"
+        shutil.copytree(build.app_path, staged_app_path, copy_function=shutil.copy2)
+        validate_staged_app(
+            runner,
+            staged_app_path,
+            doctor_result,
+            commit,
+            expected_version=build.version,
+            expected_build=build.build,
+        )
+        manifest_path = run_root / "manifest.json"
+        manifest = manifest_base(
+            commit,
+            mode,
+            doctor_result,
+            build,
+            {},
+            preinstall,
+            private_root,
+            state_path,
+            backup_root,
+            staged_app_path,
+        )
+        atomic_write_json(manifest_path, manifest)
+        install_and_transition(
+            runner,
+            scratch,
+            doctor_result,
+            staged_app_path,
+            manifest_path,
+            manifest,
+        )
+        complete_or_request_resume(
+            runner,
+            repo_root,
+            private_root,
+            state_path,
+            backup_root,
+            scratch,
+            manifest_path,
+            manifest,
+            doctor_result,
+        )
 
 
 def run_ship(args: argparse.Namespace, runner: CommandRunner) -> None:
@@ -585,6 +643,29 @@ def run_doctor(args: argparse.Namespace, runner: CommandRunner) -> None:
     )
 
 
+def run_plan(args: argparse.Namespace, runner: CommandRunner) -> None:
+    repo_root = repository_root()
+    state_path = Path(args.state).expanduser().resolve()
+    commit = resolve_merged_commit(runner, repo_root, args.commit)
+    state = read_state(state_path)
+    baseline = state.get("installedCommit")
+    classification = classify_install(runner, repo_root, commit, state_path)
+    pending = "unknown"
+    if isinstance(baseline, str) and baseline:
+        completed = runner.run(
+            ["git", "rev-list", "--count", f"{baseline}..{commit}"],
+            cwd=repo_root,
+            check=False,
+        )
+        if completed.returncode == 0:
+            pending = completed.stdout.strip()
+    print(
+        f"status=planned\ninstalledCommit={baseline or 'unknown'}\n"
+        f"targetCommit={commit}\npendingCommits={pending}\n"
+        f"mode={classification['mode']}\nreason={classification.get('reason', 'unknown')}"
+    )
+
+
 def run_validate_assets(args: argparse.Namespace) -> None:
     result = validate_private_assets(Path(args.private_root).expanduser().resolve())
     print(
@@ -605,7 +686,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor_parser = subparsers.add_parser("doctor", help="verify phone shipping prerequisites")
     add_paths(doctor_parser)
-    doctor_parser.add_argument("--mode", choices=("fast", "full"), default="full")
+    doctor_parser.add_argument(
+        "--mode", choices=("fast", "protected", "migration"), default="migration"
+    )
     doctor_parser.add_argument("--device")
 
     ship_parser = subparsers.add_parser("ship", help="build, install, launch, and verify")
@@ -615,6 +698,12 @@ def build_parser() -> argparse.ArgumentParser:
     ship_parser.add_argument("--derived-data")
     ship_parser.add_argument("--dry-run", action="store_true")
     ship_parser.add_argument("--resume")
+
+    plan_parser = subparsers.add_parser(
+        "plan", help="classify a merged checkpoint without requiring an iPhone"
+    )
+    plan_parser.add_argument("--commit", required=True)
+    plan_parser.add_argument("--state", default=str(DEFAULT_STATE_PATH))
 
     assets_parser = subparsers.add_parser("validate-assets", help="validate private inputs")
     assets_parser.add_argument("--private-root", default=str(DEFAULT_PRIVATE_ROOT))
@@ -627,6 +716,8 @@ def main() -> int:
     try:
         if args.command == "doctor":
             run_doctor(args, runner)
+        elif args.command == "plan":
+            run_plan(args, runner)
         elif args.command == "ship":
             run_ship(args, runner)
         else:

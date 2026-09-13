@@ -39,8 +39,10 @@ Tools/install_git_hooks.sh
 ## Pull requests
 
 Keep changes focused and explain the user-visible result, risks, tests, and any
-data migration. The automatic workflow runs the same canonical gate on a
-self-hosted Mac and does not spend GitHub-hosted macOS minutes. The hosted iOS
+data migration. The pull-request workflow runs the canonical gate on a
+self-hosted Mac and does not spend GitHub-hosted macOS minutes. The main-branch
+run reuses that result only when GitHub reports a successful trusted PR check
+for an identical Git tree; otherwise it reruns the full gate. The hosted iOS
 workflow must remain manual-only.
 
 Private health exports, databases, signing material, credentials, `.env` files,

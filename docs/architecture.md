@@ -157,7 +157,10 @@ persistence, sleep analysis, step materialization, recovery models, and
 dashboard behavior; shared SQLite/frame helpers live in `WhoopTestFixtures.swift`.
 `Tools/toolchain.json` is the exact accepted build environment. The warm-cache
 inner loop is intentionally separate from the isolated final gate; only a clean
-commit can cache a short-lived full-gate attestation, and CI ignores it.
+commit can cache a short-lived full-gate attestation, and pull-request CI ignores
+it. After merge, main CI reuses GitHub's successful PR result only when the
+protected check came from GitHub Actions and the main and PR commits have the
+exact same tree; every mismatch or API failure falls back to the full gate.
 SwiftLint's type-checked `unused_declaration` analyzer rejects new production
 dead code against a reviewed baseline. The file-size gate scans both app source
 trees and tests; inherited oversized coordinators may only shrink from their

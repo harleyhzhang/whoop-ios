@@ -27,12 +27,20 @@ from phone_shipping_core import (
     required_string,
     sha256,
     validate_private_assets,
-    validate_recent_full_backup,
+    validate_recent_backup,
 )
 from toolchain import ToolchainError, load_contract, mismatches, observe
 
-MINIMUM_FREE_BYTES = {"fast": 3 * 1024**3, "full": 12 * 1024**3}
-MINIMUM_DEVICE_FREE_BYTES = {"fast": 512 * 1024**2, "full": 4 * 1024**3}
+MINIMUM_FREE_BYTES = {
+    "fast": 3 * 1024**3,
+    "protected": 5 * 1024**3,
+    "migration": 8 * 1024**3,
+}
+MINIMUM_DEVICE_FREE_BYTES = {
+    "fast": 512 * 1024**2,
+    "protected": 1024**3,
+    "migration": 2 * 1024**3,
+}
 GIT_REPOSITORY_ENVIRONMENT_KEYS = (
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     "GIT_COMMON_DIR",
@@ -180,11 +188,7 @@ def assert_exact_merged_commit(runner: CommandRunner, repo_root: Path, requested
         raise ShippingError(
             "The repository is dirty; commit or remove every change before shipping."
         )
-    commit = runner.run(
-        ["git", "rev-parse", "--verify", f"{requested}^{{commit}}"],
-        cwd=repo_root,
-        environment=git_environment,
-    ).stdout.strip()
+    commit = resolve_merged_commit(runner, repo_root, requested)
     head = runner.run(
         ["git", "rev-parse", "HEAD"], cwd=repo_root, environment=git_environment
     ).stdout.strip()
@@ -192,11 +196,21 @@ def assert_exact_merged_commit(runner: CommandRunner, repo_root: Path, requested
         raise ShippingError(
             f"HEAD is {head}; check out the requested commit {commit} before shipping."
         )
+    return commit
+
+
+def resolve_merged_commit(runner: CommandRunner, repo_root: Path, requested: str) -> str:
+    git_environment = isolated_git_environment()
     runner.run(
         ["git", "fetch", "origin", "main", "--prune"],
         cwd=repo_root,
         environment=git_environment,
     )
+    commit = runner.run(
+        ["git", "rev-parse", "--verify", f"{requested}^{{commit}}"],
+        cwd=repo_root,
+        environment=git_environment,
+    ).stdout.strip()
     merged = runner.run(
         ["git", "merge-base", "--is-ancestor", commit, "origin/main"],
         cwd=repo_root,
@@ -226,7 +240,7 @@ def classify_install(
         key, separator, value = line.partition("=")
         if separator:
             result[key] = value
-    if result.get("mode") not in {"none", "fast", "full"}:
+    if result.get("mode") not in {"none", "fast", "protected", "migration"}:
         raise ShippingError("The phone install classifier returned no valid mode.")
     return result
 
@@ -418,6 +432,11 @@ def doctor(
         recorded_device if isinstance(recorded_device, str) and recorded_device else None
     )
     device = choose_device(list_devices(runner, scratch), effective_device)
+    if mode == "migration" and device.transport.lower() not in {"usb", "wired"}:
+        raise ShippingError(
+            "Migration shipping requires a wired USB CoreDevice connection; "
+            f"current transport is {device.transport or 'unknown'}."
+        )
     app = installed_app(runner, scratch, device)
     device_available_bytes = device_available_storage(runner, scratch, device)
     required_device_bytes = MINIMUM_DEVICE_FREE_BYTES[mode]
@@ -427,7 +446,7 @@ def doctor(
             f"{mode} shipping requires at least {required_device_bytes / 1024**3:.1f} GiB."
         )
     if mode == "fast":
-        validate_recent_full_backup(state)
+        validate_recent_backup(state)
     development_team = project_development_team(repo_root)
     profile = discover_signing_profile(runner, device, development_team)
     return DoctorResult(

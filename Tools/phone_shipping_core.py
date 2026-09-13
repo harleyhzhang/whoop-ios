@@ -6,6 +6,7 @@ import math
 import os
 import plistlib
 import re
+import shutil
 import sqlite3
 import tempfile
 from collections.abc import Iterator
@@ -79,6 +80,7 @@ class Device:
     os_version: str
     os_build: str
     last_connection: str
+    transport: str = ""
 
 
 @dataclass(frozen=True)
@@ -113,6 +115,17 @@ class BackupResult:
     foreign_key_violations: int
     table_counts: dict[str, int]
     hashes: dict[str, str]
+
+
+@dataclass(frozen=True)
+class DeploymentHealthReport:
+    source_commit: str
+    generated_at: str
+    schema_version: int
+    quick_check: str
+    foreign_key_violations: int
+    table_counts: dict[str, int]
+    official_archive_sha256: str
 
 
 @dataclass(frozen=True)
@@ -253,6 +266,73 @@ def assert_preserved(preinstall: BackupResult, postinstall: BackupResult) -> Non
             )
 
 
+def validate_deployment_health_report(
+    path: Path,
+    expected_commit: str,
+    expected_schema: int,
+    expected_archive_hash: str,
+) -> DeploymentHealthReport:
+    payload = object_dict(load_json(path, "deployment health report"), "deployment health report")
+    if payload.get("formatVersion") != 1:
+        raise IntegrityError("Deployment health report has an unsupported format version.")
+    source_commit = required_string(payload, "sourceCommit", "deployment health report").lower()
+    if (
+        source_commit != expected_commit.lower()
+        or re.fullmatch(r"[0-9a-f]{40}", source_commit) is None
+    ):
+        raise IntegrityError("Deployment health report does not belong to the installed commit.")
+    schema_version = required_int(payload, "schemaVersion", "deployment health report")
+    if schema_version != expected_schema:
+        raise IntegrityError(
+            f"Installed schema is {schema_version}; expected exactly {expected_schema}."
+        )
+    quick_check = required_string(payload, "quickCheck", "deployment health report")
+    foreign_keys = required_int(payload, "foreignKeyViolations", "deployment health report")
+    if quick_check != "ok" or foreign_keys != 0:
+        raise IntegrityError(
+            f"Installed database failed health checks (quick={quick_check}, "
+            f"foreignKeys={foreign_keys})."
+        )
+    archive_hash = required_string(
+        payload, "officialArchiveSHA256", "deployment health report"
+    ).lower()
+    if (
+        archive_hash != expected_archive_hash.lower()
+        or SHA256_PATTERN.fullmatch(archive_hash) is None
+    ):
+        raise IntegrityError("Installed official archive does not match the validated source.")
+    generated_at = required_string(payload, "generatedAt", "deployment health report")
+    try:
+        datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise IntegrityError("Deployment health report has an invalid generation time.") from error
+    counts_value = object_dict(payload.get("tableCounts"), "deployment health report.tableCounts")
+    counts = {
+        key: required_int(counts_value, key, "deployment health table counts")
+        for key in counts_value
+    }
+    return DeploymentHealthReport(
+        source_commit=source_commit,
+        generated_at=generated_at,
+        schema_version=schema_version,
+        quick_check=quick_check,
+        foreign_key_violations=foreign_keys,
+        table_counts=counts,
+        official_archive_sha256=archive_hash,
+    )
+
+
+def assert_health_preserved(preinstall: BackupResult, report: DeploymentHealthReport) -> None:
+    for table, before_count in preinstall.table_counts.items():
+        after_count = report.table_counts.get(table)
+        if after_count is None:
+            raise IntegrityError(f"Deployment health report lost required table {table}.")
+        if after_count < before_count:
+            raise IntegrityError(
+                f"Installed {table} count decreased from {before_count} to {after_count}."
+            )
+
+
 def assert_database_rows_preserved(preinstall: BackupResult, postinstall: BackupResult) -> None:
     pre_path = Path(preinstall.standalone_database).resolve()
     post_path = Path(postinstall.standalone_database).resolve()
@@ -360,55 +440,67 @@ def validate_backup_result(backup: BackupResult) -> None:
         raise IntegrityError("Backup contents no longer match the recorded validation result.")
 
 
-def validate_recent_full_backup(state: dict[str, object], maximum_age_days: int = 14) -> Path:
-    value = state.get("lastFullBackup")
-    backup = object_dict(value, "install state.lastFullBackup")
+def validate_recent_backup(state: dict[str, object], maximum_age_days: int = 14) -> Path:
+    value = state.get("lastVerifiedBackup")
+    description = "install state.lastVerifiedBackup"
+    path_key = "path"
+    if value is None:
+        value = state.get("lastFullBackup")
+        description = "install state.lastFullBackup"
+        path_key = "postinstall"
+    backup = object_dict(value, description)
     if backup.get("quickCheck") != "ok" or backup.get("foreignKeyViolations", 0) != 0:
-        raise ShippingError("The recorded full backup did not pass SQLite validation.")
-    verified_at = required_string(backup, "verifiedAt", "install state.lastFullBackup")
+        raise ShippingError("The recorded backup did not pass SQLite validation.")
+    verified_at = required_string(backup, "verifiedAt", description)
     try:
         verified = datetime.fromisoformat(verified_at.replace("Z", "+00:00"))
     except ValueError as error:
-        raise ShippingError("The recorded full backup has an invalid verification time.") from error
+        raise ShippingError("The recorded backup has an invalid verification time.") from error
     if verified.tzinfo is None:
         verified = verified.replace(tzinfo=UTC)
     if datetime.now(UTC) - verified.astimezone(UTC) > timedelta(days=maximum_age_days):
         raise ShippingError(
-            f"The last full backup is older than {maximum_age_days} days; use full verification."
+            f"The last verified backup is older than {maximum_age_days} days; "
+            "use protected or migration verification."
         )
-    postinstall = Path(required_string(backup, "postinstall", "install state.lastFullBackup"))
+    postinstall = Path(required_string(backup, path_key, description))
     if not postinstall.is_dir():
-        raise ShippingError(f"The recorded full backup is missing: {postinstall}")
+        raise ShippingError(f"The recorded backup is missing: {postinstall}")
     if postinstall.stat().st_mode & 0o077:
-        raise ShippingError("The recorded full-backup directory is readable by another user.")
-    recorded_hashes_value = object_dict(backup.get("hashes"), "install state.lastFullBackup.hashes")
+        raise ShippingError("The recorded backup directory is readable by another user.")
+    recorded_hashes_value = object_dict(backup.get("hashes"), f"{description}.hashes")
     recorded_hashes = {
         key: required_string(recorded_hashes_value, key, "install state backup hash")
         for key in recorded_hashes_value
     }
     verified_hashes = validate_hash_manifest(postinstall)
     if recorded_hashes != verified_hashes:
-        raise ShippingError("The recorded full-backup hashes do not match trusted install state.")
+        raise ShippingError("The recorded backup hashes do not match trusted install state.")
     if not any(name.endswith("sleep-standalone.sqlite3") for name in recorded_hashes):
-        raise ShippingError("The recorded full backup does not hash its standalone database.")
+        raise ShippingError("The recorded backup does not hash its standalone database.")
     if not any(name.endswith("whoop-official-archive.sqlite3") for name in recorded_hashes):
-        raise ShippingError("The recorded full backup does not hash its official archive.")
+        raise ShippingError("The recorded backup does not hash its official archive.")
     protected_paths = [postinstall / "SHA256SUMS.json"] + [
         postinstall / relative_name for relative_name in recorded_hashes
     ]
     if any(path.stat().st_mode & 0o077 for path in protected_paths):
-        raise ShippingError("A recorded full-backup file is readable by another user.")
+        raise ShippingError("A recorded backup file is readable by another user.")
     standalone_candidates = sorted(postinstall.rglob("sleep-standalone.sqlite3"))
     if len(standalone_candidates) != 1:
         raise ShippingError(
-            f"Expected one standalone database in the recorded full backup; found "
+            f"Expected one standalone database in the recorded backup; found "
             f"{len(standalone_candidates)}."
         )
     schema, quick_check, foreign_keys, _ = sqlite_checks(standalone_candidates[0])
     recorded_schema = backup.get("schemaVersion")
     if quick_check != "ok" or foreign_keys != 0 or schema != recorded_schema:
-        raise ShippingError("The recorded full backup no longer matches its validation state.")
+        raise ShippingError("The recorded backup no longer matches its validation state.")
     return postinstall
+
+
+def validate_recent_full_backup(state: dict[str, object], maximum_age_days: int = 14) -> Path:
+    """Compatibility adapter for older callers and install-state terminology."""
+    return validate_recent_backup(state, maximum_age_days)
 
 
 def validate_tree(value: object, feature_count: int, description: str) -> None:
@@ -663,6 +755,7 @@ def parse_devices(payload: object, requested: str | None = None) -> list[Device]
                 os_version=string_value(properties, ("osVersionNumber",)),
                 os_build=string_value(properties, ("osBuildUpdate",)),
                 last_connection=string_value(connection, ("lastConnectionDate",)),
+                transport=string_value(connection, ("transportType",)),
             )
         )
     candidates.sort(key=lambda device: device.last_connection, reverse=True)
@@ -881,11 +974,6 @@ def validate_backup(
             raise ShippingError(
                 f"Backup schema is {schema_version}; expected {comparison} {expected_schema}."
             )
-    hash_paths = [source_database, standalone]
-    for suffix in ("-wal", "-shm"):
-        candidate = source_database.with_name(source_database.name + suffix)
-        if candidate.exists():
-            hash_paths.append(candidate)
     sidecars = list(raw_root.rglob("whoop-official-archive.sqlite3"))
     if len(sidecars) != 1:
         raise ShippingError(
@@ -894,7 +982,6 @@ def validate_backup(
     sidecar_schema, sidecar_quick, sidecar_foreign_keys, _ = sqlite_checks(sidecars[0])
     if sidecar_quick != "ok" or sidecar_foreign_keys != 0 or sidecar_schema < 1:
         raise ShippingError("The backed-up official archive failed SQLite validation.")
-    hash_paths.append(sidecars[0])
     telemetry_sidecars = list(raw_root.rglob("storage-telemetry-v1.json"))
     if len(telemetry_sidecars) > 1:
         raise ShippingError(
@@ -908,17 +995,24 @@ def validate_backup(
         )
         if telemetry.get("formatVersion") != 1 or not isinstance(telemetry.get("snapshots"), list):
             raise ShippingError("The backed-up storage telemetry sidecar is invalid.")
-        hash_paths.append(telemetry_sidecars[0])
-    hashes = {str(path.relative_to(raw_root.parent)): sha256(path) for path in hash_paths}
+    # Keep one coherent standalone database and the irreplaceable sidecars.
+    # The copied live database and WAL are transport intermediates; retaining
+    # them duplicates roughly a gigabyte per snapshot and can recursively copy
+    # app-side migration backups. Move sidecars instead of copying them again.
+    archive = raw_root.parent / "whoop-official-archive.sqlite3"
+    os.replace(sidecars[0], archive)
+    retained_paths = [standalone, archive]
+    if telemetry_sidecars:
+        retained_telemetry = raw_root.parent / "storage-telemetry-v1.json"
+        os.replace(telemetry_sidecars[0], retained_telemetry)
+        retained_paths.append(retained_telemetry)
+    hashes = {path.name: sha256(path) for path in retained_paths}
     checksum_path = raw_root.parent / "SHA256SUMS.json"
     atomic_write_json(checksum_path, hashes)
-    for directory in (raw_root.parent, raw_root):
-        os.chmod(directory, 0o700)
-    for path in raw_root.rglob("*"):
-        if path.is_dir():
-            os.chmod(path, 0o700)
-        elif path.is_file():
-            os.chmod(path, 0o600)
+    for path in retained_paths:
+        os.chmod(path, 0o600)
+    os.chmod(raw_root.parent, 0o700)
+    shutil.rmtree(raw_root)
     return BackupResult(
         path=str(raw_root.parent),
         standalone_database=str(standalone),

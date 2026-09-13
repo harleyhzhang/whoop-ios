@@ -581,17 +581,25 @@ Tools/ship_phone.sh --commit "$(git rev-parse HEAD)"
 4. builds and signs the exact commit, embeds that SHA in `WHOOPSourceCommit`,
    verifies the signature/profile and byte-matches every bundled private asset;
 5. uses CoreDevice directly, without iPhone Mirroring, and installs in place;
-6. for `full`, suspends the app with guaranteed resume cleanup while taking
-   coherent pre/post copies, creates standalone SQLite images, validates schema,
-   `quick_check`, foreign keys, hashes, and nondecreasing durable health rows;
-7. launches the app, proves the process is alive and the database or WAL
-   advanced, then atomically updates the private install-state file.
+6. for `protected`, takes one compact preinstall snapshot and requires the
+   launched app to publish a commit-bound report proving exact schema,
+   `quick_check`, foreign keys, nondecreasing durable row counts, and the
+   official-archive hash;
+7. for `migration`, requires USB and takes compact pre/post snapshots, then
+   compares immutable evidence rows exactly;
+8. launches the app, proves the process is alive and the database or WAL
+   advanced, atomically updates the private install-state file, and applies
+   manifest-driven retention.
 
 The defaults point to Harley's canonical private seed, backup, and install-state
 locations outside Git. Override `--private-root`, `--backup-root`, `--state`, or
-`--device` only for a deliberate recovery or test. `Tools/doctor.sh --mode full`
-is a read-only preflight, and `Tools/ship_phone.sh ... --dry-run` resolves and
-prints the complete plan without building or installing.
+`--device` only for a deliberate recovery or test. `Tools/doctor.sh --mode
+migration` is the strictest read-only preflight. Use
+`Tools/ship_phone.sh --plan --commit <merged-sha>` without a connected phone to
+inspect the device-stable baseline, pending commit count, and verification tier.
+This supports batching routine merges into one intentional install checkpoint.
+`Tools/ship_phone.sh ... --dry-run` additionally runs the live phone preflight
+without building or installing.
 
 If installation completes while the phone is locked, the command exits 75 with
 `status=needs-unlock` and prints one exact `--resume <manifest>` command. Unlock
@@ -608,26 +616,62 @@ classifier compares the requested commit with `installedCommit` in the private
 state file.
 
 - `none` means no production app code changed, so there is nothing to install.
-- `fast` is restricted to presentation-only changes in `RootView.swift` or the
-  asset catalog. Reuse a recent integrity-checked full backup, install in place,
+- `fast` is restricted to presentation-only changes in `RootView.swift`,
+  `DashboardComponents.swift`, `HandshakeView.swift`, or the asset catalog.
+  Reuse a recent integrity-checked compact backup, install in place,
   launch, confirm the process remains alive, and confirm the database or WAL
   modification time advances. Do not copy the complete database before or after
   this tier.
-- `full` covers any data store, schema, migration, model, collector, lifecycle,
-  app identity, project configuration, or unclassified production change. Use
-  the coherent pre/post snapshot procedure below. Connect the iPhone by USB
-  when practical because CoreDevice otherwise transfers the entire database
-  over Wi-Fi without delta compression.
+- `protected` covers runtime, model, collector, lifecycle, and storage
+  implementation changes with no data-format or identity mechanics. It takes a
+  preinstall restore point, installs over Wi-Fi or USB, then verifies the app's
+  post-launch health report instead of copying the database back again.
+- `migration` covers schema SQL/versioning, app identity, signing,
+  entitlements, project configuration, divergence, and unclassified changes.
+  It requires USB and uses coherent compact pre/post snapshots plus exact raw
+  evidence-row comparison.
 
 Current CoreDevice app inventory does not expose a physical data-container UUID.
 The command therefore proves preservation from the in-place install plus pre/post
 database, schema, integrity, foreign-key, file-hash, and raw-row checks; it does
 not depend on a private path identifier that iOS may rotate.
 
-The policy intentionally fails closed to `full` if the installed baseline is
+The policy intentionally fails closed to `migration` if the installed baseline is
 missing, unavailable, divergent, or ambiguous. A fast install is a verification
 optimization, not permission to skip exact-commit building, signing checks,
 private-asset hash checks, in-place installation, launch, or runtime validation.
+
+Backups copy only `sleep.sqlite3`, its optional WAL/SHM, the official archive,
+and bounded telemetry while the app is suspended. After SQLite validation, the
+transport files are compacted to one standalone database plus required
+sidecars; app-side `migration-backups` are never recursively copied. Retention
+keeps install-state pointers, the two newest verified backups, and the newest
+backup per schema and month for the most recent year. Redundant backups and completed staged apps move
+to a private `.retired` quarantine and are permanently purged after seven days
+by a later successful shipping or maintenance run. Invalid and unmanifested
+directories are never guessed at or deleted. To validate and compact legacy
+snapshots explicitly, run:
+
+```sh
+Tools/maintain_device_backups.sh --apply --adopt-legacy
+```
+
+The default invocation is dry-run. Legacy adoption skips every path referenced
+by install state, preserves directory chronology, and removes a raw tree only
+after its standalone database and official archive pass SQLite checks and a new
+hash manifest is durable. Add `--retire-unusable` only when failed legacy
+adoptions should enter the same seven-day quarantine; the tool requires at
+least one separately validated retained backup. The build itself uses a
+persistent DerivedData cache under `~/Library/Caches/whoop-ios/`; TestFlight and
+Xcode Cloud are intentionally
+not part of this private-data path. Keep the paid Apple development membership
+current so direct-install provisioning remains annual rather than entering the
+seven-day Personal Team cycle.
+
+After reviewing the retained set, `Tools/maintain_device_backups.sh --apply
+--purge-now` permanently removes only directories already carrying the tool's
+private quarantine record. It cannot select an active backup, shipping run, or
+canonical WHOOP source directory.
 
 The remaining commands in this section document what the orchestrator enforces
 for diagnosis and recovery. They are not a parallel routine install procedure.

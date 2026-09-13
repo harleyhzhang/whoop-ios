@@ -9,8 +9,10 @@ Usage: Tools/phone_install_policy.sh [--base REF] [--head REF] [--state PATH]
 Classifies a physical-phone install as:
   none  No production app change; do not install.
   fast  Presentation-only change; install in place without copying the database.
-  full  Data, storage, model, app lifecycle, identity, or unknown change; take
-        verified pre- and post-install snapshots.
+  protected  Runtime, collector, or storage code without a format migration;
+             take one verified preinstall snapshot and a post-launch health report.
+  migration  Schema, identity, entitlement, or build-contract change; take
+             verified pre- and post-install snapshots.
 
 When --base is omitted, the script reads installedCommit from --state or from
 WHOOP_DEVICE_INSTALL_STATE_PATH. The default --head is HEAD.
@@ -62,18 +64,18 @@ fi
 head_commit=$(git rev-parse --verify "$head_ref^{commit}")
 
 if [ -z "$base_ref" ]; then
-  printf 'mode=full\nbase=unknown\nhead=%s\nreason=no installed-commit baseline; fail closed\n' "$head_commit"
+  printf 'mode=migration\nbase=unknown\nhead=%s\nreason=no installed-commit baseline; fail closed\n' "$head_commit"
   exit 0
 fi
 
 base_commit=$(git rev-parse --verify "$base_ref^{commit}" 2>/dev/null || true)
 if [ -z "$base_commit" ]; then
-  printf 'mode=full\nbase=%s\nhead=%s\nreason=installed baseline is not available locally; fetch or take a full snapshot\n' "$base_ref" "$head_commit"
+  printf 'mode=migration\nbase=%s\nhead=%s\nreason=installed baseline is not available locally; fetch or take full snapshots\n' "$base_ref" "$head_commit"
   exit 0
 fi
 
 if ! git merge-base --is-ancestor "$base_commit" "$head_commit"; then
-  printf 'mode=full\nbase=%s\nhead=%s\nreason=installed baseline is not an ancestor of the candidate; fail closed\n' "$base_commit" "$head_commit"
+  printf 'mode=migration\nbase=%s\nhead=%s\nreason=installed baseline is not an ancestor of the candidate; fail closed\n' "$base_commit" "$head_commit"
   exit 0
 fi
 
@@ -93,19 +95,14 @@ if [ -z "$production_files" ]; then
   exit 0
 fi
 
-unsafe_files=$(printf '%s\n' "$production_files" | awk '
+non_presentation_files=$(printf '%s\n' "$production_files" | awk '
   /^SleepApp\/RootView\.swift$/ { next }
   /^SleepApp\/DashboardComponents\.swift$/ { next }
   /^SleepApp\/Assets\.xcassets\// { next }
   /^WhoopHandshakeApp\/HandshakeView\.swift$/ { next }
+  /^Sleep\.xcodeproj\// { next }
   { print }
 ')
-
-if [ -n "$unsafe_files" ]; then
-  printf 'mode=full\nbase=%s\nhead=%s\nreason=data, lifecycle, identity, build, or unclassified production files changed\nfiles=%s\n' \
-    "$base_commit" "$head_commit" "$(printf '%s' "$unsafe_files" | tr '\n' ',')"
-  exit 0
-fi
 
 # These views are normally presentation-only, but fail closed if a future edit
 # puts persistence, migration, destructive SQL, or bundle-identity mechanics
@@ -114,8 +111,30 @@ if git diff -U0 "$base_commit..$head_commit" -- \
   SleepApp/RootView.swift SleepApp/DashboardComponents.swift | \
   grep -E '^[+-]' | grep -Ev '^(\+\+\+|---)' | \
   grep -Eiq 'SQLite|WhoopStore|schema|migrat|DELETE[[:space:]]+FROM|DROP[[:space:]]+TABLE|bundleIdentifier|FileManager.*remove'; then
-  printf 'mode=full\nbase=%s\nhead=%s\nreason=risk-sensitive storage or identity code appeared in a presentation component\n' \
+  printf 'mode=migration\nbase=%s\nhead=%s\nreason=risk-sensitive storage or identity code appeared in a presentation component\n' \
     "$base_commit" "$head_commit"
+  exit 0
+fi
+
+# Generated project churn follows source additions and is verified separately.
+# Escalate only source-of-truth build settings or explicit data-format mechanics.
+if printf '%s\n' "$production_files" | grep -Eq '^project\.yml$|\.entitlements$'; then
+  printf 'mode=migration\nbase=%s\nhead=%s\nreason=build identity, signing, capability, or entitlement contract changed\nfiles=%s\n' \
+    "$base_commit" "$head_commit" "$(printf '%s' "$production_files" | tr '\n' ',')"
+  exit 0
+fi
+
+if git diff -U0 "$base_commit..$head_commit" -- SleepApp WhoopHandshakeApp project.yml | \
+  grep -E '^[+-]' | grep -Ev '^(\+\+\+|---)' | \
+  grep -Eiq 'currentSchemaVersion|PRAGMA[[:space:]]+user_version|CREATE[[:space:]]+TABLE|ALTER[[:space:]]+TABLE|DROP[[:space:]]+TABLE|PRODUCT_BUNDLE_IDENTIFIER|DEVELOPMENT_TEAM|CODE_SIGN|\.entitlements'; then
+  printf 'mode=migration\nbase=%s\nhead=%s\nreason=schema, identity, signing, or entitlement mechanics changed\nfiles=%s\n' \
+    "$base_commit" "$head_commit" "$(printf '%s' "$production_files" | tr '\n' ',')"
+  exit 0
+fi
+
+if [ -n "$non_presentation_files" ]; then
+  printf 'mode=protected\nbase=%s\nhead=%s\nreason=runtime or storage implementation changed without a schema or identity migration\nfiles=%s\n' \
+    "$base_commit" "$head_commit" "$(printf '%s' "$non_presentation_files" | tr '\n' ',')"
   exit 0
 fi
 

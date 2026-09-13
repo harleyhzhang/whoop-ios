@@ -10,7 +10,7 @@ final class WhoopStore: Sendable, WhoopPacketPersisting {
 
     private let sqlite = SQLiteDatabase()
     private let dashboardReader = DashboardDatabaseReader()
-    private let readiness = WhoopStorageReadiness()
+    let readiness = WhoopStorageReadiness()
     private let databaseURLOverride: URL?
     private let databaseURL: URL?
     private let faultInjector: WhoopStorageFaultInjector
