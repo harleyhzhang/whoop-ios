@@ -881,6 +881,20 @@ def validate_backup(
     if sidecar_quick != "ok" or sidecar_foreign_keys != 0 or sidecar_schema < 1:
         raise ShippingError("The backed-up official archive failed SQLite validation.")
     hash_paths.append(sidecars[0])
+    telemetry_sidecars = list(raw_root.rglob("storage-telemetry-v1.json"))
+    if len(telemetry_sidecars) > 1:
+        raise ShippingError(
+            "Expected at most one storage telemetry sidecar below "
+            f"{raw_root}; found {len(telemetry_sidecars)}."
+        )
+    if telemetry_sidecars:
+        telemetry = object_dict(
+            load_json(telemetry_sidecars[0], "storage telemetry sidecar"),
+            "storage telemetry sidecar",
+        )
+        if telemetry.get("formatVersion") != 1 or not isinstance(telemetry.get("snapshots"), list):
+            raise ShippingError("The backed-up storage telemetry sidecar is invalid.")
+        hash_paths.append(telemetry_sidecars[0])
     hashes = {str(path.relative_to(raw_root.parent)): sha256(path) for path in hash_paths}
     checksum_path = raw_root.parent / "SHA256SUMS.json"
     atomic_write_json(checksum_path, hashes)

@@ -27,9 +27,11 @@
   Mirroring flow. The internal classifier selects:
   - `none`: do not reinstall.
   - `fast`: for presentation-only changes, verify a recent known-good full
-    backup exists, install the exact merged build in place, confirm the data-
-    container UUID is unchanged, launch it, and confirm the process plus
-    database/WAL modification times advance. Do not transfer the 1+ GB database.
+    backup exists, install the exact merged build in place, launch it, and
+    confirm the process plus database/WAL modification times advance. Current
+    CoreDevice inventory does not expose a physical data-container UUID, so
+    preservation is proved from in-place installation and content checks. Do
+    not transfer the 1+ GB database.
   - `full`: for storage, schema, migration, model, collector, lifecycle, bundle-
     identity, build-system, or unclassified production changes, take coherent
     suspended pre- and post-install snapshots and validate standalone SQLite

@@ -27,6 +27,10 @@ minutes. `.github/workflows/ios-ci.yml` is a manual hosted fallback only.
 See [testing and CI](docs/testing.md), [architecture](docs/architecture.md), and
 [contributing](CONTRIBUTING.md) before making a behavioral change.
 
+Database growth is measured by a bounded sidecar and direct phone-reporting
+command. See [storage amplification measurement](docs/storage-amplification.md)
+for collection, analysis, and the guarded offline schema-11 prototype.
+
 ## Physical-phone shipping
 
 From a clean worktree at the exact merged `origin/main` commit, run:
