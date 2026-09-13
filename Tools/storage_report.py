@@ -689,6 +689,7 @@ def collect_phone(
         device = choose_device(payload, requested_device)
         staging = Path(temporary) / "received"
         staging.mkdir()
+        received_file = staging / "storage-telemetry-v1.json"
         effective_runner.devicectl_json(
             [
                 "device",
@@ -703,7 +704,7 @@ def collect_phone(
                 "--source",
                 "Library/Application Support/Sleep/storage-telemetry-v1.json",
                 "--destination",
-                str(staging),
+                str(received_file),
                 "--timeout",
                 "120",
             ],

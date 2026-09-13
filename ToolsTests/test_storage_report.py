@@ -302,7 +302,8 @@ class CollectRunner(CommandRunner):
             return device_payload(), completed
         assert arguments[:3] == ["device", "copy", "from"]
         destination = Path(arguments[arguments.index("--destination") + 1])
-        (destination / "storage-telemetry-v1.json").write_text(json.dumps(telemetry([0, 1, 2, 3])))
+        assert destination.name == "storage-telemetry-v1.json"
+        destination.write_text(json.dumps(telemetry([0, 1, 2, 3])))
         return {}, completed
 
 
@@ -322,6 +323,9 @@ def test_collect_phone_copies_only_valid_telemetry_atomically(tmp_path: Path) ->
     copy_call = runner.calls[1]
     assert copy_call[copy_call.index("--source") + 1] == (
         "Library/Application Support/Sleep/storage-telemetry-v1.json"
+    )
+    assert Path(copy_call[copy_call.index("--destination") + 1]).name == (
+        "storage-telemetry-v1.json"
     )
     assert "process" not in copy_call
     assert "install" not in copy_call
