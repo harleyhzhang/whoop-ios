@@ -124,9 +124,33 @@ if printf '%s\n' "$production_files" | grep -Eq '^project\.yml$|\.entitlements$'
   exit 0
 fi
 
+schema_version_at() {
+  git show "$1:WhoopHandshakeApp/WhoopStore.swift" 2>/dev/null | \
+    sed -nE 's/.*private static let (currentSchemaVersion|schemaVersion)[[:space:]]*=[[:space:]]*([0-9]+).*/\2/p' | \
+    head -n 1
+}
+
+base_schema_version=$(schema_version_at "$base_commit")
+head_schema_version=$(schema_version_at "$head_commit")
+if [ -z "$base_schema_version" ] || [ -z "$head_schema_version" ]; then
+  printf 'mode=migration\nbase=%s\nhead=%s\nreason=cannot prove the production schema version is unchanged; fail closed\nfiles=%s\n' \
+    "$base_commit" "$head_commit" "$(printf '%s' "$production_files" | tr '\n' ',')"
+  exit 0
+fi
+
+if [ "$base_schema_version" != "$head_schema_version" ]; then
+  printf 'mode=migration\nbase=%s\nhead=%s\nreason=production schema version changed from %s to %s\nfiles=%s\n' \
+    "$base_commit" "$head_commit" "$base_schema_version" "$head_schema_version" \
+    "$(printf '%s' "$production_files" | tr '\n' ',')"
+  exit 0
+fi
+
+# A read-only PRAGMA user_version query and a same-valued schema constant rename
+# are observability/refactor changes, not migrations. Escalate SQL only when the
+# diff adds a schema write or DDL operation.
 if git diff -U0 "$base_commit..$head_commit" -- SleepApp WhoopHandshakeApp project.yml | \
-  grep -E '^[+-]' | grep -Ev '^(\+\+\+|---)' | \
-  grep -Eiq 'currentSchemaVersion|PRAGMA[[:space:]]+user_version|CREATE[[:space:]]+TABLE|ALTER[[:space:]]+TABLE|DROP[[:space:]]+TABLE|PRODUCT_BUNDLE_IDENTIFIER|DEVELOPMENT_TEAM|CODE_SIGN|\.entitlements'; then
+  grep -E '^\+' | grep -Ev '^\+\+\+' | \
+  grep -Eiq 'PRAGMA[[:space:]]+user_version[[:space:]]*=|CREATE[[:space:]]+TABLE|ALTER[[:space:]]+TABLE|DROP[[:space:]]+TABLE|PRODUCT_BUNDLE_IDENTIFIER|DEVELOPMENT_TEAM|CODE_SIGN|\.entitlements'; then
   printf 'mode=migration\nbase=%s\nhead=%s\nreason=schema, identity, signing, or entitlement mechanics changed\nfiles=%s\n' \
     "$base_commit" "$head_commit" "$(printf '%s' "$production_files" | tr '\n' ',')"
   exit 0
