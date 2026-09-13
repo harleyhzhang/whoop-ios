@@ -628,6 +628,11 @@ def run_doctor(args: argparse.Namespace, runner: CommandRunner) -> None:
             args.device,
             Path(scratch_name),
         )
+    phone_free = (
+        f"{result.device_available_bytes / 1024**3:.1f}"
+        if result.device_available_bytes is not None
+        else "unavailable (CoreDevice reachability verified)"
+    )
     print(
         f"status=ready\ndevice={result.device.identifier}\nudid={result.device.udid}\n"
         f"model={result.device.model}\nios={result.device.os_version} ({result.device.os_build})\n"
@@ -639,7 +644,7 @@ def run_doctor(args: argparse.Namespace, runner: CommandRunner) -> None:
         f"sleepModel={result.assets.sleep_model_version}\n"
         f"recoveryModel={result.assets.recovery_model_version}\n"
         f"macFreeGiB={result.available_bytes / 1024**3:.1f}\n"
-        f"phoneFreeGiB={result.device_available_bytes / 1024**3:.1f}"
+        f"phoneFreeGiB={phone_free}"
     )
 
 
