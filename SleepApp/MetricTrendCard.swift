@@ -126,10 +126,15 @@ struct MetricTrendCard: View {
             ),
             progress: releaseProgress
         )
-        let highlightedCurvePoint = ChartPointAlignment.nearestCurvePoint(
-            to: requestedHighlightPosition,
-            in: chartPoints
-        )
+        let highlightedCurvePoint =
+            chartSelection != nil || isReleasing
+            ? ChartPointAlignment.pointOnCurve(
+                at: requestedHighlightPosition,
+                in: chartPoints
+            )
+            : chartPoints.last.map {
+                ChartCurvePoint(position: $0.position, value: $0.value)
+            }
         let highlightedPosition = highlightedCurvePoint?.position ?? requestedHighlightPosition
         let highlightedValue = highlightedCurvePoint?.value ?? highlightedPoint.value
         let monthTicks = DashboardChartGeometry.monthlyAxisDates(in: series.daily)

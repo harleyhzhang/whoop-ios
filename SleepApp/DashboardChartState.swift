@@ -5,7 +5,8 @@ import SwiftUI
 @MainActor
 final class DashboardChartState {
     private static let revealDuration = 0.28
-    private static let concealDuration = 0.34
+    private static let releaseFrameCount = 34
+    private static let releaseFrameDuration = Duration.milliseconds(10)
 
     var selectedDate: Date?
     var activeMetric: MetricKind?
@@ -63,19 +64,41 @@ final class DashboardChartState {
             return
         }
 
+        if target == 0 {
+            await runReleaseTransition(generation: generation)
+            return
+        }
+
         await Task.yield()
         try? await Task.sleep(for: .milliseconds(16))
         guard !Task.isCancelled, generation == detailGeneration else { return }
 
-        let duration = target == 1 ? Self.revealDuration : Self.concealDuration
-        withAnimation(.smooth(duration: duration, extraBounce: 0)) {
+        withAnimation(.smooth(duration: Self.revealDuration, extraBounce: 0)) {
             detailProgress = target
-            if target == 0 { releaseProgress = 1 }
         }
 
-        try? await Task.sleep(for: .seconds(duration + 0.02))
+        try? await Task.sleep(for: .seconds(Self.revealDuration + 0.02))
         guard !Task.isCancelled, generation == detailGeneration else { return }
-        if target == 0 { finishRelease() }
+    }
+
+    /// Advances one shared phase without implicit coordinate interpolation.
+    /// Each frame therefore rebuilds the current curve first, then lets the
+    /// marker sample that curve at its eased horizontal position.
+    private func runReleaseTransition(generation: Int) async {
+        let initialDetailProgress = detailProgress
+        for frame in 1...Self.releaseFrameCount {
+            try? await Task.sleep(for: Self.releaseFrameDuration)
+            guard !Task.isCancelled, generation == detailGeneration else { return }
+
+            let progress = CGFloat(frame) / CGFloat(Self.releaseFrameCount)
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                releaseProgress = progress
+                detailProgress = initialDetailProgress * (1 - progress)
+            }
+        }
+        finishRelease()
     }
 
     private func finishRelease() {
