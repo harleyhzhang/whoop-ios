@@ -87,7 +87,7 @@ struct WhoopBatteryPercentIcon: View {
                     Text(String(digit))
                 }
             }
-            .font(.system(size: 12, weight: .bold, design: .rounded))
+            .font(.system(size: 12.5, weight: .bold, design: .rounded))
 
             Image(systemName: "bolt.fill")
                 .font(.system(size: 7, weight: .bold))
