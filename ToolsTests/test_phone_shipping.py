@@ -75,6 +75,7 @@ def create_private_assets(root: Path) -> None:
         {
             "version": "synthetic-sleep-v1",
             "featureVersion": core.SLEEP_FEATURE_VERSION,
+            "featureCount": core.SLEEP_FEATURE_COUNT,
             "directWeight": 0.5,
             "extraTreesWeight": 0.5,
             "trees": [tree()],
@@ -136,6 +137,15 @@ def test_private_assets_reject_wrong_feature_contract_and_archive(tmp_path: Path
 
     with pytest.raises(core.ShippingError, match="featureVersion"):
         core.validate_private_assets(root)
+
+    count_root = tmp_path / "count-assets"
+    create_private_assets(count_root)
+    count_model_path = count_root / "whoop-score-model.json"
+    count_model = core.object_dict(core.load_json(count_model_path, "test model"), "test model")
+    count_model["featureCount"] = core.SLEEP_FEATURE_COUNT + 1
+    write_json(count_model_path, count_model)
+    with pytest.raises(core.ShippingError, match="featureCount"):
+        core.validate_private_assets(count_root)
 
     create_private_assets(tmp_path / "second-assets")
     archive = tmp_path / "second-assets/whoop-official-archive.sqlite3"

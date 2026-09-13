@@ -165,7 +165,10 @@ extension WhoopSleepStateTests {
 
         var database: OpaquePointer?
         XCTAssertEqual(sqlite3_open_v2(databaseURL.path, &database, SQLITE_OPEN_READWRITE, nil), SQLITE_OK)
-        guard let database else { throw XCTSkip("Could not open schema fixture") }
+        guard let database else {
+            XCTFail("Could not open schema fixture")
+            return
+        }
         XCTAssertEqual(
             sqlite3_exec(
                 database,

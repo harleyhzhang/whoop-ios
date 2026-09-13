@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "sleep": {
+    "version": "whoop_local_features_v1",
+    "current": [
+      "durationMinutes",
+      "efficiencyPercentage",
+      "startSin",
+      "startCos",
+      "endSin",
+      "endCos"
+    ],
+    "lagCount": 7,
+    "lag": [
+      "durationMinutes",
+      "efficiencyPercentage",
+      "startDistanceMinutes",
+      "endDistanceMinutes",
+      "dayGap"
+    ],
+    "summary": [
+      "durationMean4",
+      "durationStandardDeviation4",
+      "efficiencyMean4",
+      "efficiencyStandardDeviation4"
+    ],
+    "agreementCount": 4,
+    "agreementWeights": [0.52, 0.27, 0.14, 0.07]
+  },
+  "recovery": {
+    "version": "whoop_local_recovery_features_v1",
+    "current": ["hrv", "rhr", "steps", "sleepScore"],
+    "lagCount": 7,
+    "lag": ["hrv", "rhr", "steps", "sleepScore", "dayGap"],
+    "rollingWindows": [7, 14, 30, 60],
+    "rollingSignals": ["hrv", "rhr", "steps", "sleepScore"],
+    "rollingStatistics": ["mean", "standardDeviation", "delta", "ratio", "zScore"],
+    "baselineWindow": 30
+  }
+}

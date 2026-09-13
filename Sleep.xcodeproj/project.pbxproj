@@ -18,6 +18,7 @@
 		2CA17A6E166ABF18B63E7337 /* WhoopStepMaterializationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15B48DF209E4718B9B379BA5 /* WhoopStepMaterializationTests.swift */; };
 		2F022808C7E391537959A053 /* DayKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E64AEEEBAFBE617F8BEE68B /* DayKey.swift */; };
 		30848D92E77B4FB15D29D121 /* DashboardMetric.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E18548FE1D2EF81EB50B404 /* DashboardMetric.swift */; };
+		37B811C05E5DEB8261088DB0 /* GeneratedModelFeatures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B8F9ADADF7705436F71B83C /* GeneratedModelFeatures.swift */; };
 		3DC6981D66EC19A0DF445E6B /* DashboardChartGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1937B3634E2A235CFCAE9B48 /* DashboardChartGeometry.swift */; };
 		44838C3AC065F48BBA97B9C6 /* WhoopHandshakeProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACA50ED0CA372D20A4C7FCC2 /* WhoopHandshakeProbe.swift */; };
 		476A5C69503860B5B4D2BC84 /* WhoopSleepAnalysisTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 076EE844CAA15096FB7C3623 /* WhoopSleepAnalysisTests.swift */; };
@@ -32,6 +33,7 @@
 		6656E4EFFD958DF273A88B86 /* WhoopStorageTelemetryCensus.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCA3A18B9DA557D605FBC178 /* WhoopStorageTelemetryCensus.swift */; };
 		679CCD419862149E0C72EF4C /* HealthHistoryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25E46BF848A3B0CE31F74988 /* HealthHistoryModel.swift */; };
 		6AFCBC389F1511CB9ECE0C8D /* ScoreModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4204AEE4704C8F98E6381F1B /* ScoreModels.swift */; };
+		6C7266E70DD8CAA12AC51231 /* model-feature-golden.json in Resources */ = {isa = PBXBuildFile; fileRef = 6CFDC97B68116A887D9D0DB9 /* model-feature-golden.json */; };
 		752DB7D44DD473D4A88795B8 /* WhoopBackfillPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FA8ED17408466F88E8FA478 /* WhoopBackfillPlanner.swift */; };
 		76B1F55DB96AC164617E6263 /* DashboardHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 716DD0127D6C3E71B2B2EE53 /* DashboardHeader.swift */; };
 		7DF2414F56E0FD76A096BCD8 /* WhoopTestFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66FFE73953723B99EB408655 /* WhoopTestFixtures.swift */; };
@@ -42,6 +44,7 @@
 		9072C8D530E6F2332C373F82 /* WhoopProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CB469B3852FB6D3294099DF /* WhoopProtocol.swift */; };
 		92012161C9ACA7A94CFBBA7F /* DashboardRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DCF2F73FF16BA2EEF8B3DF9 /* DashboardRepository.swift */; };
 		928DF56ADE0EE3B29935115F /* WhoopBluetoothPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E337614D3958D7A40C244A3A /* WhoopBluetoothPolicy.swift */; };
+		99A65963BED0E6686FF33D24 /* ModelFeatureGoldenVectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C64559828E79DB6EC5514DB2 /* ModelFeatureGoldenVectorTests.swift */; };
 		9D1B418868E36CCC77E7B249 /* WhoopPrivateModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34E9715EA448FC5134A25CED /* WhoopPrivateModelTests.swift */; };
 		9E3604230102A49657DFDE63 /* DayKeyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A84E031074D8289CE6323A79 /* DayKeyTests.swift */; };
 		A16E43CC1B9EB4A3946E5CE3 /* TrendSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF4AB54F13C0498D821A6A9D /* TrendSupport.swift */; };
@@ -111,8 +114,10 @@
 		55983CF0CF02A69DF8915153 /* RangePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RangePicker.swift; sourceTree = "<group>"; };
 		57102F2178F998C51E368FD5 /* WhoopLaunchOverrides.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopLaunchOverrides.swift; sourceTree = "<group>"; };
 		5AFDD42A4C609A6413DEEC82 /* SleepModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepModels.swift; sourceTree = "<group>"; };
+		5B8F9ADADF7705436F71B83C /* GeneratedModelFeatures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeneratedModelFeatures.swift; sourceTree = "<group>"; };
 		64308BD33686D78BFFF93E84 /* SleepApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepApp.swift; sourceTree = "<group>"; };
 		66FFE73953723B99EB408655 /* WhoopTestFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopTestFixtures.swift; sourceTree = "<group>"; };
+		6CFDC97B68116A887D9D0DB9 /* model-feature-golden.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "model-feature-golden.json"; sourceTree = "<group>"; };
 		6E18548FE1D2EF81EB50B404 /* DashboardMetric.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardMetric.swift; sourceTree = "<group>"; };
 		716DD0127D6C3E71B2B2EE53 /* DashboardHeader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardHeader.swift; sourceTree = "<group>"; };
 		7C5DAE43DDB767B5C65FE8A4 /* WhoopTransportPipelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopTransportPipelineTests.swift; sourceTree = "<group>"; };
@@ -132,6 +137,7 @@
 		B7B060DFAE4F0CF319ED266C /* SleepTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = SleepTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		BA5D8D2CB1CF6BBD981621C4 /* WhoopNotificationManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopNotificationManagerTests.swift; sourceTree = "<group>"; };
 		BDB8AA26CCBFED085E8C1079 /* DashboardBehaviorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardBehaviorTests.swift; sourceTree = "<group>"; };
+		C64559828E79DB6EC5514DB2 /* ModelFeatureGoldenVectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelFeatureGoldenVectorTests.swift; sourceTree = "<group>"; };
 		CCA3A18B9DA557D605FBC178 /* WhoopStorageTelemetryCensus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopStorageTelemetryCensus.swift; sourceTree = "<group>"; };
 		E2EE87F55409A24FE6F1E253 /* DashboardChartState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardChartState.swift; sourceTree = "<group>"; };
 		E337614D3958D7A40C244A3A /* WhoopBluetoothPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopBluetoothPolicy.swift; sourceTree = "<group>"; };
@@ -151,7 +157,9 @@
 		7D942A0809C72AE12BFA70BF /* SleepPrivateTests */ = {
 			isa = PBXGroup;
 			children = (
+				C64559828E79DB6EC5514DB2 /* ModelFeatureGoldenVectorTests.swift */,
 				34E9715EA448FC5134A25CED /* WhoopPrivateModelTests.swift */,
+				FA8DF617C34425067A6FBFFE /* Fixtures */,
 			);
 			path = SleepPrivateTests;
 			sourceTree = "<group>";
@@ -178,6 +186,7 @@
 				716DD0127D6C3E71B2B2EE53 /* DashboardHeader.swift */,
 				6E18548FE1D2EF81EB50B404 /* DashboardMetric.swift */,
 				9E64AEEEBAFBE617F8BEE68B /* DayKey.swift */,
+				5B8F9ADADF7705436F71B83C /* GeneratedModelFeatures.swift */,
 				25E46BF848A3B0CE31F74988 /* HealthHistoryModel.swift */,
 				8B0E32E21B547DBCEE5C67BB /* Info.plist */,
 				1C70EE4444F525B48CE9E347 /* MetricTrendCard.swift */,
@@ -248,6 +257,14 @@
 			path = WhoopHandshakeApp;
 			sourceTree = "<group>";
 		};
+		FA8DF617C34425067A6FBFFE /* Fixtures */ = {
+			isa = PBXGroup;
+			children = (
+				6CFDC97B68116A887D9D0DB9 /* model-feature-golden.json */,
+			);
+			path = Fixtures;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -256,6 +273,7 @@
 			buildConfigurationList = 8A1CC960EDC3593F3B7EC25C /* Build configuration list for PBXNativeTarget "SleepPrivateTests" */;
 			buildPhases = (
 				CD8B5CBFD1F78A969428DE81 /* Sources */,
+				5A6E17A6703ECE446D268434 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -373,6 +391,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		5A6E17A6703ECE446D268434 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6C7266E70DD8CAA12AC51231 /* model-feature-golden.json in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
@@ -418,6 +444,7 @@
 				30848D92E77B4FB15D29D121 /* DashboardMetric.swift in Sources */,
 				92012161C9ACA7A94CFBBA7F /* DashboardRepository.swift in Sources */,
 				2F022808C7E391537959A053 /* DayKey.swift in Sources */,
+				37B811C05E5DEB8261088DB0 /* GeneratedModelFeatures.swift in Sources */,
 				C0CF86213AC8FAC5442DD2A9 /* HandshakeView.swift in Sources */,
 				679CCD419862149E0C72EF4C /* HealthHistoryModel.swift in Sources */,
 				201AC7BDED49929A68E60A75 /* MetricTrendCard.swift in Sources */,
@@ -470,6 +497,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				99A65963BED0E6686FF33D24 /* ModelFeatureGoldenVectorTests.swift in Sources */,
 				9D1B418868E36CCC77E7B249 /* WhoopPrivateModelTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

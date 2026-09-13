@@ -9,20 +9,24 @@ metrics locally without depending on a WHOOP membership.
 
 ## Local verification
 
-Install the pinned tools and repository hook once, then run the canonical gate:
+Install the named Homebrew tools, verify their exact tested versions, and add
+the repository hook once:
 
 ```bash
 brew bundle --file Brewfile
+Tools/doctor.sh --toolchain-only
 Tools/install_git_hooks.sh
-Tools/verify_local.sh
 ```
 
-The gate enforces Swift formatting, Swift 6 strict concurrency, warnings as
-errors, Ruff formatting/linting, strict mypy, shellcheck, secret and private-data
-scans, generated-project drift, zero skipped tests, a 58% app coverage floor,
-Release compilation, and Xcode static analysis. Pull requests and `main` use a
-private self-hosted Mac runner, so normal CI consumes no GitHub-hosted macOS
-minutes. `.github/workflows/ios-ci.yml` is a manual hosted fallback only.
+Use `Tools/check_fast.sh` while editing; it retains one simulator and DerivedData
+cache. Run `Tools/verify_local.sh` on the final clean commit. That gate uses a
+fresh simulator/build directory and enforces Swift formatting, Swift 6 strict
+concurrency, warnings as errors, Ruff, strict mypy, shellcheck, private-data
+scans, generated artifacts, zero skipped tests, global and critical-module
+coverage, Release compilation, and static analysis. A successful clean-commit
+gate writes a 24-hour local attestation keyed by HEAD, tree, and exact toolchain,
+so the pre-push hook can reuse it instead of immediately repeating the same run.
+CI always performs its own isolated gate.
 
 See [testing and CI](docs/testing.md), [architecture](docs/architecture.md), and
 [contributing](CONTRIBUTING.md) before making a behavioral change.

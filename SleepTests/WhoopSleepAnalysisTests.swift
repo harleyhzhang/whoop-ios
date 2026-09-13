@@ -384,10 +384,10 @@ extension WhoopSleepStateTests {
         let features = SleepScoreFeatureBuilder.features(current: current, history: history)
 
         XCTAssertEqual(features.count, 50)
-        XCTAssertEqual(features[0], 510)
-        XCTAssertEqual(features[1], 97)
-        XCTAssertEqual(features[6], 480)
-        XCTAssertEqual(features[7], 95)
+        XCTAssertEqual(features[GeneratedModelFeatures.Sleep.durationIndex], 510)
+        XCTAssertEqual(features[GeneratedModelFeatures.Sleep.efficiencyIndex], 97)
+        XCTAssertEqual(features[GeneratedModelFeatures.Sleep.lag1DurationIndex], 480)
+        XCTAssertEqual(features[GeneratedModelFeatures.Sleep.lag1EfficiencyIndex], 95)
         XCTAssertGreaterThan(features.last ?? 0, 95)
     }
 
@@ -415,6 +415,7 @@ extension WhoopSleepStateTests {
         let payload: [String: Any] = [
             "version": "synthetic",
             "featureVersion": SleepScoreFeatureBuilder.version,
+            "featureCount": SleepScoreFeatureBuilder.featureCount,
             "directWeight": 0.1,
             "extraTreesWeight": 0.75,
             "trees": [

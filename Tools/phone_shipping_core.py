@@ -15,11 +15,20 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
+from generated_model_features import (
+    RECOVERY_FEATURE_COUNT as RECOVERY_FEATURE_COUNT,
+)
+from generated_model_features import (
+    RECOVERY_FEATURE_VERSION as RECOVERY_FEATURE_VERSION,
+)
+from generated_model_features import (
+    SLEEP_FEATURE_COUNT as SLEEP_FEATURE_COUNT,
+)
+from generated_model_features import (
+    SLEEP_FEATURE_VERSION as SLEEP_FEATURE_VERSION,
+)
+
 BUNDLE_IDENTIFIER = "com.clintonst.sideload.sleep"
-SLEEP_FEATURE_COUNT = 50
-SLEEP_FEATURE_VERSION = "whoop_local_features_v1"
-RECOVERY_FEATURE_COUNT = 169
-RECOVERY_FEATURE_VERSION = "whoop_local_recovery_features_v1"
 PRIVATE_ASSET_NAMES = (
     "whoop-history.json",
     "whoop-score-model.json",
@@ -464,6 +473,11 @@ def validate_sleep_model(path: Path) -> str:
     if feature_version != SLEEP_FEATURE_VERSION:
         raise ShippingError(
             f"Sleep model featureVersion is {feature_version!r}; expected {SLEEP_FEATURE_VERSION!r}."
+        )
+    feature_count = required_int(model, "featureCount", "sleep score model")
+    if feature_count != SLEEP_FEATURE_COUNT:
+        raise ShippingError(
+            f"Sleep model featureCount is {feature_count}; expected {SLEEP_FEATURE_COUNT}."
         )
     for key in ("directWeight", "extraTreesWeight"):
         weight = finite_number(model.get(key), f"sleep score model.{key}")
