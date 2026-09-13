@@ -4,7 +4,8 @@
 
 `Tools/verify_local.sh` is the single merge gate. It runs:
 
-1. strict `swift-format`, shellcheck, actionlint, Ruff, strict mypy, and Python tests;
+1. strict `swift-format`, presentation/test Swift file-size budgets, shellcheck,
+   actionlint, Ruff, strict mypy, and Python tests;
 2. Xcode project-generation drift and phone-policy tests;
 3. tracked private-data checks plus gitleaks over history and the worktree;
 4. Swift unit and UI tests with zero failures and zero skips;

@@ -78,20 +78,20 @@ final class WhoopNotificationManagerTests: XCTestCase {
     func testBatteryNotificationsRespectThresholdsHysteresisAndFullCharge() async throws {
         let fixture = try makeFixture()
 
-        fixture.manager.observeBatteryLevel(20)
+        fixture.manager.observeBattery(.init(level: 20, status: .notCharging))
         await eventually { fixture.scheduler.requests.count == 1 }
-        fixture.manager.observeBatteryLevel(19)
+        fixture.manager.observeBattery(.init(level: 19, status: .notCharging))
         await Task.yield()
         XCTAssertEqual(fixture.scheduler.requests.count, 1)
 
-        fixture.manager.observeBatteryLevel(10)
+        fixture.manager.observeBattery(.init(level: 10, status: .notCharging))
         await eventually { fixture.scheduler.requests.count == 2 }
-        fixture.manager.observeBatteryLevel(25)
-        fixture.manager.observeBatteryLevel(20)
+        fixture.manager.observeBattery(.init(level: 25, status: .notCharging))
+        fixture.manager.observeBattery(.init(level: 20, status: .notCharging))
         await eventually { fixture.scheduler.requests.count == 3 }
 
-        fixture.manager.observeBatteryLevel(99)
-        fixture.manager.observeBatteryLevel(100)
+        fixture.manager.observeBattery(.init(level: 99, status: .charging))
+        fixture.manager.observeBattery(.init(level: 100, status: .charging))
         await eventually { fixture.scheduler.requests.count == 4 }
 
         XCTAssertEqual(
@@ -105,14 +105,32 @@ final class WhoopNotificationManagerTests: XCTestCase {
         )
     }
 
+    func testLowBatteryNotificationsWaitUntilChargingStops() async throws {
+        let fixture = try makeFixture()
+
+        fixture.manager.observeBattery(.init(level: 20, status: .charging))
+        fixture.manager.observeBattery(.init(level: 10, status: .charging))
+        await Task.yield()
+        XCTAssertTrue(fixture.scheduler.requests.isEmpty)
+
+        fixture.manager.observeBattery(.init(level: 10, status: .notCharging))
+        await eventually { fixture.scheduler.requests.count == 1 }
+
+        XCTAssertEqual(fixture.scheduler.requests.first?.identifier, "whoop.battery.low.10")
+        XCTAssertEqual(
+            fixture.scheduler.requests.first?.content.body,
+            "Charge now to avoid missing data."
+        )
+    }
+
     func testFailedNotificationCanRetryAndDoesNotPersistDeduplication() async throws {
         let fixture = try makeFixture()
         fixture.scheduler.addError = SyntheticError.deliveryFailed
 
-        fixture.manager.observeBatteryLevel(20)
+        fixture.manager.observeBattery(.init(level: 20, status: .notCharging))
         await eventually { fixture.scheduler.addAttemptCount == 1 }
         fixture.scheduler.addError = nil
-        fixture.manager.observeBatteryLevel(19)
+        fixture.manager.observeBattery(.init(level: 19, status: .notCharging))
         await eventually { fixture.scheduler.requests.count == 1 }
 
         XCTAssertEqual(fixture.scheduler.addAttemptCount, 2)

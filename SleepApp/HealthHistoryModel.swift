@@ -1,16 +1,19 @@
-import Combine
 import Foundation
+import Observation
 
+@Observable
 @MainActor
-final class HealthHistoryModel: ObservableObject {
-    @Published private(set) var records: [DailyHealthRecord] = []
-    @Published private(set) var stepRecords: [DailyStepRecord] = []
-    @Published private(set) var recoveryRecords: [DailyRecoveryRecord] = []
-    @Published private(set) var errorMessage: String?
+final class HealthHistoryModel {
+    private(set) var snapshot = DashboardHistorySnapshot.empty
+    private(set) var errorMessage: String?
 
+    @ObservationIgnored
     private let store: WhoopStore
+    @ObservationIgnored
     private var reloadGeneration = 0
+    @ObservationIgnored
     private var seriesCache: [ChartSeriesCacheKey: MetricSeries] = [:]
+    @ObservationIgnored
     private var dateCache: [String: Date] = [:]
 
     private struct ChartSeriesCacheKey: Hashable {
@@ -24,14 +27,19 @@ final class HealthHistoryModel: ObservableObject {
         reload()
     }
 
+    var records: [DailyHealthRecord] { snapshot.healthRecords }
+    var stepRecords: [DailyStepRecord] { snapshot.stepRecords }
+    var recoveryRecords: [DailyRecoveryRecord] { snapshot.recoveryRecords }
+
     /// Applies one freshly derived night without waiting for the full reload, so
     /// the dashboard can update immediately after automatic publication.
     func merge(_ record: DailyHealthRecord) {
-        if let index = records.firstIndex(where: { $0.dateKey == record.dateKey }) {
-            records[index] = record
+        var healthRecords = snapshot.healthRecords
+        if let index = healthRecords.firstIndex(where: { $0.dateKey == record.dateKey }) {
+            healthRecords[index] = record
         } else {
-            records.append(record)
-            records.sort { lhs, rhs in
+            healthRecords.append(record)
+            healthRecords.sort { lhs, rhs in
                 guard let lhsKey = DayKey(rawValue: lhs.dateKey) else { return false }
                 guard let rhsKey = DayKey(rawValue: rhs.dateKey) else { return true }
                 return lhsKey < rhsKey
@@ -39,6 +47,11 @@ final class HealthHistoryModel: ObservableObject {
         }
         seriesCache.removeAll(keepingCapacity: true)
         dateCache[record.dateKey] = record.date
+        snapshot = DashboardHistorySnapshot(
+            healthRecords: healthRecords,
+            stepRecords: snapshot.stepRecords,
+            recoveryRecords: snapshot.recoveryRecords
+        )
     }
 
     /// Chart construction is intentionally cached outside `View.body` because
@@ -160,17 +173,15 @@ final class HealthHistoryModel: ObservableObject {
                 guard let self, generation == self.reloadGeneration else { return }
                 switch result {
                 case .success(let snapshot):
-                    self.records = snapshot.healthRecords
-                    self.stepRecords = snapshot.stepRecords
-                    self.recoveryRecords = snapshot.recoveryRecords
+                    self.seriesCache.removeAll(keepingCapacity: true)
+                    self.dateCache.removeAll(keepingCapacity: true)
+                    self.snapshot = snapshot
                     self.errorMessage = nil
                 case .failure(let error):
                     // Preserve every last known-good dataset through a
                     // transient read failure instead of blanking its charts.
                     self.errorMessage = error.localizedDescription
                 }
-                self.seriesCache.removeAll(keepingCapacity: true)
-                self.dateCache.removeAll(keepingCapacity: true)
             }
         }
     }

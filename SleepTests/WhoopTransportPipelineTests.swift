@@ -169,6 +169,32 @@ final class WhoopTransportPipelineTests: XCTestCase {
         XCTAssertEqual(fixture.store.ingestionTransactionCountForTesting(), 1)
     }
 
+    func testPipelinePublishesOneTypedBatteryObservation() throws {
+        let fixture = try makeStoreFixture()
+        defer {
+            fixture.store.shutdownForTesting()
+            try? FileManager.default.removeItem(at: fixture.directory)
+        }
+        let recorder = TransportCallbackRecorder()
+        let pipeline = WhoopTransportPipeline(
+            store: fixture.store,
+            idleFlushDelay: 60,
+            uiSnapshotInterval: 0,
+            didPublishUI: { snapshot in recorder.recordUI(snapshot) },
+            didPersist: { _, _ in }
+        )
+
+        pipeline.submitBatteryLevelStatus(Data([0x02, 0x23, 0x00, 10]), deliveredAt: .now)
+        pipeline.submitBatteryLevel(Data([10]), deliveredAt: .now)
+        pipeline.flushAndWaitForPersistence { recorder.recordDrain() }
+
+        XCTAssertEqual(recorder.drainSemaphore.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(
+            recorder.snapshot().batteryObservations.last,
+            BatteryObservation(level: 10, status: .charging)
+        )
+    }
+
     func testStoreCommitsHistoricalBatchInOneTransaction() async throws {
         let fixture = try makeStoreFixture()
         defer {
@@ -395,11 +421,15 @@ private final class TransportCallbackRecorder: @unchecked Sendable {
     private var persistedBatchSizes: [Int] = []
     private var persistenceSuccesses: [Bool] = []
     private var uiHeartRates: [Int] = []
+    private var batteryObservations: [BatteryObservation] = []
     private var callbacksWereOffMain = true
 
     func recordUI(_ snapshot: WhoopTransportUISnapshot) {
         lock.withLock {
             if let heartRate = snapshot.heartRate { uiHeartRates.append(heartRate) }
+            if let batteryObservation = snapshot.batteryObservation {
+                batteryObservations.append(batteryObservation)
+            }
             callbacksWereOffMain = callbacksWereOffMain && !Thread.isMainThread
         }
     }
@@ -427,10 +457,17 @@ private final class TransportCallbackRecorder: @unchecked Sendable {
         persistedBatchSizes: [Int],
         persistenceSuccesses: [Bool],
         uiHeartRates: [Int],
+        batteryObservations: [BatteryObservation],
         callbacksWereOffMain: Bool
     ) {
         lock.withLock {
-            (persistedBatchSizes, persistenceSuccesses, uiHeartRates, callbacksWereOffMain)
+            (
+                persistedBatchSizes,
+                persistenceSuccesses,
+                uiHeartRates,
+                batteryObservations,
+                callbacksWereOffMain
+            )
         }
     }
 }

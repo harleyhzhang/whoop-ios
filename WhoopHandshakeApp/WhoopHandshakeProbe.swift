@@ -234,17 +234,24 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         lastTelemetryCacheWriteAt = receivedAt
     }
 
-    private func cacheBatteryLevel(_ level: Int) {
-        let clampedLevel = min(max(level, 0), 100)
-        batteryStatus = WhoopBluetoothPolicy.inferredBatteryStatus(
+    private func applyBatteryObservation(_ observation: BatteryObservation) {
+        let observedStatus = observation.status
+        guard let level = observation.level else {
+            batteryStatus = observedStatus
+            return
+        }
+        let effectiveStatus = WhoopBluetoothPolicy.inferredBatteryStatus(
             previousLevel: batteryLevel,
-            currentLevel: clampedLevel,
-            currentStatus: batteryStatus
+            currentLevel: level,
+            currentStatus: observedStatus.isExplicit ? observedStatus : batteryStatus
         )
-        batteryLevel = clampedLevel
-        UserDefaults.standard.set(clampedLevel, forKey: cachedBatteryLevelKey)
+        batteryLevel = level
+        batteryStatus = effectiveStatus
+        UserDefaults.standard.set(level, forKey: cachedBatteryLevelKey)
         UserDefaults.standard.set(Date(), forKey: cachedBatteryLevelDateKey)
-        WhoopNotificationManager.shared.observeBatteryLevel(clampedLevel)
+        WhoopNotificationManager.shared.observeBattery(
+            BatteryObservation(level: level, status: effectiveStatus)
+        )
     }
 
     private func applyTransportUISnapshot(_ snapshot: WhoopTransportUISnapshot) {
@@ -253,13 +260,10 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         {
             cacheHeartRate(heartRate, receivedAt: receivedAt)
         }
-        if let level = snapshot.batteryLevel {
-            cacheBatteryLevel(level)
+        if let observation = snapshot.batteryObservation {
+            applyBatteryObservation(observation)
             record("Battery level: \(batteryLevel ?? 0)%")
-        }
-        if let status = snapshot.batteryStatus {
-            batteryStatus = status
-            record("Battery charging: \(status.isCharging ? "yes" : "no")")
+            record("Battery charging: \(batteryStatus.isCharging ? "yes" : "no")")
         }
     }
 

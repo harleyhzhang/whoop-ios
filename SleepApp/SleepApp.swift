@@ -139,8 +139,8 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
         }
     }
 
-    func observeBatteryLevel(_ rawLevel: Int) {
-        let level = min(max(rawLevel, 0), 100)
+    func observeBattery(_ observation: BatteryObservation) {
+        guard let level = observation.level else { return }
         let previous =
             defaults.object(forKey: Key.lastBatteryLevel) != nil
             ? defaults.integer(forKey: Key.lastBatteryLevel)
@@ -172,7 +172,7 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
                 body: "Battery reached 100%.",
                 successPreference: Key.fullChargeNotified
             )
-        } else if level <= 10, !sentLow10 {
+        } else if level <= 10, observation.status == .notCharging, !sentLow10 {
             scheduleBatteryNotification(
                 identifier: "whoop.battery.low.10",
                 title: "WHOOP battery at \(level)%",
@@ -180,7 +180,7 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
                 successPreference: Key.sentLow10,
                 additionalSuccessPreference: Key.sentLow20
             )
-        } else if level <= 20, !sentLow20 {
+        } else if level <= 20, observation.status == .notCharging, !sentLow20 {
             scheduleBatteryNotification(
                 identifier: "whoop.battery.low.20",
                 title: "WHOOP battery at \(level)%",
