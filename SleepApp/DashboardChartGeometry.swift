@@ -122,6 +122,14 @@ enum DashboardChartGeometry {
         CGFloat(interpolate(summaryLineWidth, detailLineWidth, smoothStep(detailProgress)))
     }
 
+    static func returningPosition(from selectedPosition: Double, progress: Double) -> Double {
+        interpolate(min(max(selectedPosition, 0), 1), 1, smoothStep(progress))
+    }
+
+    static func selectionOverlayOpacity(releaseProgress: Double) -> Double {
+        1 - smoothStep(releaseProgress)
+    }
+
     private static func interpolate(_ source: Double, _ target: Double, _ progress: Double) -> Double {
         source + ((target - source) * progress)
     }

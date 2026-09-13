@@ -103,16 +103,28 @@ struct MetricTrendCard: View {
         )
         let domain = metric.chartDomain(for: series.daily)
         let chartSelection = cardSelection
+        let isReleasing = chartState.releasingMetric == metric
+        let releaseProgress = isReleasing ? Double(chartState.releaseProgress) : 0
+        let visualSelection = chartSelection ?? (isReleasing ? chartState.selectedDate : nil)
+        let selectionOverlayOpacity =
+            chartSelection != nil
+            ? 1
+            : isReleasing
+                ? DashboardChartGeometry.selectionOverlayOpacity(releaseProgress: releaseProgress)
+                : 0
         let averageOpacity = 1 - DashboardChartGeometry.smoothStep(detailProgress)
         let contentOpacity = ChartContentOpacity.resolve(detailProgress: detailProgress)
         let lineWidth = DashboardChartGeometry.lineWidth(detailProgress: detailProgress)
         let highlightedPoint =
-            DashboardChartGeometry.selectedPoint(in: series.daily, near: chartSelection)
+            DashboardChartGeometry.selectedPoint(in: series.daily, near: visualSelection)
             ?? series.daily.last
             ?? MetricPoint(date: .now, value: 0)
-        let requestedHighlightPosition = DashboardChartGeometry.normalizedPosition(
-            of: highlightedPoint.date,
-            in: series.daily
+        let requestedHighlightPosition = DashboardChartGeometry.returningPosition(
+            from: DashboardChartGeometry.normalizedPosition(
+                of: highlightedPoint.date,
+                in: series.daily
+            ),
+            progress: releaseProgress
         )
         let highlightedCurvePoint = ChartPointAlignment.nearestCurvePoint(
             to: requestedHighlightPosition,
@@ -190,7 +202,7 @@ struct MetricTrendCard: View {
                     }
                 }
 
-                if chartSelection != nil {
+                if selectionOverlayOpacity > 0.001 {
                     RectangleMark(
                         xStart: .value(
                             "Dimmed future start",
@@ -203,10 +215,12 @@ struct MetricTrendCard: View {
                     .foregroundStyle(
                         Color(uiColor: .secondarySystemGroupedBackground).opacity(0.58)
                     )
+                    .opacity(selectionOverlayOpacity)
 
                     RuleMark(x: .value("Selected position", highlightedPosition))
                         .lineStyle(StrokeStyle(lineWidth: 1))
                         .foregroundStyle(Color.secondary.opacity(0.5))
+                        .opacity(selectionOverlayOpacity)
                 }
 
                 PointMark(
@@ -253,7 +267,11 @@ struct MetricTrendCard: View {
             .frame(height: 126)
             .accessibilityIdentifier("whoop.chart.\(metric.accessibilityID)")
             .accessibilityLabel("\(metric.trendTitle), all history")
-            .accessibilityValue(chartSelection == nil ? "Summary line" : "Daily detail line")
+            .accessibilityValue(
+                chartSelection != nil
+                    ? "Daily detail line"
+                    : isReleasing ? "Returning to latest" : "Summary line"
+            )
 
             rangeAxisFooter(monthDates: monthTicks)
         }
