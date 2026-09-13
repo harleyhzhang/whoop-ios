@@ -544,9 +544,13 @@ class RecordingRunner(phone_shipping.CommandRunner):
         return payload, subprocess.CompletedProcess(arguments, 0, "", "")
 
 
-def test_suspension_always_resumes_after_failure(tmp_path: Path) -> None:
+def test_suspension_quiesces_then_always_resumes_after_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     runner = RecordingRunner()
     device = core.Device("CORE-1", "UDID-1", "IP", "iPhone", "27.0", "24A1", "")
+    waits: list[bool] = []
+    monkeypatch.setattr(device_shipping, "wait_for_backup_quiescence", lambda: waits.append(True))
 
     with (
         pytest.raises(RuntimeError, match="copy failed"),
@@ -556,6 +560,7 @@ def test_suspension_always_resumes_after_failure(tmp_path: Path) -> None:
 
     actions = [call[2] for call in runner.device_calls if call[:2] == ["device", "process"]]
     assert actions == ["suspend", "resume"]
+    assert waits == [True]
 
 
 class ResumeFailureRunner(RecordingRunner):
@@ -575,9 +580,12 @@ class ResumeFailureRunner(RecordingRunner):
         return payload, completed
 
 
-def test_suspension_retries_resume_then_relaunches(tmp_path: Path) -> None:
+def test_suspension_retries_resume_then_relaunches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     runner = ResumeFailureRunner()
     device = core.Device("CORE-1", "UDID-1", "IP", "iPhone", "27.0", "24A1", "")
+    monkeypatch.setattr(device_shipping, "wait_for_backup_quiescence", lambda: None)
 
     with phone_shipping.suspended_application(runner, tmp_path, device):
         pass

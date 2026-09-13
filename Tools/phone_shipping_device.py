@@ -22,6 +22,17 @@ from phone_shipping_core import (
 )
 from phone_shipping_environment import CommandRunner
 
+# CoreDevice reports that a suspend signal was sent before the process and its
+# SQLite connections are necessarily quiescent.  Starting a multi-gigabyte
+# directory copy immediately can therefore capture the main database before a
+# final WAL write.  A short settle interval produced coherent snapshots on the
+# physical device where immediate copies did not.
+BACKUP_SUSPEND_QUIESCE_SECONDS = 5
+
+
+def wait_for_backup_quiescence() -> None:
+    time.sleep(BACKUP_SUSPEND_QUIESCE_SECONDS)
+
 
 class ResumeRequired(ShippingError):
     def __init__(self, status: str, message: str, manifest: Path | None = None) -> None:
@@ -102,6 +113,7 @@ def suspended_application(runner: CommandRunner, scratch: Path, device: Device) 
             scratch,
         )
         suspended = True
+        wait_for_backup_quiescence()
     try:
         yield
     finally:
