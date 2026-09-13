@@ -2,7 +2,10 @@ import Foundation
 
 enum WhoopFrameIntegrity {
     static func isValid(_ data: Data) -> Bool {
-        let bytes = [UInt8](data)
+        isValid([UInt8](data))
+    }
+
+    static func isValid(_ bytes: [UInt8]) -> Bool {
         guard bytes.count >= 12,
             bytes[0] == 0xAA,
             Int(UInt16(bytes[2]) | (UInt16(bytes[3]) << 8)) + 8 == bytes.count
@@ -90,9 +93,19 @@ struct WhoopDecodedRealtime: Sendable {
 
     static func decodeWhoop5Realtime(_ data: Data) -> WhoopDecodedRealtime? {
         let bytes = [UInt8](data)
+        return decodeWhoop5Realtime(
+            bytes: bytes,
+            integrityIsValid: WhoopFrameIntegrity.isValid(bytes)
+        )
+    }
+
+    static func decodeWhoop5Realtime(
+        bytes: [UInt8],
+        integrityIsValid: Bool
+    ) -> WhoopDecodedRealtime? {
         guard bytes.count >= 22,
             FrameType(rawValue: bytes[8]) == .realtimeHeartRate,
-            WhoopFrameIntegrity.isValid(data)
+            integrityIsValid
         else { return nil }
         let count = min(Int(bytes[17]), (bytes.count - 22) / 2)
         var intervals: [UInt16] = []
@@ -135,10 +148,20 @@ struct WhoopDecodedHistorical: Sendable {
     /// https://github.com/ryanbr/noop/blob/main/docs/BLE_REVERSE_ENGINEERING.md
     static func decode(_ data: Data) -> WhoopDecodedHistorical? {
         let bytes = [UInt8](data)
+        return decode(
+            bytes: bytes,
+            integrityIsValid: WhoopFrameIntegrity.isValid(bytes)
+        )
+    }
+
+    static func decode(
+        bytes: [UInt8],
+        integrityIsValid: Bool
+    ) -> WhoopDecodedHistorical? {
         guard bytes.count == 124,
             FrameType(rawValue: bytes[8]) == .historicalSample,
             bytes[9] == 18,
-            WhoopFrameIntegrity.isValid(data)
+            integrityIsValid
         else { return nil }
         let timestamp =
             UInt32(bytes[15])
@@ -304,11 +327,21 @@ struct WhoopDecodedPPG: Sendable, Equatable {
     /// beyond the 1...26 range seen in the original reference captures.
     static func decode(_ data: Data) -> WhoopDecodedPPG? {
         let bytes = [UInt8](data)
+        return decode(
+            bytes: bytes,
+            integrityIsValid: WhoopFrameIntegrity.isValid(bytes)
+        )
+    }
+
+    static func decode(
+        bytes: [UInt8],
+        integrityIsValid: Bool
+    ) -> WhoopDecodedPPG? {
         guard bytes.count == 88,
             FrameType(rawValue: bytes[8]) == .historicalSample,
             bytes[9] == 26,
             bytes[21] != 0,
-            WhoopFrameIntegrity.isValid(data)
+            integrityIsValid
         else { return nil }
         let timestamp =
             UInt32(bytes[15])
