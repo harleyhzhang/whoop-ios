@@ -297,6 +297,62 @@ extension WhoopSleepStateTests {
         XCTAssertEqual(correctedRecord.sleepEndAt, ISO8601DateFormatter().string(from: resumedUntil))
     }
 
+    func testCompletedHistoricalRRPublishesWithoutLiveBluetoothOvernight() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = WhoopStore(
+            databaseURL: directory.appendingPathComponent("sleep.sqlite3"),
+            runBackgroundDecoding: false
+        )
+        defer { store.shutdownForTesting() }
+        let peripheral = UUID()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let lastAsleep = now.addingTimeInterval(-10 * 60)
+        let startedAt = lastAsleep.addingTimeInterval(-(3 * 60 * 60 + 10 * 60))
+        let sessionID = try await beginOffload(store: store, peripheral: peripheral)
+
+        for timestamp in stride(
+            from: startedAt.timeIntervalSince1970,
+            through: lastAsleep.timeIntervalSince1970,
+            by: 30
+        ) {
+            _ = try await append(
+                version18Frame(
+                    timestamp: UInt32(timestamp),
+                    sleepState: 2,
+                    rrIntervals: [900, 1_000, 900, 1_000]
+                ),
+                store: store,
+                peripheral: peripheral,
+                sessionID: sessionID
+            )
+        }
+        _ = try await append(
+            version18Frame(timestamp: UInt32(now.timeIntervalSince1970), sleepState: 0),
+            store: store,
+            peripheral: peripheral,
+            sessionID: sessionID
+        )
+        _ = try await append(
+            metadataFrame(type: 3),
+            store: store,
+            peripheral: peripheral,
+            sessionID: sessionID
+        )
+
+        let snapshot = await sleepSnapshot(
+            store: store,
+            now: now,
+            allowAutomaticFinalization: true
+        )
+        let record = try XCTUnwrap(snapshot.finalizedRecord)
+
+        XCTAssertEqual(record.hrvRMSSDMilliseconds ?? 0, 100, accuracy: 0.001)
+        XCTAssertEqual(record.restingHeartRateBPM, 55)
+        XCTAssertTrue(record.hasCompletePrimarySleepMetrics)
+    }
+
     func testObservedAsleepRangesExcludeLongUpInterval() {
         let asleep = [
             row(at: 0, state: 2),

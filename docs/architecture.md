@@ -98,6 +98,9 @@ SQLite separates immutable evidence from rebuildable query projections:
   never replace a valid latest value, but they also never block raw persistence.
 - `heart_rate_sample` retains only packets with R-R intervals because those
   packet boundaries and timestamps are required for nightly HRV.
+- Completed `whoop_historical_sample` rows provide the automatic nightly-HRV
+  fallback when iOS suspends the live R-R stream; row timestamps and packet
+  boundaries feed the same continuity and artifact filters as live packets.
 - Versioned rows in `whoop_historical_sample` and `whoop_ppg_packet` are the
   success record for decoding. `whoop_decode_failure` is a sparse ledger for
   unsupported and rejected packets, preserving diagnosability without a second

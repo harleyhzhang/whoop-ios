@@ -270,6 +270,15 @@ discipline, and the limits of historical recovery.
   within ninety minutes silently reopens and grows the same night, including
   correcting its wake-anchored step boundary. Partial evidence can never shrink
   a stored night or replace the previous coherent dashboard day.
+- Nightly HRV prefers the live R-R stream, then automatically falls back to the
+  timestamped R-R packets in a completed historical offload. This covers nights
+  when iOS suspends live Bluetooth delivery without weakening the all-metrics or
+  HISTORY_COMPLETE publication gates. The 2026-09-13 failure capture contained
+  20,640 asleep R-R intervals across 80 valid five-minute windows and produced
+  70.3 ms despite zero live overnight packets. Across the six dense local nights
+  where both sources could score, five historical results matched the preferred
+  live result within 0.1 ms; one differed by 10.2 ms (MAE 1.71 ms). The fallback
+  is therefore reserved for nights the live stream cannot score.
 - The grow-only repair is grounded in the 2026-09-06 failure capture: the former
   manual path stored 230.4 minutes at 12:05 while the strap was actively
   offloading, then the completed local history showed 512 minutes for the same

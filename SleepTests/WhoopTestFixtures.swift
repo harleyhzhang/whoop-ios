@@ -113,16 +113,23 @@ extension WhoopSleepStateTests {
     func version18Frame(
         timestamp: UInt32,
         sleepState: UInt8,
+        rrIntervals: [UInt16] = [],
         stepCounter: UInt16 = 0,
         cadenceRaw: UInt8 = 0,
         motionClassRaw: UInt8 = 0
     ) -> Data {
+        precondition(rrIntervals.count <= 4)
         var bytes = WhoopTestFrameFactory.frame(length: 124, type: 47, version: 18)
         bytes[15] = UInt8(truncatingIfNeeded: timestamp)
         bytes[16] = UInt8(truncatingIfNeeded: timestamp >> 8)
         bytes[17] = UInt8(truncatingIfNeeded: timestamp >> 16)
         bytes[18] = UInt8(truncatingIfNeeded: timestamp >> 24)
         bytes[22] = 55
+        bytes[23] = UInt8(rrIntervals.count)
+        for (index, interval) in rrIntervals.enumerated() {
+            bytes[24 + index * 2] = UInt8(truncatingIfNeeded: interval)
+            bytes[25 + index * 2] = UInt8(truncatingIfNeeded: interval >> 8)
+        }
         bytes[57] = UInt8(truncatingIfNeeded: stepCounter)
         bytes[58] = UInt8(truncatingIfNeeded: stepCounter >> 8)
         bytes[59] = cadenceRaw
