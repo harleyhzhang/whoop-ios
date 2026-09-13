@@ -4,6 +4,33 @@ import XCTest
 @testable import Sleep
 
 final class WhoopBluetoothPolicyTests: XCTestCase {
+    func testHandshakeBehaviorNeverDependsOnDisplayCopy() {
+        XCTAssertTrue(HandshakePhase.acknowledged.isAcknowledged)
+        XCTAssertFalse(HandshakePhase.ready.isAcknowledged)
+        XCTAssertTrue(HandshakePhase.ready.canAutomaticallyAttempt)
+        XCTAssertEqual(
+            HandshakePhase.refused(reason: "future reason").displayText,
+            "Refused: future reason"
+        )
+    }
+
+    func testUnknownWireValuesRoundTripWithoutAcquiringKnownBehavior() {
+        let frame = FrameType(rawValue: 0xFE)
+        XCTAssertEqual(frame, .unknown(0xFE))
+        XCTAssertEqual(frame.rawValue, 0xFE)
+        XCTAssertFalse(frame.isReplayProne)
+
+        let metadata = MetadataType(rawValue: 0xFD)
+        XCTAssertEqual(metadata, .unknown(0xFD))
+        XCTAssertEqual(metadata.rawValue, 0xFD)
+        XCTAssertFalse(
+            WhoopBluetoothPolicy.shouldAnalyzeHistoryCompletion(
+                metadataType: metadata,
+                historicalSyncActive: true
+            )
+        )
+    }
+
     func testCommandFrameMatchesKnownClientHelloAndHasValidIntegrity() {
         let frame = WhoopCommand.clientHello.frame(sequence: 0x01)
 
@@ -77,37 +104,37 @@ final class WhoopBluetoothPolicyTests: XCTestCase {
     }
 
     func testBatteryTrendInferenceNeverOverridesExplicitChargingState() {
-        XCTAssertTrue(
-            WhoopBluetoothPolicy.inferredCharging(
+        XCTAssertEqual(
+            WhoopBluetoothPolicy.inferredBatteryStatus(
                 previousLevel: 50,
                 currentLevel: 49,
-                hasExplicitChargingState: true,
-                currentChargingState: true
-            )
+                currentStatus: .charging
+            ),
+            .charging
         )
-        XCTAssertTrue(
-            WhoopBluetoothPolicy.inferredCharging(
+        XCTAssertEqual(
+            WhoopBluetoothPolicy.inferredBatteryStatus(
                 previousLevel: 50,
                 currentLevel: 51,
-                hasExplicitChargingState: false,
-                currentChargingState: false
-            )
+                currentStatus: .unavailable
+            ),
+            .charging
         )
-        XCTAssertFalse(
-            WhoopBluetoothPolicy.inferredCharging(
+        XCTAssertEqual(
+            WhoopBluetoothPolicy.inferredBatteryStatus(
                 previousLevel: 50,
                 currentLevel: 49,
-                hasExplicitChargingState: false,
-                currentChargingState: true
-            )
+                currentStatus: .unavailable
+            ),
+            .notCharging
         )
-        XCTAssertTrue(
-            WhoopBluetoothPolicy.inferredCharging(
+        XCTAssertEqual(
+            WhoopBluetoothPolicy.inferredBatteryStatus(
                 previousLevel: 50,
                 currentLevel: 50,
-                hasExplicitChargingState: false,
-                currentChargingState: true
-            )
+                currentStatus: .charging
+            ),
+            .charging
         )
     }
 
@@ -153,16 +180,22 @@ final class WhoopBluetoothPolicyTests: XCTestCase {
         let chunkEnd: [UInt8] = [8, 7, 6, 5, 4, 3, 2, 1]
         let frame = WhoopTestFrameFactory.historicalMetadata(type: 2, chunkEnd: chunkEnd)
 
-        let metadata = try XCTUnwrap(WhoopHistoricalMetadata(data: frame, frameType: 49))
-        XCTAssertEqual(metadata.type, 2)
+        let metadata = try XCTUnwrap(
+            WhoopHistoricalMetadata(data: frame, frameType: .historicalMetadata)
+        )
+        XCTAssertEqual(metadata.type, .chunkEnd)
         XCTAssertEqual(metadata.chunkEndData, chunkEnd)
         XCTAssertFalse(metadata.shouldForcePresentation(historicalSyncActive: true))
 
         var corrupted = frame
         corrupted[12] ^= 0xFF
-        XCTAssertNil(WhoopHistoricalMetadata(data: corrupted, frameType: 49))
-        XCTAssertNil(WhoopHistoricalMetadata(data: frame, frameType: 40))
-        XCTAssertNil(WhoopHistoricalMetadata(data: Data(repeating: 0, count: 12), frameType: 49))
+        XCTAssertNil(WhoopHistoricalMetadata(data: corrupted, frameType: .historicalMetadata))
+        XCTAssertNil(WhoopHistoricalMetadata(data: frame, frameType: .realtimeHeartRate))
+        XCTAssertNil(
+            WhoopHistoricalMetadata(
+                data: Data(repeating: 0, count: 12), frameType: .historicalMetadata
+            )
+        )
         XCTAssertNil(
             WhoopHistoricalMetadata(
                 data: WhoopTestFrameFactory.historicalMetadata(
@@ -170,7 +203,7 @@ final class WhoopBluetoothPolicyTests: XCTestCase {
                     chunkEnd: chunkEnd,
                     length: 32
                 ),
-                frameType: 49
+                frameType: .historicalMetadata
             ))
     }
 
@@ -178,12 +211,12 @@ final class WhoopBluetoothPolicyTests: XCTestCase {
         let start = try XCTUnwrap(
             WhoopHistoricalMetadata(
                 data: WhoopTestFrameFactory.historicalMetadata(type: 1),
-                frameType: 49
+                frameType: .historicalMetadata
             ))
         let complete = try XCTUnwrap(
             WhoopHistoricalMetadata(
                 data: WhoopTestFrameFactory.historicalMetadata(type: 3, frameType: 56),
-                frameType: 56
+                frameType: .historicalMetadataAlternate
             ))
 
         XCTAssertTrue(start.shouldForcePresentation(historicalSyncActive: false))
@@ -192,19 +225,19 @@ final class WhoopBluetoothPolicyTests: XCTestCase {
 
         XCTAssertFalse(
             WhoopBluetoothPolicy.shouldAnalyzeHistoryCompletion(
-                metadataType: 2,
+                metadataType: .chunkEnd,
                 historicalSyncActive: true
             )
         )
         XCTAssertTrue(
             WhoopBluetoothPolicy.shouldAnalyzeHistoryCompletion(
-                metadataType: 3,
+                metadataType: .historyComplete,
                 historicalSyncActive: true
             )
         )
         XCTAssertFalse(
             WhoopBluetoothPolicy.shouldAnalyzeHistoryCompletion(
-                metadataType: 3,
+                metadataType: .historyComplete,
                 historicalSyncActive: false
             )
         )

@@ -5,6 +5,9 @@ import XCTest
 
 final class DayKeyTests: XCTestCase {
     func testStrictParsingRejectsMalformedAndImpossibleDays() {
+        XCTAssertNil(DayKey(rawValue: "2026-9-01"))
+        XCTAssertNil(DayKey(rawValue: "2026-02-29"))
+        XCTAssertEqual(DayKey(rawValue: "2028-02-29")?.rawValue, "2028-02-29")
         XCTAssertNil(DayKey.date(from: "2026-9-01"))
         XCTAssertNil(DayKey.date(from: "2026-02-29"))
         XCTAssertNotNil(DayKey.date(from: "2028-02-29"))
@@ -26,5 +29,15 @@ final class DayKeyTests: XCTestCase {
     func testDayGapIsStableAcrossLeapDay() {
         XCTAssertEqual(DayKey.dayGap(from: "2028-02-28", to: "2028-03-01"), 2)
         XCTAssertEqual(DayKey.dayGap(from: "2028-03-01", to: "2028-02-28"), -2)
+    }
+
+    func testDayKeyCodableUsesItsValidatedStringRepresentation() throws {
+        let key = try XCTUnwrap(DayKey(rawValue: "2028-02-29"))
+        let encoded = try JSONEncoder().encode(key)
+        XCTAssertEqual(String(decoding: encoded, as: UTF8.self), "\"2028-02-29\"")
+        XCTAssertEqual(try JSONDecoder().decode(DayKey.self, from: encoded), key)
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(DayKey.self, from: Data("\"2028-02-30\"".utf8))
+        )
     }
 }

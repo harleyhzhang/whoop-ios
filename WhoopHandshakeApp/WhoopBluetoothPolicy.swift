@@ -1,19 +1,19 @@
 import Foundation
 
 struct WhoopHistoricalMetadata: Equatable {
-    let type: UInt8
+    let type: MetadataType
     let chunkEndData: [UInt8]?
 
-    init?(data: Data, frameType: UInt8?) {
+    init?(data: Data, frameType: FrameType?) {
         let bytes = [UInt8](data)
         guard
             bytes.count > 10,
-            frameType == 49 || frameType == 56,
+            frameType?.isHistoricalMetadata == true,
             WhoopFrameIntegrity.isValid(data)
         else { return nil }
 
-        type = bytes[10]
-        if type == 2 {
+        type = MetadataType(rawValue: bytes[10])
+        if type == .chunkEnd {
             // The eight-byte chunk terminator ends at offset 28; four trailer
             // checksum bytes must still follow it.
             guard bytes.count >= 33 else { return nil }
@@ -24,7 +24,7 @@ struct WhoopHistoricalMetadata: Equatable {
     }
 
     func shouldForcePresentation(historicalSyncActive: Bool) -> Bool {
-        type == 1 || (type == 3 && historicalSyncActive)
+        type == .historyStart || (type == .historyComplete && historicalSyncActive)
     }
 }
 
@@ -79,16 +79,15 @@ enum WhoopBluetoothPolicy {
         return name == "w" || name.contains("whoop") || name.contains("puffin")
     }
 
-    static func inferredCharging(
+    static func inferredBatteryStatus(
         previousLevel: Int?,
         currentLevel: Int,
-        hasExplicitChargingState: Bool,
-        currentChargingState: Bool
-    ) -> Bool {
-        guard !hasExplicitChargingState, let previousLevel else { return currentChargingState }
-        if currentLevel > previousLevel { return true }
-        if currentLevel < previousLevel { return false }
-        return currentChargingState
+        currentStatus: BatteryStatus
+    ) -> BatteryStatus {
+        guard !currentStatus.isExplicit, let previousLevel else { return currentStatus }
+        if currentLevel > previousLevel { return .charging }
+        if currentLevel < previousLevel { return .notCharging }
+        return currentStatus
     }
 
     static func shouldAcknowledgeChunk(
@@ -107,10 +106,10 @@ enum WhoopBluetoothPolicy {
     }
 
     static func shouldAnalyzeHistoryCompletion(
-        metadataType: UInt8?,
+        metadataType: MetadataType?,
         historicalSyncActive: Bool
     ) -> Bool {
-        metadataType == 3 && historicalSyncActive
+        metadataType == .historyComplete && historicalSyncActive
     }
 
     static func commandFrame(command: UInt8, sequence: UInt8, payload: [UInt8]) -> [UInt8] {

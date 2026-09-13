@@ -4,6 +4,20 @@ import XCTest
 @testable import Sleep
 
 final class WhoopSleepStateTests: XCTestCase {
+    func testSleepStatePreservesUnknownRawValuesWithoutTreatingThemAsWake() {
+        let unknown = SleepState(rawValue: 99)
+        XCTAssertEqual(unknown, .unknown(99))
+        XCTAssertEqual(unknown.rawValue, 99)
+        XCTAssertFalse(unknown.isExplicitlyAwake)
+        XCTAssertFalse(
+            WhoopAutomaticSleepPolicy.canFinalize(
+                latestState: unknown,
+                secondsSinceLastAsleep: 60 * 60,
+                latestSampleIsCurrent: true
+            )
+        )
+    }
+
     func testWeekChartUsesAContinuousShapePreservingCurve() {
         let start = Date(timeIntervalSinceReferenceDate: 0)
         let day: TimeInterval = 86_400
@@ -259,25 +273,25 @@ final class WhoopSleepStateTests: XCTestCase {
         let firstWake = Date(timeIntervalSince1970: 1_000)
         let nextWake = Date(timeIntervalSince1970: 100_000)
         let boundaries = [
-            WhoopWakeBoundary(dateKey: "2026-09-08", wokeAt: firstWake),
-            WhoopWakeBoundary(dateKey: "2026-09-09", wokeAt: nextWake),
+            WhoopWakeBoundary(dateKey: DayKey(rawValue: "2026-09-08")!, wokeAt: firstWake),
+            WhoopWakeBoundary(dateKey: DayKey(rawValue: "2026-09-09")!, wokeAt: nextWake),
         ]
 
         XCTAssertEqual(
             WhoopPhysiologicalDay.dateKey(
                 for: nextWake.addingTimeInterval(-1),
                 publishedWakes: boundaries,
-                civilFallback: "2026-09-09"
+                civilFallback: DayKey(rawValue: "2026-09-09")!
             ),
-            "2026-09-08"
+            DayKey(rawValue: "2026-09-08")!
         )
         XCTAssertEqual(
             WhoopPhysiologicalDay.dateKey(
                 for: nextWake,
                 publishedWakes: boundaries,
-                civilFallback: "2026-09-09"
+                civilFallback: DayKey(rawValue: "2026-09-09")!
             ),
-            "2026-09-09"
+            DayKey(rawValue: "2026-09-09")!
         )
     }
 
@@ -291,26 +305,37 @@ final class WhoopSleepStateTests: XCTestCase {
 
     func testReplayIndexIsLimitedToReplayPronePacketClasses() {
         XCTAssertFalse(WhoopHandshakeProbe.shouldDeduplicateTransportRetries(frameType: nil))
-        XCTAssertFalse(WhoopHandshakeProbe.shouldDeduplicateTransportRetries(frameType: 40))
-        XCTAssertTrue(WhoopHandshakeProbe.shouldDeduplicateTransportRetries(frameType: 47))
-        XCTAssertTrue(WhoopHandshakeProbe.shouldDeduplicateTransportRetries(frameType: 49))
-        XCTAssertTrue(WhoopHandshakeProbe.shouldDeduplicateTransportRetries(frameType: 50))
+        XCTAssertFalse(
+            WhoopHandshakeProbe.shouldDeduplicateTransportRetries(frameType: .realtimeHeartRate)
+        )
+        XCTAssertTrue(
+            WhoopHandshakeProbe.shouldDeduplicateTransportRetries(frameType: .historicalSample)
+        )
+        XCTAssertTrue(
+            WhoopHandshakeProbe.shouldDeduplicateTransportRetries(frameType: .historicalMetadata)
+        )
+        XCTAssertTrue(
+            WhoopHandshakeProbe.shouldDeduplicateTransportRetries(frameType: .transport50)
+        )
     }
 
     func testBatteryLevelStatusReportsChargingOrExternalPower() {
         XCTAssertEqual(
-            WhoopHandshakeProbe.batteryLevelStatusCharging(Data([0x02, 0x23, 0x00, 68])),
-            true
+            WhoopHandshakeProbe.batteryLevelStatus(Data([0x02, 0x23, 0x00, 68])),
+            .charging
         )
         XCTAssertEqual(
-            WhoopHandshakeProbe.batteryLevelStatusCharging(Data([0x02, 0x63, 0x00, 100])),
-            true
+            WhoopHandshakeProbe.batteryLevelStatus(Data([0x02, 0x63, 0x00, 100])),
+            .charging
         )
         XCTAssertEqual(
-            WhoopHandshakeProbe.batteryLevelStatusCharging(Data([0x02, 0x41, 0x00, 67])),
-            false
+            WhoopHandshakeProbe.batteryLevelStatus(Data([0x02, 0x41, 0x00, 67])),
+            .notCharging
         )
-        XCTAssertNil(WhoopHandshakeProbe.batteryLevelStatusCharging(Data([0x02, 0x01, 0x00])))
+        XCTAssertEqual(
+            WhoopHandshakeProbe.batteryLevelStatus(Data([0x02, 0x01, 0x00])),
+            .unknown(rawValue: 1)
+        )
     }
 
     func testBatteryUsesOnlySystemRedAtOrBelowTwentyPercent() {
@@ -341,9 +366,12 @@ final class WhoopSleepStateTests: XCTestCase {
     }
 
     func testLegacyBatteryPowerStateReportsCharging() {
-        XCTAssertEqual(WhoopHandshakeProbe.legacyBatteryPowerStateCharging(Data([0x30])), true)
-        XCTAssertEqual(WhoopHandshakeProbe.legacyBatteryPowerStateCharging(Data([0x20])), false)
-        XCTAssertNil(WhoopHandshakeProbe.legacyBatteryPowerStateCharging(Data([0x00])))
+        XCTAssertEqual(WhoopHandshakeProbe.legacyBatteryStatus(Data([0x30])), .charging)
+        XCTAssertEqual(WhoopHandshakeProbe.legacyBatteryStatus(Data([0x20])), .notCharging)
+        XCTAssertEqual(
+            WhoopHandshakeProbe.legacyBatteryStatus(Data([0x00])),
+            .unknown(rawValue: 0)
+        )
     }
 
     func testFreshWristEventsReportOnAndOffState() {
@@ -471,28 +499,28 @@ final class WhoopSleepStateTests: XCTestCase {
     func testAutomaticSleepPolicyFinalizesUpAfterTenMinutes() {
         XCTAssertTrue(
             WhoopAutomaticSleepPolicy.reportsSleeping(
-                latestState: 3,
+                latestState: .up,
                 secondsSinceLastAsleep: 9 * 60,
                 latestSampleIsCurrent: true
             )
         )
         XCTAssertFalse(
             WhoopAutomaticSleepPolicy.canFinalize(
-                latestState: 3,
+                latestState: .up,
                 secondsSinceLastAsleep: 9 * 60,
                 latestSampleIsCurrent: true
             )
         )
         XCTAssertFalse(
             WhoopAutomaticSleepPolicy.reportsSleeping(
-                latestState: 3,
+                latestState: .up,
                 secondsSinceLastAsleep: 10 * 60,
                 latestSampleIsCurrent: true
             )
         )
         XCTAssertTrue(
             WhoopAutomaticSleepPolicy.canFinalize(
-                latestState: 3,
+                latestState: .up,
                 secondsSinceLastAsleep: 10 * 60,
                 latestSampleIsCurrent: true
             )
@@ -502,14 +530,14 @@ final class WhoopSleepStateTests: XCTestCase {
     func testAutomaticSleepPolicyFinalizesExplicitAwakeWithoutDelay() {
         XCTAssertTrue(
             WhoopAutomaticSleepPolicy.canFinalize(
-                latestState: 0,
+                latestState: .awakePrimary,
                 secondsSinceLastAsleep: 60,
                 latestSampleIsCurrent: false
             )
         )
         XCTAssertTrue(
             WhoopAutomaticSleepPolicy.canFinalize(
-                latestState: 1,
+                latestState: .awakeAlternate,
                 secondsSinceLastAsleep: 60,
                 latestSampleIsCurrent: true
             )
@@ -1883,7 +1911,7 @@ final class WhoopSleepStateTests: XCTestCase {
         WhoopStore.HistoricalRow(
             timestamp: timestamp,
             heartRate: 55,
-            sleepState: state
+            sleepState: SleepState(rawValue: state)
         )
     }
 
@@ -1978,7 +2006,7 @@ final class WhoopSleepStateTests: XCTestCase {
                 packet: packet,
                 peripheralID: peripheral,
                 characteristicUUID: "FD4B0003",
-                frameType: packet.count > 8 ? packet[8] : nil,
+                frameType: packet.count > 8 ? FrameType(rawValue: packet[8]) : nil,
                 realtime: nil,
                 historical: WhoopDecodedHistorical.decode(packet),
                 offloadSessionID: sessionID
@@ -2002,7 +2030,7 @@ final class WhoopSleepStateTests: XCTestCase {
                 packet: packet,
                 peripheralID: peripheral,
                 characteristicUUID: "FD4B0003",
-                frameType: 40,
+                frameType: .realtimeHeartRate,
                 realtime: WhoopDecodedRealtime(
                     deviceTimestamp: UInt32(deliveredAt.timeIntervalSince1970),
                     heartRate: heartRate,

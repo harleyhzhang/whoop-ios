@@ -60,7 +60,7 @@ struct WhoopIngestionLatencyWindow: Codable, Equatable, Sendable {
         outcome: WhoopIngestionTelemetryOutcome,
         transactionNanoseconds: UInt64,
         queueWaitNanoseconds: UInt64,
-        frameType: UInt8?,
+        frameType: FrameType?,
         payloadBytes: Int,
         retryDetectionEnabled: Bool
     ) {
@@ -76,7 +76,7 @@ struct WhoopIngestionLatencyWindow: Codable, Equatable, Sendable {
         queueWaitTotalNanoseconds &+= queueWaitNanoseconds
         queueWaitMaximumNanoseconds = max(queueWaitMaximumNanoseconds, queueWaitNanoseconds)
         queueWaitBucketCounts[Self.bucketIndex(queueWaitNanoseconds)] += 1
-        let frameIndex = frameType.map(Int.init) ?? 256
+        let frameIndex = frameType.map { Int($0.rawValue) } ?? 256
         frameOutcomes[frameIndex].record(
             outcome: outcome,
             payloadBytes: payloadBytes,

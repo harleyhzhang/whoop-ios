@@ -101,7 +101,7 @@ final class WhoopStore: Sendable {
         packet: Data,
         peripheralID: UUID,
         characteristicUUID: String,
-        frameType: UInt8?,
+        frameType: FrameType?,
         realtime: WhoopDecodedRealtime?,
         historical: WhoopDecodedHistorical?,
         offloadSessionID: String? = nil,
@@ -1124,7 +1124,8 @@ final class WhoopStore: Sendable {
         defer { sqlite3_finalize(statement) }
         var boundaries: [WhoopWakeBoundary] = []
         while sqlite3_step(statement) == SQLITE_ROW {
-            guard let dateKey = textColumn(statement, 0),
+            guard let rawDateKey = textColumn(statement, 0),
+                let dateKey = DayKey(rawValue: rawDateKey),
                 let rawWake = textColumn(statement, 1),
                 let wokeAt = Self.parseISO8601(rawWake)
             else { continue }
@@ -1140,12 +1141,15 @@ final class WhoopStore: Sendable {
         utcOffsetSeconds: Int,
         database: OpaquePointer
     ) -> String {
-        let fallback = Self.dateKey(for: sampleAt, utcOffsetSeconds: utcOffsetSeconds)
+        let fallback = DayKey(
+            date: sampleAt,
+            timeZone: TimeZone(secondsFromGMT: utcOffsetSeconds) ?? .gmt
+        )
         return WhoopPhysiologicalDay.dateKey(
             for: sampleAt,
             publishedWakes: publishedWakeBoundaries(database: database),
             civilFallback: fallback
-        )
+        ).rawValue
     }
 
     private func addColumnIfNeeded(
@@ -1307,6 +1311,7 @@ final class WhoopStore: Sendable {
         sourceManifestSHA256: String,
         database: OpaquePointer
     ) -> Bool {
+        guard DayKey(rawValue: record.dateKey) != nil else { return false }
         let sql = """
             INSERT INTO whoop_official_daily_metric
             (date_key, official_recovery_score, official_steps, official_day_strain,
@@ -1361,6 +1366,7 @@ final class WhoopStore: Sendable {
     }
 
     private func upsertDailyHealthRecord(_ record: DailyHealthRecord, database: OpaquePointer) -> Bool {
+        guard DayKey(rawValue: record.dateKey) != nil else { return false }
         let sql = """
             INSERT INTO daily_health_metric
             (date_key, sleep_score, sleep_duration_minutes, hrv_rmssd_milliseconds,
@@ -1625,7 +1631,7 @@ final class WhoopStore: Sendable {
         packet: Data,
         peripheralID: UUID,
         characteristicUUID: String,
-        frameType: UInt8?,
+        frameType: FrameType?,
         realtime: WhoopDecodedRealtime?,
         historical: WhoopDecodedHistorical?,
         offloadSessionID: String?,
@@ -1846,7 +1852,7 @@ final class WhoopStore: Sendable {
         offloadSessionID: String?,
         peripheralID: String,
         characteristicUUID: String,
-        frameType: UInt8?,
+        frameType: FrameType?,
         payload: Data
     ) -> Bool {
         let sql = """
@@ -1863,7 +1869,7 @@ final class WhoopStore: Sendable {
             bind(peripheralID, to: 5, in: statement)
             bind(characteristicUUID, to: 6, in: statement)
             if let frameType {
-                sqlite3_bind_int(statement, 7, Int32(frameType))
+                sqlite3_bind_int(statement, 7, Int32(frameType.rawValue))
             } else {
                 sqlite3_bind_null(statement, 7)
             }
@@ -2034,7 +2040,7 @@ final class WhoopStore: Sendable {
             SELECT rowid, id, payload
             FROM whoop_raw_packet
             WHERE rowid > ?
-              AND frame_type = 47
+              AND frame_type = \(FrameType.historicalSample.rawValue)
               AND length(payload) = 88
               AND hex(substr(payload, 10, 1)) = '1A'
             ORDER BY rowid
@@ -2099,7 +2105,7 @@ final class WhoopStore: Sendable {
             SELECT rowid, id, payload
             FROM whoop_raw_packet
             WHERE rowid > ?
-              AND frame_type = 47
+              AND frame_type = \(FrameType.historicalSample.rawValue)
               AND length(payload) = 124
               AND hex(substr(payload, 10, 1)) = '12'
             ORDER BY rowid
@@ -2205,7 +2211,7 @@ final class WhoopStore: Sendable {
                 : nil
             guard
                 assignStepSamples(
-                    to: boundary.dateKey,
+                    to: boundary.dateKey.rawValue,
                     from: boundary.wokeAt.timeIntervalSince1970,
                     until: upperBound,
                     database: database
@@ -2275,14 +2281,14 @@ final class WhoopStore: Sendable {
         // to the preceding physiological day in the same transaction.
         if let previousWakeAt, previousWakeAt < wokeAt {
             let previousDateKey =
-                boundaries
+                (boundaries
                 .filter { $0.wokeAt < wokeAt }
                 .max(by: { $0.wokeAt < $1.wokeAt })?
                 .dateKey
-                ?? DayKey.string(
-                    from: previousWakeAt.addingTimeInterval(-1),
+                ?? DayKey(
+                    date: previousWakeAt.addingTimeInterval(-1),
                     timeZone: .autoupdatingCurrent
-                )
+                )).rawValue
             let correctionLowerBound = previousWakeAt.timeIntervalSince1970
             guard
                 let correctionDateKeys = stepDateKeys(
@@ -2609,7 +2615,7 @@ final class WhoopStore: Sendable {
                 sqlite3_bind_int(statement, 3, Int32(sample.heartRate))
                 let rrJSON = "[" + sample.rrIntervals.map(String.init).joined(separator: ",") + "]"
                 bind(rrJSON, to: 4, in: statement)
-                sqlite3_bind_int(statement, 5, Int32(sample.sleepState))
+                sqlite3_bind_int(statement, 5, Int32(sample.sleepState.rawValue))
                 sqlite3_bind_int(statement, 6, Int32(Self.decoderVersion))
                 sqlite3_bind_int(statement, 7, Int32(sample.stepMotionCounter))
                 sqlite3_bind_int(statement, 8, Int32(sample.stepCadenceRaw))
@@ -2630,7 +2636,7 @@ final class WhoopStore: Sendable {
         let sql = """
             SELECT id, payload
             FROM whoop_raw_packet
-            WHERE frame_type = 47
+            WHERE frame_type = \(FrameType.historicalSample.rawValue)
             ORDER BY received_at ASC
             """
         var statement: OpaquePointer?
@@ -2669,7 +2675,7 @@ final class WhoopStore: Sendable {
     struct HistoricalRow {
         let timestamp: TimeInterval
         let heartRate: Int
-        let sleepState: Int
+        let sleepState: SleepState
     }
 
     struct RealtimeRRPacket: Sendable {
@@ -2833,7 +2839,7 @@ final class WhoopStore: Sendable {
                 HistoricalRow(
                     timestamp: sqlite3_column_double(statement, 0),
                     heartRate: Int(sqlite3_column_int(statement, 1)),
-                    sleepState: Int(sqlite3_column_int(statement, 2))
+                    sleepState: SleepState(rawValue: Int(sqlite3_column_int(statement, 2)))
                 ))
         }
         return rows
@@ -2866,12 +2872,12 @@ final class WhoopStore: Sendable {
                 HistoricalRow(
                     timestamp: sqlite3_column_double(statement, 0),
                     heartRate: Int(sqlite3_column_int(statement, 1)),
-                    sleepState: Int(sqlite3_column_int(statement, 2))
+                    sleepState: SleepState(rawValue: Int(sqlite3_column_int(statement, 2)))
                 ))
         }
         sqlite3_finalize(statement)
         guard let latest = rows.last, execute("BEGIN IMMEDIATE") else { return }
-        let groups = Self.groupedAsleepRows(rows.filter { $0.sleepState == 2 })
+        let groups = Self.groupedAsleepRows(rows.filter { $0.sleepState == .asleep })
         for group in groups {
             guard let first = group.first, let last = group.last else { continue }
             let session = rows.filter { $0.timestamp >= first.timestamp && $0.timestamp <= last.timestamp }
@@ -3075,14 +3081,14 @@ final class WhoopStore: Sendable {
         guard let latest = rows.last else { return .noData }
         let latestDate = Date(timeIntervalSince1970: latest.timestamp)
         let sampleIsCurrent = abs(now.timeIntervalSince(latestDate)) <= 30 * 60
-        let lastAsleepTimestamp = rows.last { $0.sleepState == 2 }?.timestamp
+        let lastAsleepTimestamp = rows.last { $0.sleepState == .asleep }?.timestamp
         let secondsSinceLastAsleep = lastAsleepTimestamp.map { latest.timestamp - $0 } ?? .infinity
         let detectorReportsSleeping = WhoopAutomaticSleepPolicy.reportsSleeping(
             latestState: latest.sleepState,
             secondsSinceLastAsleep: secondsSinceLastAsleep,
             latestSampleIsCurrent: sampleIsCurrent
         )
-        let asleepRows = rows.filter { $0.sleepState == 2 }
+        let asleepRows = rows.filter { $0.sleepState == .asleep }
         guard !asleepRows.isEmpty else { return .awake(latestDate, []) }
 
         let groups = Self.groupedAsleepRows(asleepRows)
@@ -3094,7 +3100,7 @@ final class WhoopStore: Sendable {
             }
             let cadence = Self.cadenceSeconds(of: sessionRows)
             let wakeRows = rows.filter {
-                $0.timestamp > lastSleep.timestamp && $0.sleepState != 2
+                $0.timestamp > lastSleep.timestamp && $0.sleepState != .asleep
             }
             candidates.append(
                 SleepCandidate(
@@ -3227,7 +3233,7 @@ final class WhoopStore: Sendable {
         }
         func shell(_ outcome: String, rows: [HistoricalRow] = []) -> WhoopSleepDiagnostics {
             var histogram: [String: Int] = [:]
-            for row in rows { histogram["\(row.sleepState)", default: 0] += 1 }
+            for row in rows { histogram["\(row.sleepState.rawValue)", default: 0] += 1 }
             return WhoopSleepDiagnostics(
                 generatedAt: iso.string(from: now), windowHours: 48,
                 sampleCount: rows.count,
@@ -3248,14 +3254,14 @@ final class WhoopStore: Sendable {
         guard !rows.isEmpty else { return shell("no historical samples in the last 48 hours") }
 
         var histogram: [String: Int] = [:]
-        for row in rows { histogram["\(row.sleepState)", default: 0] += 1 }
+        for row in rows { histogram["\(row.sleepState.rawValue)", default: 0] += 1 }
         let cadence = Self.cadenceSeconds(of: rows)
         var largestGap = 0.0
         for index in 1..<rows.count {
             largestGap = max(largestGap, rows[index].timestamp - rows[index - 1].timestamp)
         }
 
-        let asleepRows = rows.filter { $0.sleepState == 2 }
+        let asleepRows = rows.filter { $0.sleepState == .asleep }
         let groups = Self.groupedAsleepRows(asleepRows)
 
         let latest = rows[rows.count - 1]
@@ -3265,7 +3271,7 @@ final class WhoopStore: Sendable {
             let span = max(1.0, last.timestamp - first.timestamp)
             let inSession = rows.filter { $0.timestamp >= first.timestamp && $0.timestamp <= last.timestamp }
             let sessionCadence = Self.cadenceSeconds(of: inSession)
-            let wakeRows = rows.filter { $0.timestamp > last.timestamp && $0.sleepState != 2 }
+            let wakeRows = rows.filter { $0.timestamp > last.timestamp && $0.sleepState != .asleep }
             let duration = Self.elapsedSeconds(across: inSession, cadence: sessionCadence)
             let coverage = Self.observedFraction(of: inSession, cadence: sessionCadence)
             let density = min(1.0, Double(inSession.count) / max(1.0, span / sessionCadence))
@@ -3370,7 +3376,7 @@ final class WhoopStore: Sendable {
         var outcomes: [String: Int] = [:]
         let sql = """
             SELECT payload FROM whoop_raw_packet
-            WHERE frame_type = 47
+            WHERE frame_type = \(FrameType.historicalSample.rawValue)
             ORDER BY received_at DESC
             LIMIT 3000
             """

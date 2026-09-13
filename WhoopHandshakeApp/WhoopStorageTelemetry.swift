@@ -52,7 +52,7 @@ final class WhoopStorageTelemetry: @unchecked Sendable {
         outcome: WhoopIngestionTelemetryOutcome,
         transactionNanoseconds: UInt64,
         queueWaitNanoseconds: UInt64,
-        frameType: UInt8?,
+        frameType: FrameType?,
         payloadBytes: Int,
         retryDetectionEnabled: Bool,
         now: Date

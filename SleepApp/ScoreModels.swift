@@ -13,10 +13,13 @@ enum SleepScoreFeatureBuilder {
     static let featureCount = 50
 
     static func features(current: SleepScoreNight, history: [SleepScoreNight]) -> [Double] {
-        let recent =
-            history
-            .filter { $0.dateKey < current.dateKey }
-            .sorted { $0.dateKey > $1.dateKey }
+        let currentKey = DayKey(rawValue: current.dateKey)
+        let recent = history.compactMap { night -> (SleepScoreNight, DayKey)? in
+            DayKey(rawValue: night.dateKey).map { (night, $0) }
+        }
+        .filter { pair in currentKey.map { pair.1 < $0 } ?? false }
+        .sorted { $0.1 > $1.1 }
+        .map(\.0)
 
         var values = [
             current.durationMinutes,
@@ -29,7 +32,10 @@ enum SleepScoreFeatureBuilder {
         var previous: [SleepScoreNight] = []
         for lag in 1...7 {
             let candidate = recent.indices.contains(lag - 1) ? recent[lag - 1] : nil
-            let gap = candidate.flatMap { DayKey.dayGap(from: $0.dateKey, to: current.dateKey) }
+            let gap: Int? = candidate.flatMap { night in
+                guard let key = DayKey(rawValue: night.dateKey), let currentKey else { return nil }
+                return key.dayGap(to: currentKey)
+            }
             let usableCandidate =
                 candidate.flatMap { candidate in
                     gap.map { ($0 <= lag + 3) ? candidate : nil }
@@ -223,10 +229,16 @@ enum RecoveryScoreFeatureBuilder {
             let rhr = current.restingHeartRateBPM,
             let sleepScore = current.sleepScore
         else { return nil }
-        let eligible =
-            history
-            .filter { $0.dateKey < current.dateKey && sleepNight($0) != nil }
-            .sorted { $0.dateKey < $1.dateKey }
+        guard let currentKey = DayKey(rawValue: current.dateKey) else { return nil }
+        let eligible = history.compactMap { record -> (DailyHealthRecord, DayKey)? in
+            guard let key = DayKey(rawValue: record.dateKey), sleepNight(record) != nil else {
+                return nil
+            }
+            return (record, key)
+        }
+        .filter { $0.1 < currentKey }
+        .sorted { $0.1 < $1.1 }
+        .map(\.0)
         let sleepHistory = eligible.compactMap(sleepNight)
         var values = SleepScoreFeatureBuilder.features(
             current: currentNight,
@@ -241,15 +253,17 @@ enum RecoveryScoreFeatureBuilder {
                 recent.indices.contains(lag - 1)
                 ? recent[lag - 1]
                 : current
+            let candidateKey = DayKey(rawValue: candidate.dateKey)
+            let dayGap = candidateKey.flatMap { $0.dayGap(to: currentKey) } ?? 0
             values.append(contentsOf: [
                 candidate.hrvRMSSDMilliseconds ?? hrv,
                 candidate.restingHeartRateBPM ?? rhr,
                 stepsByDate[candidate.dateKey] ?? currentSteps,
                 candidate.sleepScore ?? sleepScore,
                 Double(
-                    candidate.dateKey == current.dateKey
+                    candidateKey == currentKey
                         ? 0
-                        : DayKey.dayGap(from: candidate.dateKey, to: current.dateKey) ?? 0),
+                        : dayGap),
             ])
         }
 

@@ -1,13 +1,74 @@
 import Foundation
 
-/// Canonical conversion for the persisted `yyyy-MM-dd` keys shared by health,
-/// projection, and model records. Callers choose the time zone explicitly when
-/// converting a key to or from an instant; day-to-day arithmetic is performed
-/// in GMT so device travel cannot change feature windows.
-enum DayKey {
+/// A validated `yyyy-MM-dd` key shared by health, projection, and model
+/// records. The raw string remains the SQLite/JSON representation, while
+/// comparisons and calendar arithmetic operate only on validated values.
+struct DayKey: RawRepresentable, Hashable, Comparable, Codable, Sendable,
+    CustomStringConvertible
+{
+    let rawValue: String
+
+    init?(rawValue: String) {
+        guard Self.parsedDate(from: rawValue, timeZone: .gmt) != nil else { return nil }
+        self.rawValue = rawValue
+    }
+
+    init(date: Date, timeZone: TimeZone) {
+        rawValue = Self.formattedString(from: date, timeZone: timeZone)
+    }
+
+    var description: String { rawValue }
+
+    static func < (lhs: DayKey, rhs: DayKey) -> Bool {
+        // Fixed-width Gregorian keys sort chronologically byte-for-byte.
+        lhs.rawValue < rhs.rawValue
+    }
+
+    func date(timeZone: TimeZone = .gmt) -> Date? {
+        Self.parsedDate(from: rawValue, timeZone: timeZone)
+    }
+
+    func dayGap(to end: DayKey) -> Int? {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .gmt
+        guard let startDate = date(), let endDate = end.date() else { return nil }
+        return calendar.dateComponents(
+            [.day],
+            from: startDate,
+            to: endDate
+        ).day
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        guard let value = DayKey(rawValue: rawValue) else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Invalid day key: \(rawValue)"
+            )
+        }
+        self = value
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+
+    /// Compatibility boundary for persisted string models. New behavioral
+    /// code should initialize `DayKey` and retain the typed value.
     static func date(
         from key: String,
         timeZone: TimeZone = .gmt
+    ) -> Date? {
+        guard let key = DayKey(rawValue: key) else { return nil }
+        return key.date(timeZone: timeZone)
+    }
+
+    private static func parsedDate(
+        from key: String,
+        timeZone: TimeZone
     ) -> Date? {
         let values = key.split(separator: "-", omittingEmptySubsequences: false)
         guard values.count == 3,
@@ -42,6 +103,13 @@ enum DayKey {
         from date: Date,
         timeZone: TimeZone
     ) -> String {
+        DayKey(date: date, timeZone: timeZone).rawValue
+    }
+
+    private static func formattedString(
+        from date: Date,
+        timeZone: TimeZone
+    ) -> String {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = timeZone
         let components = calendar.dateComponents([.year, .month, .day], from: date)
@@ -54,11 +122,9 @@ enum DayKey {
     }
 
     static func dayGap(from start: String, to end: String) -> Int? {
-        guard let startDate = date(from: start), let endDate = date(from: end) else {
+        guard let start = DayKey(rawValue: start), let end = DayKey(rawValue: end) else {
             return nil
         }
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = .gmt
-        return calendar.dateComponents([.day], from: startDate, to: endDate).day
+        return start.dayGap(to: end)
     }
 }
