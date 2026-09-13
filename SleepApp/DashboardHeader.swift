@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct DashboardHeader: View {
     let referenceDate: Date
@@ -24,9 +25,25 @@ struct DashboardHeader: View {
             Spacer()
 
             HStack(spacing: 7) {
-                Circle()
-                    .fill(isConnected ? Color.green : Color.secondary)
-                    .frame(width: 6, height: 6)
+                ZStack(alignment: .bottomTrailing) {
+                    Image("WhoopBand")
+                        .resizable()
+                        .scaledToFit()
+                        .brightness(0.07)
+                        .contrast(1.03)
+                        .frame(width: 24, height: 24)
+
+                    Circle()
+                        .fill(isConnected ? Color.green : Color.secondary)
+                        .frame(width: 5, height: 5)
+                        .overlay {
+                            Circle()
+                                .stroke(
+                                    Color(uiColor: .systemGroupedBackground),
+                                    lineWidth: 1
+                                )
+                        }
+                }
 
                 WhoopBatteryPercentIcon(level: batteryLevel, isCharging: isCharging)
                     .opacity(isConnected ? 1 : 0.45)

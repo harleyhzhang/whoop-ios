@@ -194,9 +194,10 @@ discipline, and the limits of historical recovery.
   chart scrubbing does not replay the number animation.
 - Haptics are limited to selection ticks when the exact selected night changes.
   Passive collection and background Bluetooth events stay silent.
-- The dashboard keeps connection state passive and compact: a small plain dot
-  is green only while the encrypted strap link is active and gray otherwise,
-  followed by the battery indicator. There is no dashboard status drawer.
+- The dashboard keeps connection state passive and compact: a small decorative
+  WHOOP-band image carries a plain status dot, green only while the encrypted
+  strap link is active and gray otherwise, followed by the battery indicator.
+  The cluster is not tappable and there is no dashboard status drawer.
 - Local notifications require no hosted service. A completed local sleep emits
   one deduplicated morning summary containing Sleep %, duration, HRV, and RHR.
   Battery readings emit one warning per discharge cycle at 20% and 10%, with
