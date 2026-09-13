@@ -6,15 +6,37 @@ import SwiftUI
 final class DashboardChartState {
     var selectedDate: Date?
     var activeMetric: MetricKind?
-    var morphFromRange: HealthRange?
-    var morphProgress: CGFloat = 1
-    var morphGeneration = 0
+    var detailedMetric: MetricKind?
+    var detailProgress: CGFloat = 0
 
-    func beginRangeTransition(from oldRange: HealthRange, reduceMotion: Bool) {
-        selectedDate = nil
+    func beginSelection(metric: MetricKind, date: Date, reduceMotion: Bool) {
+        if activeMetric != metric {
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                detailedMetric = metric
+                detailProgress = reduceMotion ? 1 : 0
+            }
+            if !reduceMotion {
+                withAnimation(.smooth(duration: 0.28, extraBounce: 0)) {
+                    detailProgress = 1
+                }
+            }
+        }
+        activeMetric = metric
+        selectedDate = date
+    }
+
+    func endSelection(metric: MetricKind, reduceMotion: Bool) {
+        guard activeMetric == metric else { return }
         activeMetric = nil
-        morphFromRange = reduceMotion ? nil : oldRange
-        morphProgress = reduceMotion ? 1 : 0
-        morphGeneration &+= 1
+        selectedDate = nil
+        if reduceMotion {
+            detailProgress = 0
+        } else {
+            withAnimation(.smooth(duration: 0.24, extraBounce: 0)) {
+                detailProgress = 0
+            }
+        }
     }
 }

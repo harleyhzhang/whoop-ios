@@ -33,6 +33,17 @@ extension MetricKind {
         }
     }
 
+    var accessibilityID: String {
+        switch self {
+        case .sleep: "sleep"
+        case .recovery: "recovery"
+        case .duration: "duration"
+        case .hrv: "hrv"
+        case .rhr: "rhr"
+        case .steps: "steps"
+        }
+    }
+
     var color: Color {
         switch self {
         case .sleep: Color(red: 0.39, green: 0.69, blue: 1.0)

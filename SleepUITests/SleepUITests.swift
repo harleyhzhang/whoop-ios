@@ -10,7 +10,7 @@ final class SleepUITests: XCTestCase {
         let app = configuredApplication()
         app.launch()
 
-        XCTAssertTrue(app.staticTexts["Trends"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Sleep"].firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Sleep"].firstMatch.exists)
         XCTAssertTrue(app.staticTexts["Sleep duration"].exists)
         XCTAssertTrue(app.staticTexts["Steps"].firstMatch.exists)
@@ -34,11 +34,23 @@ final class SleepUITests: XCTestCase {
         let app = configuredApplication()
         app.launch()
 
-        XCTAssertTrue(app.staticTexts["Trends"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Sleep"].firstMatch.waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Sleep detected"].exists)
         XCTAssertFalse(app.buttons["Process"].exists)
         XCTAssertFalse(app.staticTexts["Processing sleep…"].exists)
         XCTAssertFalse(app.staticTexts["Finishing sleep…"].exists)
+    }
+
+    func testDashboardUsesOnlyAllHistoryCharts() {
+        let app = configuredApplication()
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["Sleep"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Trends"].exists)
+        XCTAssertFalse(app.segmentedControls["Trend range"].exists)
+        XCTAssertFalse(app.buttons["Week"].exists)
+        XCTAssertFalse(app.buttons["Month"].exists)
+        XCTAssertFalse(app.buttons["Year"].exists)
     }
 
     private func configuredApplication() -> XCUIApplication {

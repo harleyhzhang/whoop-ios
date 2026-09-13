@@ -25,7 +25,6 @@
 		44838C3AC065F48BBA97B9C6 /* WhoopHandshakeProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACA50ED0CA372D20A4C7FCC2 /* WhoopHandshakeProbe.swift */; };
 		476A5C69503860B5B4D2BC84 /* WhoopSleepAnalysisTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 076EE844CAA15096FB7C3623 /* WhoopSleepAnalysisTests.swift */; };
 		49AB45DE757D54D018ABB473 /* DashboardComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3809107A1121151F76D5B4D8 /* DashboardComponents.swift */; };
-		4BA67C92A08D3B2ED419D355 /* RangePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55983CF0CF02A69DF8915153 /* RangePicker.swift */; };
 		4FDB88A26E0B2666ACD32173 /* WhoopPacketPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47124A55241F0D450E3746B1 /* WhoopPacketPersistenceTests.swift */; };
 		547CEA6F92843D9FA5E416BA /* WhoopTransportPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8048111276B8577F6DD8A855 /* WhoopTransportPipeline.swift */; };
 		580D826D5EF369356D641ABF /* WhoopDomainTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F6D1E0548636B1540ACDE3C /* WhoopDomainTypes.swift */; };
@@ -122,7 +121,6 @@
 		49E6D91FB80DE29760582729 /* WhoopDeploymentHealthReporterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopDeploymentHealthReporterTests.swift; sourceTree = "<group>"; };
 		4A51A1D38E6C2F623FE0E21D /* WhoopStorageTelemetryModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopStorageTelemetryModels.swift; sourceTree = "<group>"; };
 		4FB6C00FDF2CD81DA997F210 /* SQLiteDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLiteDatabase.swift; sourceTree = "<group>"; };
-		55983CF0CF02A69DF8915153 /* RangePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RangePicker.swift; sourceTree = "<group>"; };
 		57102F2178F998C51E368FD5 /* WhoopLaunchOverrides.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopLaunchOverrides.swift; sourceTree = "<group>"; };
 		5AFDD42A4C609A6413DEEC82 /* SleepModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepModels.swift; sourceTree = "<group>"; };
 		5B8F9ADADF7705436F71B83C /* GeneratedModelFeatures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeneratedModelFeatures.swift; sourceTree = "<group>"; };
@@ -206,7 +204,6 @@
 				25E46BF848A3B0CE31F74988 /* HealthHistoryModel.swift */,
 				8B0E32E21B547DBCEE5C67BB /* Info.plist */,
 				1C70EE4444F525B48CE9E347 /* MetricTrendCard.swift */,
-				55983CF0CF02A69DF8915153 /* RangePicker.swift */,
 				3ECA72687BA9425EEE8B38F8 /* RootView.swift */,
 				4204AEE4704C8F98E6381F1B /* ScoreModels.swift */,
 				64308BD33686D78BFFF93E84 /* SleepApp.swift */,
@@ -473,7 +470,6 @@
 				C0CF86213AC8FAC5442DD2A9 /* HandshakeView.swift in Sources */,
 				679CCD419862149E0C72EF4C /* HealthHistoryModel.swift in Sources */,
 				201AC7BDED49929A68E60A75 /* MetricTrendCard.swift in Sources */,
-				4BA67C92A08D3B2ED419D355 /* RangePicker.swift in Sources */,
 				DB61E79F693E407B5086D2EF /* RootView.swift in Sources */,
 				DE8477B9857DFF48AA3CA8A0 /* SQLiteDatabase.swift in Sources */,
 				6AFCBC389F1511CB9ECE0C8D /* ScoreModels.swift in Sources */,

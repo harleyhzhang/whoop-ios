@@ -864,9 +864,9 @@ Then verify behavior, not only row counts:
   locally derived dates show versioned predictions;
 - the trend cards read Sleep, Duration, Steps, Recovery, RHR, and HRV in that
   order, while hidden summary metrics remain collected and stored;
-- selecting Week, Month, Year, and All never lets the line or endpoint escape
-  the plot; range changes morph shape-preserving curves over one fixed set of
-  horizontal anchors while their domains animate in lockstep;
+- every chart shows all history without range chrome, its line and endpoint stay
+  inside the plot, and holding it smoothly expands the adaptive summary into
+  every retained daily point before reversing on release;
 - the installed sidecar hash matches `sourceDatabaseSHA256` in the official
   projection;
 - a pre-migration SQLite snapshot exists and passes `PRAGMA quick_check`;
