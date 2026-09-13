@@ -74,8 +74,8 @@ runtime decoding ahead of the external private-file replacement boundary.
 - `WhoopStore.swift` remains the persistence façade while schema migration,
   seed import, ingestion, step/sleep/recovery materialization, and diagnostics
   move behind focused collaborators one vertical slice at a time.
-- `HandshakeView.swift` is diagnostic presentation only; collection is owned by
-  the app-lifetime probe.
+- Connection state is passive dashboard presentation; collection is owned by
+  the app-lifetime probe and has no user-facing diagnostic drawer.
 
 The direction of dependency is presentation → orchestration → pure policy and
 storage. Pure policy must not import SwiftUI, CoreBluetooth, or global clocks.

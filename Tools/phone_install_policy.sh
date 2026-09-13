@@ -98,8 +98,10 @@ fi
 non_presentation_files=$(printf '%s\n' "$production_files" | awk '
   /^SleepApp\/RootView\.swift$/ { next }
   /^SleepApp\/DashboardComponents\.swift$/ { next }
+  /^SleepApp\/DashboardHeader\.swift$/ { next }
+  /^SleepApp\/DashboardChartGeometry\.swift$/ { next }
+  /^SleepApp\/MetricTrendCard\.swift$/ { next }
   /^SleepApp\/Assets\.xcassets\// { next }
-  /^WhoopHandshakeApp\/HandshakeView\.swift$/ { next }
   /^Sleep\.xcodeproj\// { next }
   { print }
 ')
@@ -108,7 +110,8 @@ non_presentation_files=$(printf '%s\n' "$production_files" | awk '
 # puts persistence, migration, destructive SQL, or bundle-identity mechanics
 # in either component.
 if git diff -U0 "$base_commit..$head_commit" -- \
-  SleepApp/RootView.swift SleepApp/DashboardComponents.swift | \
+  SleepApp/RootView.swift SleepApp/DashboardComponents.swift SleepApp/DashboardHeader.swift \
+  SleepApp/DashboardChartGeometry.swift SleepApp/MetricTrendCard.swift | \
   grep -E '^[+-]' | grep -Ev '^(\+\+\+|---)' | \
   grep -Eiq 'SQLite|WhoopStore|schema|migrat|DELETE[[:space:]]+FROM|DROP[[:space:]]+TABLE|bundleIdentifier|FileManager.*remove'; then
   printf 'mode=migration\nbase=%s\nhead=%s\nreason=risk-sensitive storage or identity code appeared in a presentation component\n' \

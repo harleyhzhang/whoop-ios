@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 
 struct DashboardHeader: View {
     let referenceDate: Date
@@ -7,7 +6,6 @@ struct DashboardHeader: View {
     let batteryLevel: Int?
     let isCharging: Bool
     let isConnected: Bool
-    let showConnectionDetails: () -> Void
 
     var body: some View {
         HStack {
@@ -25,43 +23,20 @@ struct DashboardHeader: View {
 
             Spacer()
 
-            Button {
-                AppHaptics.softImpact()
-                showConnectionDetails()
-            } label: {
-                HStack(spacing: 9) {
-                    ZStack(alignment: .bottomTrailing) {
-                        Image("WhoopBand")
-                            .resizable()
-                            .scaledToFit()
-                            .brightness(0.07)
-                            .contrast(1.03)
-                            .frame(width: 33, height: 33)
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(isConnected ? Color.green : Color.secondary)
+                    .frame(width: 6, height: 6)
 
-                        Circle()
-                            .fill(isConnected ? Color.green : Color.secondary)
-                            .frame(width: 6, height: 6)
-                            .overlay {
-                                Circle()
-                                    .stroke(
-                                        Color(uiColor: .systemGroupedBackground),
-                                        lineWidth: 1.5
-                                    )
-                            }
-                            .offset(x: -1, y: -1)
-                    }
-
-                    WhoopBatteryPercentIcon(level: batteryLevel, isCharging: isCharging)
-                        .opacity(isConnected ? 1 : 0.45)
-                }
+                WhoopBatteryPercentIcon(level: batteryLevel, isCharging: isCharging)
+                    .opacity(isConnected ? 1 : 0.45)
             }
-            .buttonStyle(.plain)
             .frame(minHeight: 36)
+            .accessibilityElement(children: .ignore)
             .accessibilityLabel(
                 "WHOOP \(isConnected ? "connected" : "disconnected"), battery \(batteryLevel.map { "\($0) percent" } ?? "unavailable")\(isCharging ? ", charging" : "")"
             )
-            .accessibilityHint("Show connection details")
-            .accessibilityIdentifier("whoop.connection.details")
+            .accessibilityIdentifier("whoop.connection.status")
         }
     }
 }

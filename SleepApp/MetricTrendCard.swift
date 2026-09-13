@@ -105,6 +105,7 @@ struct MetricTrendCard: View {
         let chartSelection = cardSelection
         let averageOpacity = 1 - DashboardChartGeometry.smoothStep(detailProgress)
         let contentOpacity = ChartContentOpacity.resolve(detailProgress: detailProgress)
+        let lineWidth = DashboardChartGeometry.lineWidth(detailProgress: detailProgress)
         let highlightedPoint =
             DashboardChartGeometry.selectedPoint(in: series.daily, near: chartSelection)
             ?? series.daily.last
@@ -150,7 +151,7 @@ struct MetricTrendCard: View {
                     )
                     .interpolationMethod(.monotone)
                     .lineStyle(
-                        StrokeStyle(lineWidth: 2.1, lineCap: .round, lineJoin: .round)
+                        StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
                     )
                     .foregroundStyle(metric.color)
                     .opacity(contentOpacity.line)

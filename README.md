@@ -192,14 +192,11 @@ discipline, and the limits of historical recovery.
   numbers use a brief restrained digit pop while retaining the previous value
   underneath; Reduce Motion makes the detail transition immediate and direct
   chart scrubbing does not replay the number animation.
-- Haptics follow a restrained interaction vocabulary: selection ticks occur
-  only when the exact selected night changes; lightweight impacts
-  accompany diagnostic navigation and rescanning; handshake initiation is
-  firmer; and the success pattern is limited to a visible handshake outcome.
+- Haptics are limited to selection ticks when the exact selected night changes.
   Passive collection and background Bluetooth events stay silent.
-- The dashboard diagnostic control uses the compact circular WHOOP mark plus a
-  small plain connection-status dot, green only while the encrypted strap link
-  is active and gray otherwise.
+- The dashboard keeps connection state passive and compact: a small plain dot
+  is green only while the encrypted strap link is active and gray otherwise,
+  followed by the battery indicator. There is no dashboard status drawer.
 - Local notifications require no hosted service. A completed local sleep emits
   one deduplicated morning summary containing Sleep %, duration, HRV, and RHR.
   Battery readings emit one warning per discharge cycle at 20% and 10%, with

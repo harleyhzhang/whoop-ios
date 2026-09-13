@@ -2,8 +2,8 @@ import SwiftUI
 
 struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var chartState = DashboardChartState()
-    @State private var showsConnectionDetails = false
     @State private var history = HealthHistoryModel()
     var whoopCollector: WhoopHandshakeProbe
 
@@ -32,6 +32,12 @@ struct RootView: View {
             dashboard(currentDate: context.date)
         }
         .preferredColorScheme(.dark)
+        .task(id: chartState.detailGeneration) {
+            await chartState.runDetailTransition(
+                generation: chartState.detailGeneration,
+                reduceMotion: reduceMotion
+            )
+        }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else {
                 WhoopStore.shared.flushStorageTelemetry()
@@ -57,9 +63,6 @@ struct RootView: View {
             }
             history.reload()
         }
-        .sheet(isPresented: $showsConnectionDetails) {
-            HandshakeView(probe: whoopCollector)
-        }
     }
 
     private func dashboard(currentDate: Date) -> some View {
@@ -74,8 +77,7 @@ struct RootView: View {
                         errorMessage: history.errorMessage,
                         batteryLevel: batteryLevel,
                         isCharging: isCharging,
-                        isConnected: isConnected,
-                        showConnectionDetails: { showsConnectionDetails = true }
+                        isConnected: isConnected
                     )
                     SummaryGrid(day: publishedDay)
 

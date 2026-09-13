@@ -6,7 +6,7 @@ final class SleepUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    func testDashboardExposesCoreMetricsAndConnectionDetails() {
+    func testDashboardExposesCoreMetricsAndCompactConnectionStatus() {
         let app = configuredApplication()
         app.launch()
 
@@ -18,16 +18,11 @@ final class SleepUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["RHR"].firstMatch.exists)
         XCTAssertTrue(app.staticTexts["HRV"].firstMatch.exists)
 
-        let connection = app.buttons["whoop.connection.details"]
+        let connection = app.otherElements["whoop.connection.status"]
         XCTAssertTrue(connection.exists)
         XCTAssertEqual(connection.label, "WHOOP connected, battery 73 percent, charging")
-        connection.tap()
-
-        XCTAssertTrue(app.staticTexts["WHOOP 5.0"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["Connected"].exists)
-        XCTAssertTrue(app.staticTexts["73%"].exists)
-        XCTAssertTrue(app.staticTexts["Now"].exists)
-        XCTAssertTrue(app.buttons["Close"].exists)
+        XCTAssertFalse(app.buttons["whoop.connection.details"].exists)
+        XCTAssertFalse(app.staticTexts["WHOOP 5.0"].exists)
     }
 
     func testDashboardHasNoManualSleepProcessingControls() {
