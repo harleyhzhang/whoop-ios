@@ -41,7 +41,7 @@ printf 'struct WhoopStore {}\n' > SleepApp/SleepModels.swift
 printf '{}\n' > SleepApp/Assets.xcassets/Contents.json
 printf 'struct HandshakeView {}\n' > WhoopHandshakeApp/HandshakeView.swift
 printf 'struct WhoopHandshakeProbe {}\n' > WhoopHandshakeApp/WhoopHandshakeProbe.swift
-printf 'struct WhoopPersistence {}\n' > WhoopHandshakeApp/WhoopStore.swift
+printf 'struct WhoopPersistence { private static let schemaVersion = 10 }\n' > WhoopHandshakeApp/WhoopStore.swift
 printf 'baseline\n' > README.md
 git add .
 git commit -qm baseline
@@ -87,16 +87,23 @@ git commit -qam bluetooth
 bluetooth_commit=$(git rev-parse HEAD)
 assert_mode protected --base "$connection_ui_commit" --head "$bluetooth_commit"
 
-printf 'private let currentSchemaVersion = 11\n' >> WhoopHandshakeApp/WhoopStore.swift
-git commit -qam persistence
-persistence_commit=$(git rev-parse HEAD)
-assert_mode migration --base "$bluetooth_commit" --head "$persistence_commit"
+sed -i '' 's/schemaVersion/currentSchemaVersion/' WhoopHandshakeApp/WhoopStore.swift
+printf 'struct HealthReporter { let sql = "PRAGMA user_version" }\n' > WhoopHandshakeApp/WhoopDeploymentHealthReporter.swift
+git add WhoopHandshakeApp
+git commit -qm schema_observability
+schema_observability_commit=$(git rev-parse HEAD)
+assert_mode protected --base "$bluetooth_commit" --head "$schema_observability_commit"
+
+sed -i '' 's/currentSchemaVersion = 10/currentSchemaVersion = 11/' WhoopHandshakeApp/WhoopStore.swift
+git commit -qam schema_version_change
+schema_version_change_commit=$(git rev-parse HEAD)
+assert_mode migration --base "$schema_observability_commit" --head "$schema_version_change_commit"
 
 printf 'settings:\n  DEVELOPMENT_TEAM: CHANGED\n' > project.yml
 git add project.yml
 git commit -qm build_identity
 build_identity_commit=$(git rev-parse HEAD)
-assert_mode migration --base "$persistence_commit" --head "$build_identity_commit"
+assert_mode migration --base "$schema_version_change_commit" --head "$build_identity_commit"
 
 assert_mode migration --head "$build_identity_commit"
 
