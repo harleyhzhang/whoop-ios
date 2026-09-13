@@ -36,8 +36,11 @@ Tools/verify_local.sh
 
 The committed pre-push hook first looks for a successful gate attestation less
 than 24 hours old whose exact HEAD, Git tree, and observed toolchain fingerprint
-match. A miss runs the complete gate. CI always runs the gate and never trusts a
-developer-machine attestation. Install the hook with `Tools/install_git_hooks.sh`.
+match. A miss runs the complete gate. Pull-request CI always runs the gate and
+never trusts a developer-machine attestation. Main CI may reuse only GitHub's
+successful trusted PR check when the merged commit has the exact same Git tree;
+every miss runs the complete gate. Install the hook with
+`Tools/install_git_hooks.sh`.
 
 ## Test layers
 

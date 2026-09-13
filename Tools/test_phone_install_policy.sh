@@ -65,17 +65,17 @@ assert_mode fast --base "$ui_commit" --head "$dashboard_components_ui_commit"
 printf '// SQLite schema migration\n' >> SleepApp/DashboardComponents.swift
 git commit -qam risky_dashboard_components
 risky_dashboard_components_commit=$(git rev-parse HEAD)
-assert_mode full --base "$dashboard_components_ui_commit" --head "$risky_dashboard_components_commit"
+assert_mode migration --base "$dashboard_components_ui_commit" --head "$risky_dashboard_components_commit"
 
 printf '// schema migration\n' >> SleepApp/RootView.swift
 git commit -qam risky_ui
 risky_ui_commit=$(git rev-parse HEAD)
-assert_mode full --base "$risky_dashboard_components_commit" --head "$risky_ui_commit"
+assert_mode migration --base "$risky_dashboard_components_commit" --head "$risky_ui_commit"
 
 printf '// storage change\n' >> SleepApp/SleepModels.swift
 git commit -qam storage
 storage_commit=$(git rev-parse HEAD)
-assert_mode full --base "$risky_ui_commit" --head "$storage_commit"
+assert_mode protected --base "$risky_ui_commit" --head "$storage_commit"
 
 printf '// connection presentation\n' >> WhoopHandshakeApp/HandshakeView.swift
 git commit -qam connection_ui
@@ -85,13 +85,19 @@ assert_mode fast --base "$storage_commit" --head "$connection_ui_commit"
 printf '// bluetooth lifecycle\n' >> WhoopHandshakeApp/WhoopHandshakeProbe.swift
 git commit -qam bluetooth
 bluetooth_commit=$(git rev-parse HEAD)
-assert_mode full --base "$connection_ui_commit" --head "$bluetooth_commit"
+assert_mode protected --base "$connection_ui_commit" --head "$bluetooth_commit"
 
-printf '// schema migration\n' >> WhoopHandshakeApp/WhoopStore.swift
+printf 'private let currentSchemaVersion = 11\n' >> WhoopHandshakeApp/WhoopStore.swift
 git commit -qam persistence
 persistence_commit=$(git rev-parse HEAD)
-assert_mode full --base "$bluetooth_commit" --head "$persistence_commit"
+assert_mode migration --base "$bluetooth_commit" --head "$persistence_commit"
 
-assert_mode full --head "$persistence_commit"
+printf 'settings:\n  DEVELOPMENT_TEAM: CHANGED\n' > project.yml
+git add project.yml
+git commit -qm build_identity
+build_identity_commit=$(git rev-parse HEAD)
+assert_mode migration --base "$persistence_commit" --head "$build_identity_commit"
+
+assert_mode migration --head "$build_identity_commit"
 
 echo "Phone install policy tests passed."

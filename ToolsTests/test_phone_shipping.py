@@ -176,6 +176,7 @@ def device_payload(*, head_state: str = "connected", include_second: bool = Fals
                 "pairingState": "paired",
                 "tunnelState": head_state,
                 "lastConnectionDate": "2026-09-12T20:00:00Z",
+                "transportType": "localNetwork",
             },
         }
     ]
@@ -204,6 +205,7 @@ def device_payload(*, head_state: str = "connected", include_second: bool = Fals
 
 def test_device_selection_fails_closed_for_unavailable_or_ambiguous_devices() -> None:
     assert core.choose_device(device_payload()).udid == "UDID-1"
+    assert core.choose_device(device_payload()).transport == "localNetwork"
     assert core.choose_device(device_payload(include_second=True), "UDID-2").identifier == "CORE-2"
 
     with pytest.raises(core.ShippingError, match="No paired"):
@@ -337,7 +339,9 @@ def test_backup_validation_hashes_sqlite_and_detects_data_loss(tmp_path: Path) -
     assert preinstall.quick_check == "ok"
     assert preinstall.foreign_key_violations == 0
     assert preinstall.table_counts == counts
-    assert "raw/storage-telemetry-v1.json" in preinstall.hashes
+    assert "storage-telemetry-v1.json" in preinstall.hashes
+    assert not raw.exists()
+    assert not any("migration-backups" in name for name in preinstall.hashes)
     assert (tmp_path / "preinstall/SHA256SUMS.json").is_file()
 
     postinstall = core.BackupResult(
@@ -368,6 +372,40 @@ def test_backup_validation_rejects_malformed_storage_telemetry(tmp_path: Path) -
 
     with pytest.raises(core.ShippingError, match="storage telemetry"):
         core.validate_backup(raw, expected_schema=10, exact_schema=True)
+
+
+def test_deployment_health_report_is_commit_bound_and_detects_row_loss(tmp_path: Path) -> None:
+    report_path = tmp_path / "deployment-health-v1.json"
+    commit = "a" * 40
+    archive_hash = "b" * 64
+    write_json(
+        report_path,
+        {
+            "formatVersion": 1,
+            "sourceCommit": commit,
+            "generatedAt": "2026-09-13T12:00:00Z",
+            "schemaVersion": 10,
+            "quickCheck": "ok",
+            "foreignKeyViolations": 0,
+            "tableCounts": {"whoop_raw_packet": 2},
+            "officialArchiveSHA256": archive_hash,
+        },
+    )
+
+    report = core.validate_deployment_health_report(report_path, commit, 10, archive_hash)
+    before = core.BackupResult(
+        str(tmp_path),
+        str(tmp_path / "sleep.sqlite3"),
+        10,
+        "ok",
+        0,
+        {"whoop_raw_packet": 3},
+        {},
+    )
+    with pytest.raises(core.IntegrityError, match="count decreased"):
+        core.assert_health_preserved(before, report)
+    with pytest.raises(core.IntegrityError, match="installed commit"):
+        core.validate_deployment_health_report(report_path, "c" * 40, 10, archive_hash)
 
 
 def test_raw_evidence_replacement_is_detected_even_when_count_is_unchanged(
@@ -404,14 +442,13 @@ def test_atomic_state_and_recent_backup_are_revalidated(tmp_path: Path) -> None:
     backup_root.mkdir(mode=0o700)
     standalone = backup_root / "sleep-standalone.sqlite3"
     create_database(standalone, 10)
-    archive = backup_root / "raw/whoop-official-archive.sqlite3"
-    archive.parent.mkdir(mode=0o700)
+    archive = backup_root / "whoop-official-archive.sqlite3"
     create_database(archive, 1)
     standalone.chmod(0o600)
     archive.chmod(0o600)
     hashes = {
         "sleep-standalone.sqlite3": core.sha256(standalone),
-        "raw/whoop-official-archive.sqlite3": core.sha256(archive),
+        "whoop-official-archive.sqlite3": core.sha256(archive),
     }
     core.atomic_write_json(
         backup_root / "SHA256SUMS.json",
@@ -552,6 +589,62 @@ class RecordingRunner(phone_shipping.CommandRunner):
         if "processes" in arguments:
             payload = {"result": {"runningProcesses": [{"name": "WHOOP", "pid": 4321}]}}
         return payload, subprocess.CompletedProcess(arguments, 0, "", "")
+
+
+class BackupCopyRunner(RecordingRunner):
+    def devicectl_json(
+        self,
+        arguments: list[str],
+        scratch: Path,
+        *,
+        check: bool = True,
+        timeout: int = 60,
+    ) -> tuple[object | None, subprocess.CompletedProcess[str]]:
+        if arguments[:3] == ["device", "copy", "from"]:
+            self.device_calls.append(arguments)
+            source = arguments[arguments.index("--source") + 1]
+            destination = Path(arguments[arguments.index("--destination") + 1])
+            name = Path(source).name
+            if name == "sleep.sqlite3":
+                create_database(destination, 10, {"whoop_raw_packet": 2})
+            elif name == "whoop-official-archive.sqlite3":
+                create_database(destination, 1)
+            elif name == "storage-telemetry-v1.json":
+                write_json(destination, {"formatVersion": 1, "snapshots": []})
+            return {}, subprocess.CompletedProcess(arguments, 0, "", "")
+        return super().devicectl_json(arguments, scratch, check=check, timeout=timeout)
+
+
+def test_device_backup_copies_only_allowlisted_files_and_compacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = BackupCopyRunner()
+    selected = core.Device("CORE-1", "UDID-1", "IP", "iPhone", "27.0", "24A1", "")
+    monkeypatch.setattr(device_shipping, "wait_for_backup_quiescence", lambda: None)
+
+    backup = device_shipping.take_backup(
+        runner,
+        tmp_path / "scratch",
+        selected,
+        tmp_path / "backups",
+        "preinstall",
+        "a" * 40,
+        10,
+        True,
+    )
+
+    copied_sources = [
+        call[call.index("--source") + 1]
+        for call in runner.device_calls
+        if call[:3] == ["device", "copy", "from"]
+    ]
+    assert copied_sources == [
+        f"Library/Application Support/Sleep/{name}"
+        for name in (*device_shipping.BACKUP_REQUIRED_FILES, *device_shipping.BACKUP_OPTIONAL_FILES)
+    ]
+    assert Path(backup.path, "sleep-standalone.sqlite3").is_file()
+    assert Path(backup.path, "whoop-official-archive.sqlite3").is_file()
+    assert not Path(backup.path, "raw").exists()
 
 
 def test_suspension_quiesces_then_always_resumes_after_failure(

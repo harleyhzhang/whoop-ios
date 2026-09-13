@@ -27,7 +27,9 @@ coverage, Release compilation, unused-declaration analysis, and Xcode static
 analysis. A successful clean-commit
 gate writes a 24-hour local attestation keyed by HEAD, tree, and exact toolchain,
 so the pre-push hook can reuse it instead of immediately repeating the same run.
-CI always performs its own isolated gate.
+Pull-request CI always performs its own isolated gate. Main-branch CI reuses the
+successful trusted PR result only for an identical Git tree and otherwise falls
+back to the full gate.
 
 See [testing and CI](docs/testing.md), [architecture](docs/architecture.md), and
 [contributing](CONTRIBUTING.md) before making a behavioral change.
@@ -45,11 +47,27 @@ Tools/ship_phone.sh --commit "$(git rev-parse HEAD)"
 ```
 
 This is the canonical build, signing, backup, in-place install, launch, and
-verification path. `Tools/doctor.sh --mode full` performs the read-only preflight.
+verification path. `Tools/ship_phone.sh --plan --commit <merged-sha>` reports
+the pending commit count and verification tier without requiring the phone, so
+routine merges can ship as one intentional checkpoint. `Tools/doctor.sh --mode
+migration` performs the strictest read-only preflight.
 If shipping returns `needs-unlock` or `needs-verification`, run only the exact
 `--resume` command it prints; never uninstall the app. See the
 [migration runbook](docs/whoop-data-migration.md#10-build-sign-install-and-preserve-migration-backups)
 for the fail-closed verification tiers.
+
+Device builds reuse `~/Library/Caches/whoop-ios/device-derived-data`. Verified
+snapshots retain one standalone database plus required sidecars; automatic
+manifest-driven retention keeps current rollback points, two newest snapshots,
+and one snapshot per schema and recent month. Retired data stays recoverable for seven
+days before a later successful shipping or maintenance run purges it. Run
+`Tools/maintain_device_backups.sh` for a dry-run inventory or add `--apply
+--adopt-legacy` to validate and compact old snapshots before retirement.
+`--retire-unusable` may be added to quarantine only legacy directories that
+failed that explicit adoption. This tool never manages canonical WHOOP
+source/archive directories. `--apply --purge-now` permanently removes only
+already-recorded quarantine entries and is reserved for an explicitly reviewed
+cleanup after the retained restore points are revalidated.
 
 ## Product target
 
