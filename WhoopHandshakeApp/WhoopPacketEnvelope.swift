@@ -18,6 +18,25 @@ struct WhoopPacketEnvelope: Sendable {
     let deliveredAt: Date
     let proprietaryOrdinal: Int?
 
+    func replacingOffloadSessionID(_ offloadSessionID: String?) -> WhoopPacketEnvelope {
+        WhoopPacketEnvelope(
+            packet: packet,
+            peripheralID: peripheralID,
+            characteristicUUID: characteristicUUID,
+            frameType: frameType,
+            integrityIsValid: integrityIsValid,
+            realtime: realtime,
+            historical: historical,
+            ppg: ppg,
+            metadata: metadata,
+            freshWristState: freshWristState,
+            offloadSessionID: offloadSessionID,
+            deduplicateTransportRetries: deduplicateTransportRetries,
+            deliveredAt: deliveredAt,
+            proprietaryOrdinal: proprietaryOrdinal
+        )
+    }
+
     static func standardHeartRate(
         packet: Data,
         peripheralID: UUID,

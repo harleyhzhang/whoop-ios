@@ -101,6 +101,9 @@ final class WhoopTransportPipeline: @unchecked Sendable {
     private var idleFlushGeneration: UInt64 = 0
     private var uiPublishGeneration: UInt64 = 0
     private var inFlightBatchCount = 0
+    private var pendingPersistenceBatches: [[WhoopPacketEnvelope]] = []
+    private var persistenceIsActive = false
+    private var failedHistorySessionID: String?
     private var drainWaiters: [@Sendable () -> Void] = []
     private var lastUISnapshotAt: Date?
     private var pendingUI = PendingUI()
@@ -244,13 +247,63 @@ final class WhoopTransportPipeline: @unchecked Sendable {
 
     private func persist(_ batch: [WhoopPacketEnvelope]) {
         requireQueue()
-        let summary = WhoopTransportBatchSummary(envelopes: batch)
+        pendingPersistenceBatches.append(batch)
         inFlightBatchCount += 1
-        store.appendBatch(batch) { [weak self] result in
+        startNextPersistenceBatchIfNeeded()
+    }
+
+    private func startNextPersistenceBatchIfNeeded() {
+        requireQueue()
+        guard !persistenceIsActive, !pendingPersistenceBatches.isEmpty else { return }
+        persistenceIsActive = true
+        let batch = pendingPersistenceBatches.removeFirst()
+        let summary = WhoopTransportBatchSummary(envelopes: batch)
+        if summary.metadataEvents.contains(where: { $0.type == .historyStart }) {
+            failedHistorySessionID = nil
+        }
+        let endsLogicalHistoryBoundary = summary.metadataEvents.contains {
+            $0.type == .chunkEnd || $0.type == .historyComplete
+        }
+        let boundaryHasPriorFailure =
+            failedHistorySessionID.map { $0 == summary.offloadSessionID } ?? false
+        // If an earlier bounded transaction in this logical band chunk failed,
+        // retain the raw boundary packet but do not let it advance or complete
+        // the offload session. The band must replay the chunk before an ACK or
+        // HISTORY_COMPLETE transition can be considered durable.
+        let persistenceBatch =
+            endsLogicalHistoryBoundary && boundaryHasPriorFailure
+            ? batch.map { $0.replacingOffloadSessionID(nil) }
+            : batch
+        store.appendBatch(persistenceBatch) { [weak self] result in
             guard let self else { return }
             self.queue.async { [self] in
-                didPersist(result, summary)
+                if !result.success, let offloadSessionID = summary.offloadSessionID {
+                    failedHistorySessionID = offloadSessionID
+                }
+                let boundaryIsDurable =
+                    !endsLogicalHistoryBoundary
+                    || (result.success && !boundaryHasPriorFailure)
+                let publishedResult =
+                    boundaryIsDurable
+                    ? result
+                    : WhoopPacketBatchPersistenceResult(
+                        success: false,
+                        deliverySequences: []
+                    )
+                if endsLogicalHistoryBoundary {
+                    if !boundaryIsDurable,
+                        lastCompletedOffloadSessionID == summary.offloadSessionID
+                    {
+                        lastCompletedOffloadSessionID = nil
+                    }
+                    if failedHistorySessionID == summary.offloadSessionID {
+                        failedHistorySessionID = nil
+                    }
+                }
+                didPersist(publishedResult, summary)
                 inFlightBatchCount -= 1
+                persistenceIsActive = false
+                startNextPersistenceBatchIfNeeded()
                 guard inFlightBatchCount == 0, !drainWaiters.isEmpty else { return }
                 let waiters = drainWaiters
                 drainWaiters.removeAll(keepingCapacity: true)

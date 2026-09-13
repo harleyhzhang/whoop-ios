@@ -249,6 +249,45 @@ final class WhoopTransportPipelineTests: XCTestCase {
         XCTAssertEqual(scalarInt(database, "SELECT COUNT(*) FROM whoop_historical_sample"), 0)
     }
 
+    func testPipelineDoesNotPublishCompletionAfterEarlierBoundedBatchFails() throws {
+        let fixture = try makeStoreFixture()
+        defer {
+            fixture.store.shutdownForTesting()
+            try? FileManager.default.removeItem(at: fixture.directory)
+        }
+        let recorder = TransportCallbackRecorder()
+        let pipeline = WhoopTransportPipeline(
+            store: fixture.store,
+            maximumBatchSize: 1,
+            idleFlushDelay: 60,
+            didPublishUI: { _ in },
+            didPersist: { result, summary in recorder.recordPersistence(result, summary) }
+        )
+
+        pipeline.submitProprietary(
+            packet: historicalFrame(timestamp: 1_800_000_000, stepCounter: 100),
+            peripheralID: fixture.peripheralID,
+            characteristicUUID: "FD4B0003",
+            offloadSessionID: "failed-session",
+            deliveredAt: Date(timeIntervalSince1970: 1_800_000_010)
+        )
+        pipeline.submitProprietary(
+            packet: WhoopTestFrameFactory.historicalMetadata(type: 3, length: 16),
+            peripheralID: fixture.peripheralID,
+            characteristicUUID: "FD4B0003",
+            offloadSessionID: "failed-session",
+            deliveredAt: Date(timeIntervalSince1970: 1_800_000_011)
+        )
+        pipeline.flushAndWaitForPersistence { recorder.recordDrain() }
+
+        XCTAssertEqual(recorder.drainSemaphore.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(recorder.snapshot().persistenceSuccesses, [false, false])
+        let database = try openReadOnlyDatabase(fixture.databaseURL)
+        defer { sqlite3_close(database) }
+        XCTAssertEqual(scalarInt(database, "SELECT COUNT(*) FROM whoop_raw_packet"), 1)
+        XCTAssertEqual(scalarInt(database, "SELECT COUNT(*) FROM whoop_offload_session"), 0)
+    }
+
     func testEnvelopeParsingPerformance() {
         let packet = historicalFrame(timestamp: 1_800_000_000, stepCounter: 321)
         let peripheralID = UUID()
@@ -354,6 +393,7 @@ private final class TransportCallbackRecorder: @unchecked Sendable {
     let drainSemaphore = DispatchSemaphore(value: 0)
     private let lock = NSLock()
     private var persistedBatchSizes: [Int] = []
+    private var persistenceSuccesses: [Bool] = []
     private var uiHeartRates: [Int] = []
     private var callbacksWereOffMain = true
 
@@ -370,6 +410,7 @@ private final class TransportCallbackRecorder: @unchecked Sendable {
     ) {
         lock.withLock {
             persistedBatchSizes.append(result.committedEnvelopeCount)
+            persistenceSuccesses.append(result.success)
             callbacksWereOffMain = callbacksWereOffMain && !Thread.isMainThread
             callbacksWereOffMain = callbacksWereOffMain && summary.firstProprietaryOrdinal == nil
         }
@@ -384,11 +425,12 @@ private final class TransportCallbackRecorder: @unchecked Sendable {
 
     func snapshot() -> (
         persistedBatchSizes: [Int],
+        persistenceSuccesses: [Bool],
         uiHeartRates: [Int],
         callbacksWereOffMain: Bool
     ) {
         lock.withLock {
-            (persistedBatchSizes, uiHeartRates, callbacksWereOffMain)
+            (persistedBatchSizes, persistenceSuccesses, uiHeartRates, callbacksWereOffMain)
         }
     }
 }
