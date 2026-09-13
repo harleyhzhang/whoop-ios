@@ -318,11 +318,16 @@ def test_backup_validation_hashes_sqlite_and_detects_data_loss(tmp_path: Path) -
     counts = {"daily_health_metric": 3, "whoop_daily_recovery_metric": 2}
     create_database(raw / "sleep.sqlite3", 10, counts)
     create_database(raw / "whoop-official-archive.sqlite3", 1)
+    write_json(
+        raw / "storage-telemetry-v1.json",
+        {"formatVersion": 1, "snapshots": [], "pendingIngestion": {}},
+    )
 
     preinstall = core.validate_backup(raw, expected_schema=10, exact_schema=True)
     assert preinstall.quick_check == "ok"
     assert preinstall.foreign_key_violations == 0
     assert preinstall.table_counts == counts
+    assert "raw/storage-telemetry-v1.json" in preinstall.hashes
     assert (tmp_path / "preinstall/SHA256SUMS.json").is_file()
 
     postinstall = core.BackupResult(
@@ -342,6 +347,17 @@ def test_backup_validation_hashes_sqlite_and_detects_data_loss(tmp_path: Path) -
         output.write(b"tampered")
     with pytest.raises(core.ShippingError, match="hash mismatch"):
         core.validate_backup_result(preinstall)
+
+
+def test_backup_validation_rejects_malformed_storage_telemetry(tmp_path: Path) -> None:
+    raw = tmp_path / "preinstall/raw"
+    raw.mkdir(parents=True)
+    create_database(raw / "sleep.sqlite3", 10)
+    create_database(raw / "whoop-official-archive.sqlite3", 1)
+    write_json(raw / "storage-telemetry-v1.json", {"formatVersion": 2, "snapshots": []})
+
+    with pytest.raises(core.ShippingError, match="storage telemetry"):
+        core.validate_backup(raw, expected_schema=10, exact_schema=True)
 
 
 def test_raw_evidence_replacement_is_detected_even_when_count_is_unchanged(

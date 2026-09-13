@@ -116,7 +116,10 @@ struct RootView: View {
             selectedRange = ranges.last ?? .all
         }
         .onChange(of: scenePhase) { _, phase in
-            guard phase == .active else { return }
+            guard phase == .active else {
+                WhoopStore.shared.flushStorageTelemetry()
+                return
+            }
             currentDate = .now
             history.reload()
             whoopCollector.refreshHistoricalData()

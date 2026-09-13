@@ -18,6 +18,7 @@ final class WhoopStore: @unchecked Sendable {
     private var cachedStatements: [String: OpaquePointer] = [:]
     private var pendingStepDateKeys: Set<String> = []
     private var cachedPublishedWakeBoundaries: [WhoopWakeBoundary]?
+    private var storageTelemetry: WhoopStorageTelemetry?
     private var nextDeliverySequence: Int64 = 1
     private static let logger = Logger(subsystem: "com.clintonst.sideload.sleep", category: "WhoopStore")
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
@@ -77,6 +78,8 @@ final class WhoopStore: @unchecked Sendable {
     #endif
 
     private func closeDatabase() {
+        storageTelemetry?.flush()
+        storageTelemetry = nil
         for statement in cachedStatements.values {
             sqlite3_finalize(statement)
         }
@@ -99,7 +102,9 @@ final class WhoopStore: @unchecked Sendable {
         deliveredAt: Date = .now,
         completion: @escaping @Sendable (WhoopPacketPersistenceResult) -> Void
     ) {
+        let enqueuedAt = DispatchTime.now().uptimeNanoseconds
         queue.async { [self] in
+            let queueWait = DispatchTime.now().uptimeNanoseconds - enqueuedAt
             completion(
                 insert(
                     packet: packet,
@@ -110,9 +115,14 @@ final class WhoopStore: @unchecked Sendable {
                     historical: historical,
                     offloadSessionID: offloadSessionID,
                     deduplicateTransportRetries: deduplicateTransportRetries,
-                    deliveredAt: deliveredAt
+                    deliveredAt: deliveredAt,
+                    queueWaitNanoseconds: queueWait
                 ))
         }
+    }
+
+    func flushStorageTelemetry() {
+        queue.async { [self] in storageTelemetry?.flush() }
     }
 
     func beginHistoricalOffload(
@@ -557,6 +567,12 @@ final class WhoopStore: @unchecked Sendable {
             backfillLocalSleepScoresIfNeeded()
             rebuildWakeAnchoredStepDaysIfNeeded()
             rebuildRecoveryMetricsIfNeeded()
+        }
+        // Injected database URLs are short-lived test fixtures. Avoid starting
+        // an asynchronous census that could outlive a fixture directory.
+        if databaseURLOverride == nil {
+            storageTelemetry = WhoopStorageTelemetry(databaseURL: url, ownerQueue: queue)
+            storageTelemetry?.captureIfDue()
         }
     }
 
@@ -1782,8 +1798,28 @@ final class WhoopStore: @unchecked Sendable {
         historical: WhoopDecodedHistorical?,
         offloadSessionID: String?,
         deduplicateTransportRetries: Bool,
-        deliveredAt: Date
+        deliveredAt: Date,
+        queueWaitNanoseconds: UInt64
     ) -> WhoopPacketPersistenceResult {
+        let telemetryStartedAt = DispatchTime.now().uptimeNanoseconds
+        var telemetryFinishedAt: UInt64?
+        var telemetryOutcome = WhoopIngestionTelemetryOutcome.failed
+        defer {
+            if database != nil {
+                let elapsed =
+                    (telemetryFinishedAt ?? DispatchTime.now().uptimeNanoseconds)
+                    - telemetryStartedAt
+                storageTelemetry?.recordIngestion(
+                    outcome: telemetryOutcome,
+                    transactionNanoseconds: elapsed,
+                    queueWaitNanoseconds: queueWaitNanoseconds,
+                    frameType: frameType,
+                    payloadBytes: packet.count,
+                    retryDetectionEnabled: deduplicateTransportRetries,
+                    now: deliveredAt
+                )
+            }
+        }
         guard let database else {
             return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
         }
@@ -1848,6 +1884,8 @@ final class WhoopStore: @unchecked Sendable {
                 execute("ROLLBACK")
                 return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
             }
+            telemetryFinishedAt = DispatchTime.now().uptimeNanoseconds
+            telemetryOutcome = .retry
             finishCommittedStepMaterialization(materializedStepDays)
             return WhoopPacketPersistenceResult(success: true, deliverySequence: deliverySequence)
         case .new:
@@ -1910,6 +1948,8 @@ final class WhoopStore: @unchecked Sendable {
             execute("ROLLBACK")
             return WhoopPacketPersistenceResult(success: false, deliverySequence: nil)
         }
+        telemetryFinishedAt = DispatchTime.now().uptimeNanoseconds
+        telemetryOutcome = .unique
         finishCommittedStepMaterialization(materializedStepDays)
         return WhoopPacketPersistenceResult(success: true, deliverySequence: deliverySequence)
     }
