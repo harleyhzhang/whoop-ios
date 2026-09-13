@@ -17,6 +17,7 @@ final class SQLiteDatabase: @unchecked Sendable {
     private var rawPublishedWakeBoundaries: [WhoopWakeBoundary]?
     private var rawStorageTelemetry: WhoopStorageTelemetry?
     private var rawNextDeliverySequence: Int64 = 1
+    private var rawStorageState = WhoopStorageState.opening
     #if DEBUG
         private var rawIngestionTransactionCount = 0
     #endif
@@ -92,6 +93,17 @@ final class SQLiteDatabase: @unchecked Sendable {
         set {
             requireQueue()
             rawNextDeliverySequence = newValue
+        }
+    }
+
+    var storageState: WhoopStorageState {
+        get {
+            requireQueue()
+            return rawStorageState
+        }
+        set {
+            requireQueue()
+            rawStorageState = newValue
         }
     }
 

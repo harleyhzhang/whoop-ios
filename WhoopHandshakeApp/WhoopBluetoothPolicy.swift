@@ -85,6 +85,43 @@ enum WhoopCommand: Equatable {
 }
 
 enum WhoopBluetoothPolicy {
+    static func freshWristState(
+        _ data: Data,
+        receivedAt: Date,
+        freshnessWindow: TimeInterval = 45
+    ) -> Bool? {
+        let bytes = [UInt8](data)
+        guard bytes.count >= 20,
+            FrameType(rawValue: bytes[8]) == .wristState,
+            WhoopFrameIntegrity.isValid(bytes)
+        else { return nil }
+        return freshWristState(
+            bytes: bytes,
+            receivedAt: receivedAt,
+            freshnessWindow: freshnessWindow
+        )
+    }
+
+    static func freshWristState(
+        bytes: [UInt8],
+        receivedAt: Date,
+        freshnessWindow: TimeInterval
+    ) -> Bool? {
+        guard bytes.count >= 20 else { return nil }
+        let timestamp =
+            UInt32(bytes[12])
+            | (UInt32(bytes[13]) << 8)
+            | (UInt32(bytes[14]) << 16)
+            | (UInt32(bytes[15]) << 24)
+        let eventDate = Date(timeIntervalSince1970: TimeInterval(timestamp))
+        guard abs(receivedAt.timeIntervalSince(eventDate)) <= freshnessWindow else { return nil }
+        switch bytes[10] {
+        case 9: return true
+        case 10: return false
+        default: return nil
+        }
+    }
+
     static func batteryLevelStatus(_ data: Data) -> BatteryStatus? {
         guard data.count >= 3 else { return nil }
         let powerState = UInt16(data[1]) | (UInt16(data[2]) << 8)

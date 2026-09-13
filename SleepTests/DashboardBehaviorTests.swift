@@ -252,19 +252,19 @@ extension WhoopSleepStateTests {
 
     func testBatteryLevelStatusReportsChargingOrExternalPower() {
         XCTAssertEqual(
-            WhoopHandshakeProbe.batteryLevelStatus(Data([0x02, 0x23, 0x00, 68])),
+            WhoopBluetoothPolicy.batteryLevelStatus(Data([0x02, 0x23, 0x00, 68])),
             .charging
         )
         XCTAssertEqual(
-            WhoopHandshakeProbe.batteryLevelStatus(Data([0x02, 0x63, 0x00, 100])),
+            WhoopBluetoothPolicy.batteryLevelStatus(Data([0x02, 0x63, 0x00, 100])),
             .charging
         )
         XCTAssertEqual(
-            WhoopHandshakeProbe.batteryLevelStatus(Data([0x02, 0x41, 0x00, 67])),
+            WhoopBluetoothPolicy.batteryLevelStatus(Data([0x02, 0x41, 0x00, 67])),
             .notCharging
         )
         XCTAssertEqual(
-            WhoopHandshakeProbe.batteryLevelStatus(Data([0x02, 0x01, 0x00])),
+            WhoopBluetoothPolicy.batteryLevelStatus(Data([0x02, 0x01, 0x00])),
             .unknown(rawValue: 1)
         )
     }
@@ -297,10 +297,10 @@ extension WhoopSleepStateTests {
     }
 
     func testLegacyBatteryPowerStateReportsCharging() {
-        XCTAssertEqual(WhoopHandshakeProbe.legacyBatteryStatus(Data([0x30])), .charging)
-        XCTAssertEqual(WhoopHandshakeProbe.legacyBatteryStatus(Data([0x20])), .notCharging)
+        XCTAssertEqual(WhoopBluetoothPolicy.legacyBatteryStatus(Data([0x30])), .charging)
+        XCTAssertEqual(WhoopBluetoothPolicy.legacyBatteryStatus(Data([0x20])), .notCharging)
         XCTAssertEqual(
-            WhoopHandshakeProbe.legacyBatteryStatus(Data([0x00])),
+            WhoopBluetoothPolicy.legacyBatteryStatus(Data([0x00])),
             .unknown(rawValue: 0)
         )
     }

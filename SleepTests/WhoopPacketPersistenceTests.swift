@@ -5,19 +5,11 @@ import XCTest
 
 extension WhoopSleepStateTests {
     func testReplayIndexIsLimitedToReplayPronePacketClasses() {
-        XCTAssertFalse(WhoopHandshakeProbe.shouldDeduplicateTransportRetries(frameType: nil))
-        XCTAssertFalse(
-            WhoopHandshakeProbe.shouldDeduplicateTransportRetries(frameType: .realtimeHeartRate)
-        )
-        XCTAssertTrue(
-            WhoopHandshakeProbe.shouldDeduplicateTransportRetries(frameType: .historicalSample)
-        )
-        XCTAssertTrue(
-            WhoopHandshakeProbe.shouldDeduplicateTransportRetries(frameType: .historicalMetadata)
-        )
-        XCTAssertTrue(
-            WhoopHandshakeProbe.shouldDeduplicateTransportRetries(frameType: .transport50)
-        )
+        XCTAssertFalse((nil as FrameType?).map(\.isReplayProne) ?? false)
+        XCTAssertFalse(FrameType.realtimeHeartRate.isReplayProne)
+        XCTAssertTrue(FrameType.historicalSample.isReplayProne)
+        XCTAssertTrue(FrameType.historicalMetadata.isReplayProne)
+        XCTAssertTrue(FrameType.transport50.isReplayProne)
     }
 
     func testFreshWristEventsReportOnAndOffState() {
@@ -25,14 +17,14 @@ extension WhoopSleepStateTests {
         let receivedAt = Date(timeIntervalSince1970: TimeInterval(timestamp + 20))
 
         XCTAssertEqual(
-            WhoopHandshakeProbe.freshWhoop5WristState(
+            WhoopBluetoothPolicy.freshWristState(
                 wristEventFrame(event: 9, timestamp: timestamp),
                 receivedAt: receivedAt
             ),
             true
         )
         XCTAssertEqual(
-            WhoopHandshakeProbe.freshWhoop5WristState(
+            WhoopBluetoothPolicy.freshWristState(
                 wristEventFrame(event: 10, timestamp: timestamp),
                 receivedAt: receivedAt
             ),
@@ -44,7 +36,7 @@ extension WhoopSleepStateTests {
         let timestamp: UInt32 = 1_800_000_000
         let event = wristEventFrame(event: 10, timestamp: timestamp)
         XCTAssertNil(
-            WhoopHandshakeProbe.freshWhoop5WristState(
+            WhoopBluetoothPolicy.freshWristState(
                 event,
                 receivedAt: Date(timeIntervalSince1970: TimeInterval(timestamp + 46))
             )
@@ -53,7 +45,7 @@ extension WhoopSleepStateTests {
         var corruptEvent = event
         corruptEvent[10] ^= 0x01
         XCTAssertNil(
-            WhoopHandshakeProbe.freshWhoop5WristState(
+            WhoopBluetoothPolicy.freshWristState(
                 corruptEvent,
                 receivedAt: Date(timeIntervalSince1970: TimeInterval(timestamp))
             )
@@ -128,25 +120,6 @@ extension WhoopSleepStateTests {
         measure(metrics: [XCTClockMetric()], options: options) {
             XCTAssertNotNil(WhoopStore.rmssdFromRealtimePackets(packets))
         }
-    }
-
-    func testHeartRateFreshnessRejectsOldCachedReading() {
-        let now = Date(timeIntervalSince1970: 1_000)
-        XCTAssertTrue(
-            WhoopHandshakeProbe.heartRateIsFresh(
-                receivedAt: now.addingTimeInterval(-30),
-                now: now
-            ))
-        XCTAssertFalse(
-            WhoopHandshakeProbe.heartRateIsFresh(
-                receivedAt: now.addingTimeInterval(-91),
-                now: now
-            ))
-        XCTAssertFalse(
-            WhoopHandshakeProbe.heartRateIsFresh(
-                receivedAt: nil,
-                now: now
-            ))
     }
 
     func testPacketReplaySignatureIncludesCharacteristicAndPayload() throws {

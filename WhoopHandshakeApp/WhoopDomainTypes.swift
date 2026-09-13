@@ -59,9 +59,6 @@ enum SleepState: Sendable, Equatable, Hashable {
         }
     }
 
-    var isExplicitlyAwake: Bool {
-        self == .awakePrimary || self == .awakeAlternate
-    }
 }
 
 /// Packet type byte carried at offset 8 of proprietary WHOOP frames.

@@ -4,11 +4,15 @@
   "files": {
     "SleepApp/DayKey.swift": 92,
     "SleepApp/ScoreModels.swift": 93,
+    "WhoopHandshakeApp/DashboardDatabaseReader.swift": 55,
     "WhoopHandshakeApp/DashboardRepository.swift": 93,
     "WhoopHandshakeApp/SQLiteDatabase.swift": 95,
     "WhoopHandshakeApp/WhoopBackfillPlanner.swift": 95,
     "WhoopHandshakeApp/WhoopBluetoothPolicy.swift": 93,
+    "WhoopHandshakeApp/WhoopConnectionSession.swift": 90,
+    "WhoopHandshakeApp/WhoopHistoricalSyncState.swift": 85,
     "WhoopHandshakeApp/WhoopProtocol.swift": 88,
+    "WhoopHandshakeApp/WhoopStorageReliability.swift": 70,
     "WhoopHandshakeApp/WhoopStore.swift": 73,
     "WhoopHandshakeApp/WhoopTransportPipeline.swift": 88
   }

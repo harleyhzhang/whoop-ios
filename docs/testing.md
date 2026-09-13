@@ -5,14 +5,16 @@
 `Tools/verify_local.sh` is the single merge gate. It runs:
 
 1. the exact `Tools/toolchain.json` Xcode/SDK/runtime/formula contract;
-2. strict `swift-format`, presentation/test Swift file-size budgets, shellcheck,
+2. strict `swift-format`, whole-source Swift file-size budgets, shellcheck,
    actionlint, Ruff, strict mypy, and Python tests;
 3. generated Xcode/model-feature drift, documentation drift, and phone-policy tests;
 4. tracked private-data checks plus gitleaks over history and the worktree;
 5. Swift unit and UI tests with zero failures and zero skips;
 6. a 58% whole-app line-coverage floor plus higher file-specific floors for
    scoring, protocol, persistence, and migration-critical modules;
-7. a Release simulator build and Xcode static analysis.
+7. a clean Release simulator build, SwiftLint's type-checked
+   `unused_declaration` analysis against the reviewed production baseline, and
+   Xcode static analysis.
 
 The gate creates and deletes an isolated simulator per run, preventing an open
 development simulator or another test process from making CI flaky.
@@ -41,6 +43,10 @@ developer-machine attestation. Install the hook with `Tools/install_git_hooks.sh
 
 - `SleepTests`: deterministic protocol, scoring, notification, storage,
   migration, and state-machine unit/integration tests using synthetic data.
+  Reliability coverage includes every supported schema hop, injected
+  `SQLITE_BUSY`/`SQLITE_FULL`/`SQLITE_IOERR` failures, corrupt-database
+  fail-closed behavior, bounded retry/backpressure, independent reads during a
+  blocked writer, and a deterministic malformed-frame mutation corpus.
 - `SleepUITests`: critical dashboard behavior and diagnostic navigation under
   explicit mock launch environment values.
 - `ToolsTests`: Python feature construction, build-gate, model-promotion, and

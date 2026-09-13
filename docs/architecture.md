@@ -39,12 +39,17 @@ runtime decoding ahead of the external private-file replacement boundary.
 `WhoopHandshakeApp` is the device and persistence layer:
 
 - `WhoopHandshakeProbe.swift` adapts CoreBluetooth callbacks and coordinates a
-  connection/offload session. Its main-actor callback only snapshots immutable
-  delivery values and forwards them; it does not parse protocol frames.
+  connection/offload session. `WhoopConnectionSession.swift` gives each
+  selection/reset a generation token so superseded callbacks and delayed work
+  are rejected, while `WhoopHistoricalSyncState.swift` owns the pure opening,
+  active, progress, timeout, and reset transitions. Its main-actor callback only
+  snapshots immutable delivery values and forwards them; it does not parse
+  protocol frames.
 - `WhoopPacketEnvelope.swift` is the typed immutable parse result. Proprietary
   frames are converted to bytes and CRC-checked once before storage.
 - `WhoopTransportPipeline.swift` owns the dedicated serial protocol queue,
-  bounded packet batching, idle flushing, and throttled UI snapshots.
+  bounded packet batching and persistence backlog, bounded transient retries,
+  backpressure publication, idle flushing, and throttled UI snapshots.
 - `WhoopBluetoothPolicy.swift` owns deterministic advertisement, framing,
   charging-inference, acknowledgement, and history-completion decisions. Its
   typed `WhoopCommand` values are the only production owners of wire opcodes and
@@ -57,6 +62,13 @@ runtime decoding ahead of the external private-file replacement boundary.
   pointers are explicitly non-Sendable; runtime queue preconditions guard every
   access.
 - `DashboardRepository.swift` owns read-only dashboard SQL and result mapping.
+- `WhoopStorageReliability.swift` owns typed SQLite failures, lifecycle states,
+  initialization retry policy, readiness fan-out, and the injectable packet
+  persistence boundary.
+- `DashboardDatabaseReader.swift` runs repository snapshots through a separate
+  read-only WAL connection so projection maintenance cannot stall the dashboard.
+- `WhoopRuntimeDiagnostics.swift` records MetricKit payloads locally and exposes
+  signposts for storage open, batch commits, and dashboard reads.
 - `WhoopBackfillPlanner.swift` owns bounded recovery history and the single-pass
   sleep-range index used by model backfills.
 - `WhoopStore.swift` remains the persistence façade while schema migration,
@@ -77,6 +89,9 @@ Framework APIs belong behind small adapters so decisions can be unit tested.
    packet envelope containing all decoded protocol state.
 3. The store persists bounded FIFO envelope batches in one transaction while
    retaining every unique raw delivery and compacting only exact retries.
+   Transient failures retry a bounded number of times. Buffer exhaustion is
+   surfaced as backpressure and marks the active history session failed, so no
+   later boundary can acknowledge missing evidence.
 4. A chunk terminator closes its batch. Only that batch's successful persistence
    completion may publish an acknowledgement decision to the main actor.
 5. A durable `HISTORY_COMPLETE` permits finalization and snapshot publication.
@@ -107,10 +122,14 @@ SQLite separates immutable evidence from rebuildable query projections:
   row for every successful decode.
 
 Schema migrations run transactionally only after a validated online SQLite
-backup. The store retains one app-created rollback snapshot, prunes only older
-snapshots matching its own naming contract, and attempts `VACUUM` after a
-successful migration. A failed `VACUUM` is non-fatal: SQLite keeps the released
-pages on its freelist and reuses them as collection continues.
+backup. The store retains one app-created rollback snapshot and prunes only
+older snapshots matching its own naming contract. Launch never runs `VACUUM`:
+released pages remain on SQLite's freelist and are reused as collection
+continues without needing temporary space equal to a phone-sized database.
+Only opening, durability configuration, migration, interrupted-session cleanup,
+and readiness publication block availability. Imports, projection rebuilds,
+protocol backfills, and optimization run later on the writer queue; dashboard
+reads become available immediately through their independent reader.
 
 The store split is deliberately incremental. Each extracted collaborator uses
 the same `SQLiteDatabase` owner and serial queue; no collaborator opens a second
@@ -139,3 +158,7 @@ dashboard behavior; shared SQLite/frame helpers live in `WhoopTestFixtures.swift
 `Tools/toolchain.json` is the exact accepted build environment. The warm-cache
 inner loop is intentionally separate from the isolated final gate; only a clean
 commit can cache a short-lived full-gate attestation, and CI ignores it.
+SwiftLint's type-checked `unused_declaration` analyzer rejects new production
+dead code against a reviewed baseline. The file-size gate scans both app source
+trees and tests; inherited oversized coordinators may only shrink from their
+explicit baselines.

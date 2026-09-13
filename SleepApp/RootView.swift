@@ -72,6 +72,9 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else {
                 WhoopStore.shared.flushStorageTelemetry()
+                if phase == .background {
+                    whoopCollector.prepareForBackground()
+                }
                 return
             }
             history.reload()

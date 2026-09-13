@@ -27,8 +27,4 @@ enum AppHaptics {
         notificationGenerator.prepare()
     }
 
-    static func warning() {
-        notificationGenerator.notificationOccurred(.warning)
-        notificationGenerator.prepare()
-    }
 }

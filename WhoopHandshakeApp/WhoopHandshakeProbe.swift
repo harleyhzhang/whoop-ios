@@ -2,6 +2,7 @@
 import Foundation
 import OSLog
 import Observation
+import UIKit
 
 enum WhoopReconnectPolicy {
     static func delaySeconds(forAttempt attempt: Int) -> Double {
@@ -22,59 +23,10 @@ final class WhoopHandshakeProbe: NSObject {
     @ObservationIgnored private var lastHeartRateReceivedAt: Date?
     @ObservationIgnored private var canAttemptHandshake = false
 
-    var handshakeState: String { handshakePhase.displayText }
     var isCharging: Bool { batteryStatus.isCharging }
 
     var isConnected: Bool {
         peripheral?.state == .connected && handshakePhase.isAcknowledged
-    }
-
-    nonisolated static func heartRateIsFresh(
-        receivedAt: Date?,
-        now: Date = .now,
-        maxAge: TimeInterval = 90
-    ) -> Bool {
-        guard let receivedAt else { return false }
-        let age = now.timeIntervalSince(receivedAt)
-        return age >= 0 && age <= maxAge
-    }
-
-    nonisolated static func shouldDeduplicateTransportRetries(frameType: FrameType?) -> Bool {
-        frameType?.isReplayProne == true
-    }
-
-    nonisolated static func batteryLevelStatus(_ data: Data) -> BatteryStatus? {
-        WhoopBluetoothPolicy.batteryLevelStatus(data)
-    }
-
-    nonisolated static func legacyBatteryStatus(_ data: Data) -> BatteryStatus? {
-        WhoopBluetoothPolicy.legacyBatteryStatus(data)
-    }
-
-    nonisolated static func freshWhoop5WristState(
-        _ data: Data,
-        receivedAt: Date,
-        freshnessWindow: TimeInterval = 45
-    ) -> Bool? {
-        let bytes = [UInt8](data)
-        guard bytes.count >= 20,
-            FrameType(rawValue: bytes[8]) == .wristState,
-            WhoopFrameIntegrity.isValid(data)
-        else { return nil }
-
-        let timestamp =
-            UInt32(bytes[12])
-            | (UInt32(bytes[13]) << 8)
-            | (UInt32(bytes[14]) << 16)
-            | (UInt32(bytes[15]) << 24)
-        let eventDate = Date(timeIntervalSince1970: TimeInterval(timestamp))
-        guard abs(receivedAt.timeIntervalSince(eventDate)) <= freshnessWindow else { return nil }
-
-        switch bytes[10] {
-        case 9: return true
-        case 10: return false
-        default: return nil
-        }
     }
 
     @ObservationIgnored private lazy var central = CBCentralManager(
@@ -85,8 +37,8 @@ final class WhoopHandshakeProbe: NSObject {
     @ObservationIgnored private var peripheral: CBPeripheral?
     @ObservationIgnored private var commandCharacteristic: CBCharacteristic?
     @ObservationIgnored private var heartRateCharacteristic: CBCharacteristic?
-    @ObservationIgnored private var batteryPowerStateCharacteristic: CBCharacteristic?
-    @ObservationIgnored private var batteryLevelStatusCharacteristic: CBCharacteristic?
+    @ObservationIgnored private var connectionSession = WhoopConnectionSession()
+    @ObservationIgnored private var transportIsBackpressured = false
     @ObservationIgnored private var lastObservedWristState: Bool?
     @ObservationIgnored private var notifyCharacteristics: [CBCharacteristic] = []
     @ObservationIgnored private var helloOutstanding = false
@@ -98,11 +50,9 @@ final class WhoopHandshakeProbe: NSObject {
     @ObservationIgnored private var historicalWatchdogTask: Task<Void, Never>?
     @ObservationIgnored private var handshakeTask: Task<Void, Never>?
     @ObservationIgnored private var connectionRetryTask: Task<Void, Never>?
+    @ObservationIgnored private var backgroundDrainTask = UIBackgroundTaskIdentifier.invalid
     @ObservationIgnored private var reconnectAttempt = 0
-    @ObservationIgnored private var historicalSyncActive = false
-    @ObservationIgnored private var historicalSessionID: String?
-    @ObservationIgnored private var lastHistoricalProgressAt: Date?
-    @ObservationIgnored private var newestHistoricalSampleAtInSync: Date?
+    @ObservationIgnored private var historicalSync = WhoopHistoricalSyncState()
     @ObservationIgnored private var lastAcknowledgedHistoricalEndData: [UInt8]?
     @ObservationIgnored private var lastHistoricalAcknowledgementAt: Date?
     @ObservationIgnored private var lastSleepAnalysisAt: Date?
@@ -118,6 +68,11 @@ final class WhoopHandshakeProbe: NSObject {
         didPersist: { [weak self] result, summary in
             DispatchQueue.main.async { [weak self] in
                 self?.handlePersistedTransportBatch(result, summary: summary)
+            }
+        },
+        didChangePressure: { [weak self] pressure in
+            DispatchQueue.main.async { [weak self] in
+                self?.handleTransportPressure(pressure)
             }
         }
     )
@@ -157,6 +112,24 @@ final class WhoopHandshakeProbe: NSObject {
         historicalWatchdogTask?.cancel()
         handshakeTask?.cancel()
         connectionRetryTask?.cancel()
+    }
+
+    func prepareForBackground() {
+        guard backgroundDrainTask == .invalid else { return }
+        backgroundDrainTask = UIApplication.shared.beginBackgroundTask(
+            withName: "Persist pending WHOOP packets"
+        ) { [weak self] in
+            Task { @MainActor in self?.finishBackgroundDrain() }
+        }
+        transportPipeline.flushAndWaitForPersistence { [weak self] in
+            Task { @MainActor in self?.finishBackgroundDrain() }
+        }
+    }
+
+    private func finishBackgroundDrain() {
+        guard backgroundDrainTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundDrainTask)
+        backgroundDrainTask = .invalid
     }
 
     private func record(_ message: String) {
@@ -274,6 +247,9 @@ final class WhoopHandshakeProbe: NSObject {
         summary: WhoopTransportBatchSummary
     ) {
         guard result.success else {
+            if let failure = result.failure {
+                record(failure.localizedDescription)
+            }
             if let first = summary.firstProprietaryOrdinal,
                 let last = summary.lastProprietaryOrdinal
             {
@@ -294,29 +270,25 @@ final class WhoopHandshakeProbe: NSObject {
         }
         let belongsToCurrentOffload =
             summary.offloadSessionID == nil
-            || summary.offloadSessionID == historicalSessionID
+            || summary.offloadSessionID == historicalSync.sessionID
         guard belongsToCurrentOffload else {
             record("Ignoring post-commit control events from a superseded historical session")
             return
         }
-        if let sampleAt = summary.latestHistoricalSampleAt,
-            newestHistoricalSampleAtInSync.map({ sampleAt > $0 }) ?? true
-        {
-            newestHistoricalSampleAtInSync = sampleAt
-            lastHistoricalProgressAt = .now
+        if let sampleAt = summary.latestHistoricalSampleAt {
+            historicalSync.observe(sampleAt: sampleAt, receivedAt: .now)
         }
         for event in summary.metadataEvents {
             let metadata = WhoopHistoricalMetadata(
                 type: event.type,
                 chunkEndData: event.chunkEndData
             )
-            if metadata.shouldForcePresentation(historicalSyncActive: historicalSyncActive) {
+            if metadata.shouldForcePresentation(historicalSyncActive: historicalSync.isActive) {
                 record(event.diagnostic)
             }
             switch event.type {
             case .historyStart:
-                historicalSyncActive = true
-                newestHistoricalSampleAtInSync = nil
+                historicalSync.observeHistoryStart(at: .now)
                 lastAcknowledgedHistoricalEndData = nil
                 lastHistoricalAcknowledgementAt = nil
                 startHistoricalWatchdog()
@@ -332,17 +304,26 @@ final class WhoopHandshakeProbe: NSObject {
         }
     }
 
+    private func handleTransportPressure(_ pressure: WhoopTransportPressureSnapshot) {
+        transportIsBackpressured = pressure.isBackpressured
+        record(
+            pressure.isBackpressured
+                ? "Transport persistence backpressure: \(pressure.queuedEnvelopeCount)/\(pressure.capacity) envelopes"
+                : "Transport persistence backlog recovered"
+        )
+        if !pressure.isBackpressured, isConnected {
+            scheduleHistoricalSync(after: .seconds(2))
+        }
+    }
+
     private func completeHistoricalSyncIfActive() {
         guard
             WhoopBluetoothPolicy.shouldAnalyzeHistoryCompletion(
                 metadataType: .historyComplete,
-                historicalSyncActive: historicalSyncActive
+                historicalSyncActive: historicalSync.isActive
             )
         else { return }
-        historicalSyncActive = false
-        historicalSessionID = nil
-        lastHistoricalProgressAt = nil
-        newestHistoricalSampleAtInSync = nil
+        historicalSync.reset()
         lastAcknowledgedHistoricalEndData = nil
         lastHistoricalAcknowledgementAt = nil
         historicalWatchdogTask?.cancel()
@@ -364,6 +345,7 @@ final class WhoopHandshakeProbe: NSObject {
             central.cancelPeripheralConnection(peripheral)
         }
         peripheral = nil
+        connectionSession.clear()
         resetConnectionSession()
         commandSequence = 1
         canAttemptHandshake = false
@@ -389,6 +371,7 @@ final class WhoopHandshakeProbe: NSObject {
     private func connect(_ candidate: CBPeripheral, description: String) {
         guard peripheral == nil else { return }
         peripheral = candidate
+        _ = connectionSession.select(candidate.identifier)
         UserDefaults.standard.set(candidate.identifier.uuidString, forKey: knownPeripheralKey)
         central.stopScan()
         deviceName = candidate.name ?? "WHOOP"
@@ -405,6 +388,7 @@ final class WhoopHandshakeProbe: NSObject {
         else { return }
         helloOutstanding = true
         let attemptID = UUID()
+        let expectedSession = connectionSession.token()
         helloAttemptID = attemptID
         canAttemptHandshake = false
         handshakePhase = .writingClientHello
@@ -417,7 +401,8 @@ final class WhoopHandshakeProbe: NSObject {
             guard !Task.isCancelled,
                 let self,
                 self.helloOutstanding,
-                self.helloAttemptID == attemptID
+                self.helloAttemptID == attemptID,
+                expectedSession.map(self.connectionSession.accepts) ?? false
             else { return }
             self.helloOutstanding = false
             self.helloAttemptID = nil
@@ -431,7 +416,7 @@ final class WhoopHandshakeProbe: NSObject {
     }
 
     private func resetConnectionSession() {
-        if let historicalSessionID {
+        if let historicalSessionID = historicalSync.reset() {
             transportPipeline.flushAndWaitForPersistence { [store] in
                 store.abandonHistoricalOffload(
                     historicalSessionID,
@@ -441,11 +426,9 @@ final class WhoopHandshakeProbe: NSObject {
         } else {
             transportPipeline.flush()
         }
-        historicalSessionID = nil
         commandCharacteristic = nil
         heartRateCharacteristic = nil
-        batteryPowerStateCharacteristic = nil
-        batteryLevelStatusCharacteristic = nil
+        _ = connectionSession.resetKeepingPeripheral()
         batteryStatus = .unavailable
         notifyCharacteristics.removeAll(keepingCapacity: true)
         helloOutstanding = false
@@ -458,9 +441,6 @@ final class WhoopHandshakeProbe: NSObject {
         historicalRefreshTask = nil
         historicalWatchdogTask?.cancel()
         historicalWatchdogTask = nil
-        historicalSyncActive = false
-        lastHistoricalProgressAt = nil
-        newestHistoricalSampleAtInSync = nil
         lastAcknowledgedHistoricalEndData = nil
         lastHistoricalAcknowledgementAt = nil
         canAttemptHandshake = false
@@ -472,12 +452,15 @@ final class WhoopHandshakeProbe: NSObject {
         let attempt = reconnectAttempt
         reconnectAttempt += 1
         let delay = WhoopReconnectPolicy.delaySeconds(forAttempt: attempt)
+        let expectedSession = connectionSession.token()
         record("Scheduling reconnect attempt \(attempt + 1) in \(Int(delay)) seconds after \(reason)")
         connectionRetryTask = Task { @MainActor [weak self, weak candidate] in
             try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled,
                 let self,
                 let candidate,
+                let expectedSession,
+                self.connectionSession.accepts(expectedSession),
                 self.central.state == .poweredOn,
                 self.peripheral?.identifier == candidate.identifier,
                 candidate.state == .disconnected
@@ -519,37 +502,49 @@ final class WhoopHandshakeProbe: NSObject {
     }
 
     private func beginHistoricalSync() {
-        guard !historicalSyncActive,
+        guard !transportIsBackpressured,
+            !historicalSync.isActive,
             let peripheral,
             peripheral.state == .connected,
             handshakePhase.isAcknowledged,
             commandCharacteristic != nil
         else { return }
-        historicalSyncActive = true
-        lastHistoricalProgressAt = .now
-        newestHistoricalSampleAtInSync = nil
         let expectedPeripheralID = peripheral.identifier
-        store.beginHistoricalOffload(peripheralID: expectedPeripheralID) { [weak self] sessionID in
+        guard let expectedSession = connectionSession.token(),
+            historicalSync.begin(for: expectedSession, at: .now)
+        else { return }
+        store.beginHistoricalOffload(peripheralID: expectedPeripheralID) { [weak self] result in
             Task { @MainActor in
+                let sessionID = try? result.get()
                 guard let self,
-                    self.historicalSyncActive,
+                    self.historicalSync.isOpening(for: expectedSession),
                     let sessionID,
-                    self.historicalSessionID == nil,
+                    self.connectionSession.accepts(expectedSession),
                     self.peripheral?.identifier == expectedPeripheralID,
                     let peripheral = self.peripheral,
                     peripheral.state == .connected,
                     let commandCharacteristic = self.commandCharacteristic
                 else {
+                    if case .failure(let failure) = result {
+                        self?.record(failure.localizedDescription)
+                        self?.scheduleHistoricalSync(after: .seconds(5))
+                    }
                     if let sessionID {
                         self?.store.abandonHistoricalOffload(
                             sessionID,
                             reason: "connection changed before offload command"
                         )
                     }
-                    self?.historicalSyncActive = false
+                    self?.historicalSync.reset()
                     return
                 }
-                self.historicalSessionID = sessionID
+                guard self.historicalSync.activate(sessionID: sessionID, for: expectedSession) else {
+                    self.store.abandonHistoricalOffload(
+                        sessionID,
+                        reason: "offload state changed before command"
+                    )
+                    return
+                }
                 self.startHistoricalWatchdog()
                 self.commandSequence &+= 1
                 let frame = WhoopCommand.requestHistory.frame(sequence: self.commandSequence)
@@ -599,27 +594,21 @@ final class WhoopHandshakeProbe: NSObject {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(30))
                 guard !Task.isCancelled, let self else { return }
-                guard self.historicalSyncActive else {
+                guard self.historicalSync.isActive else {
                     self.historicalWatchdogTask = nil
                     return
                 }
-                let stalledFor =
-                    self.lastHistoricalProgressAt.map { Date().timeIntervalSince($0) }
-                    ?? .infinity
+                let stalledFor = self.historicalSync.stalledDuration(at: .now) ?? 0
                 guard stalledFor >= 90 else { continue }
 
                 self.record(
                     "Historical offload stalled for \(Int(stalledFor)) seconds; resetting the session and retrying")
-                if let historicalSessionID = self.historicalSessionID {
+                if let historicalSessionID = self.historicalSync.reset() {
                     self.store.abandonHistoricalOffload(
                         historicalSessionID,
                         reason: "no forward history progress for \(Int(stalledFor)) seconds"
                     )
                 }
-                self.historicalSessionID = nil
-                self.historicalSyncActive = false
-                self.lastHistoricalProgressAt = nil
-                self.newestHistoricalSampleAtInSync = nil
                 self.lastAcknowledgedHistoricalEndData = nil
                 self.lastHistoricalAcknowledgementAt = nil
                 self.historicalWatchdogTask = nil
@@ -674,9 +663,12 @@ final class WhoopHandshakeProbe: NSObject {
 
     private func scheduleAutomaticHandshakeIfTrusted() {
         guard UserDefaults.standard.bool(forKey: confirmedBondKey) else { return }
+        let expectedSession = connectionSession.token()
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
             guard let self,
+                let expectedSession,
+                self.connectionSession.accepts(expectedSession),
                 self.canAttemptHandshake,
                 !self.helloOutstanding,
                 self.handshakePhase.canAutomaticallyAttempt
@@ -722,6 +714,7 @@ extension WhoopHandshakeProbe: @preconcurrency CBCentralManagerDelegate {
             return
         }
         peripheral = restored
+        _ = connectionSession.select(restored.identifier)
         restored.delegate = self
         deviceName = restored.name ?? "WHOOP"
         UserDefaults.standard.set(restored.identifier.uuidString, forKey: knownPeripheralKey)
@@ -757,6 +750,10 @@ extension WhoopHandshakeProbe: @preconcurrency CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        guard connectionSession.accepts(peripheralID: peripheral.identifier) else {
+            record("Ignoring connect callback from a superseded peripheral")
+            return
+        }
         connectionRetryTask?.cancel()
         connectionRetryTask = nil
         reconnectAttempt = 0
@@ -767,6 +764,10 @@ extension WhoopHandshakeProbe: @preconcurrency CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        guard connectionSession.accepts(peripheralID: peripheral.identifier) else {
+            record("Ignoring failed-connect callback from a superseded peripheral")
+            return
+        }
         let detail = error?.localizedDescription ?? "unknown error"
         record("Connection failed: \(detail)")
         resetConnectionSession()
@@ -774,6 +775,10 @@ extension WhoopHandshakeProbe: @preconcurrency CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        guard connectionSession.accepts(peripheralID: peripheral.identifier) else {
+            record("Ignoring disconnect callback from a superseded peripheral")
+            return
+        }
         if helloOutstanding { handshakePhase = .disconnectedBeforeAcknowledgement }
         let detail = error?.localizedDescription ?? "no error"
         record(
@@ -787,6 +792,7 @@ extension WhoopHandshakeProbe: @preconcurrency CBCentralManagerDelegate {
 
 extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        guard connectionSession.accepts(peripheralID: peripheral.identifier) else { return }
         if let error {
             record("Service discovery failed: \(error.localizedDescription)")
             central.cancelPeripheralConnection(peripheral)
@@ -799,6 +805,7 @@ extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+        guard connectionSession.accepts(peripheralID: peripheral.identifier) else { return }
         if let error {
             record("Characteristic discovery failed for \(service.uuid.uuidString): \(error.localizedDescription)")
             central.cancelPeripheralConnection(peripheral)
@@ -826,7 +833,6 @@ extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
                     peripheral.setNotifyValue(true, for: characteristic)
                 }
             } else if characteristic.uuid == batteryLevelStatusUUID {
-                batteryLevelStatusCharacteristic = characteristic
                 if characteristic.properties.contains(.read) {
                     peripheral.readValue(for: characteristic)
                 }
@@ -834,7 +840,6 @@ extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
                     peripheral.setNotifyValue(true, for: characteristic)
                 }
             } else if characteristic.uuid == batteryPowerStateUUID {
-                batteryPowerStateCharacteristic = characteristic
                 if characteristic.properties.contains(.read) {
                     peripheral.readValue(for: characteristic)
                 }
@@ -851,6 +856,7 @@ extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
+        guard connectionSession.accepts(peripheralID: peripheral.identifier) else { return }
         guard characteristic.uuid == commandUUID, helloOutstanding else { return }
         helloOutstanding = false
         helloAttemptID = nil
@@ -872,6 +878,7 @@ extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
     func peripheral(
         _ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?
     ) {
+        guard connectionSession.accepts(peripheralID: peripheral.identifier) else { return }
         if let error {
             record(
                 "Notification subscription failed for \(characteristic.uuid.uuidString): \(error.localizedDescription)")
@@ -884,12 +891,19 @@ extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+        guard connectionSession.accepts(peripheralID: peripheral.identifier) else { return }
         let deliveredAt = Date()
         let data = characteristic.value
         let characteristicUUID = characteristic.uuid.uuidString
         let peripheralID = peripheral.identifier
         let errorDescription = error?.localizedDescription
-        guard errorDescription == nil, let data else { return }
+        guard errorDescription == nil, let data else {
+            record(
+                "Value update failed for \(characteristicUUID): "
+                    + (errorDescription ?? "notification contained no value")
+            )
+            return
+        }
         let uuid = CBUUID(string: characteristicUUID)
         if uuid == CBUUID(string: "2A37") {
             transportPipeline.submitStandardHeartRate(
@@ -909,7 +923,7 @@ extension WhoopHandshakeProbe: @preconcurrency CBPeripheralDelegate {
                 packet: data,
                 peripheralID: peripheralID,
                 characteristicUUID: characteristicUUID,
-                offloadSessionID: historicalSessionID,
+                offloadSessionID: historicalSync.sessionID,
                 deliveredAt: deliveredAt
             )
         }

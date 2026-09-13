@@ -155,12 +155,13 @@ extension WhoopSleepStateTests {
     }
 
     func beginOffload(store: WhoopStore, peripheral: UUID) async throws -> String {
-        let result: String? = await withCheckedContinuation { continuation in
+        let result: Result<String, WhoopStorageFailure> = await withCheckedContinuation {
+            continuation in
             store.beginHistoricalOffload(peripheralID: peripheral) {
                 continuation.resume(returning: $0)
             }
         }
-        return try XCTUnwrap(result)
+        return try result.get()
     }
 
     func append(

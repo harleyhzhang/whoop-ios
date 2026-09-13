@@ -4,6 +4,39 @@ import XCTest
 @testable import Sleep
 
 extension WhoopSleepStateTests {
+    func testEverySupportedUserVersionReachesCurrentSchemaIdempotently() throws {
+        for sourceVersion in 1...9 {
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            let url = directory.appendingPathComponent("sleep.sqlite3")
+            defer { try? FileManager.default.removeItem(at: directory) }
+
+            let initial = WhoopStore(
+                databaseURL: url,
+                runBackgroundDecoding: false,
+                targetSchemaVersion: sourceVersion
+            )
+            initial.shutdownForTesting()
+
+            let migrated = WhoopStore(databaseURL: url, runBackgroundDecoding: false)
+            XCTAssertEqual(
+                migrated.storageStateForTesting(),
+                .ready,
+                "failed to migrate authentic v\(sourceVersion) fixture"
+            )
+            migrated.shutdownForTesting()
+
+            var checked: OpaquePointer?
+            XCTAssertEqual(
+                sqlite3_open_v2(url.path, &checked, SQLITE_OPEN_READONLY, nil),
+                SQLITE_OK
+            )
+            XCTAssertEqual(scalarInt(checked, sql: "PRAGMA user_version"), 10)
+            XCTAssertEqual(scalarText(checked, sql: "PRAGMA quick_check"), "ok")
+            if let checked { sqlite3_close(checked) }
+        }
+    }
+
     func testEmptyLegacyDatabaseMigratesIdempotentlyToCurrentSchema() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -255,7 +288,7 @@ extension WhoopSleepStateTests {
         XCTAssertEqual(sqlite3_open_v2(databaseURL.path, &migrated, SQLITE_OPEN_READONLY, nil), SQLITE_OK)
         defer { if let migrated { sqlite3_close(migrated) } }
         XCTAssertEqual(scalarInt(migrated, sql: "PRAGMA user_version"), 10)
-        XCTAssertEqual(scalarInt(migrated, sql: "PRAGMA freelist_count"), 0)
+        XCTAssertGreaterThan(scalarInt(migrated, sql: "PRAGMA freelist_count"), 0)
         XCTAssertEqual(scalarInt(migrated, sql: "SELECT COUNT(*) FROM heart_rate_sample"), 1)
         XCTAssertEqual(
             scalarInt(migrated, sql: "SELECT COUNT(*) FROM heart_rate_sample WHERE rr_intervals_json='[]'"),

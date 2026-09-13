@@ -84,11 +84,33 @@ struct WhoopLatestHeartRateSample: Sendable {
 struct WhoopPacketPersistenceResult: Sendable {
     let success: Bool
     let deliverySequence: Int64?
+    let failure: WhoopStorageFailure?
+
+    init(
+        success: Bool,
+        deliverySequence: Int64?,
+        failure: WhoopStorageFailure? = nil
+    ) {
+        self.success = success
+        self.deliverySequence = deliverySequence
+        self.failure = failure
+    }
 }
 
 struct WhoopPacketBatchPersistenceResult: Sendable {
     let success: Bool
     let deliverySequences: [Int64]
+    let failure: WhoopStorageFailure?
+
+    init(
+        success: Bool,
+        deliverySequences: [Int64],
+        failure: WhoopStorageFailure? = nil
+    ) {
+        self.success = success
+        self.deliverySequences = deliverySequences
+        self.failure = failure
+    }
 
     var committedEnvelopeCount: Int { success ? deliverySequences.count : 0 }
 }

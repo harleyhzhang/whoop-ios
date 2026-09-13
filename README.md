@@ -23,7 +23,8 @@ cache. Run `Tools/verify_local.sh` on the final clean commit. That gate uses a
 fresh simulator/build directory and enforces Swift formatting, Swift 6 strict
 concurrency, warnings as errors, Ruff, strict mypy, shellcheck, private-data
 scans, generated artifacts, zero skipped tests, global and critical-module
-coverage, Release compilation, and static analysis. A successful clean-commit
+coverage, Release compilation, unused-declaration analysis, and Xcode static
+analysis. A successful clean-commit
 gate writes a 24-hour local attestation keyed by HEAD, tree, and exact toolchain,
 so the pre-push hook can reuse it instead of immediately repeating the same run.
 CI always performs its own isolated gate.
@@ -185,8 +186,8 @@ discipline, and the limits of historical recovery.
 - Haptics follow a restrained interaction vocabulary: selection ticks occur
   only when the range or exact selected night changes; lightweight impacts
   accompany diagnostic navigation and rescanning; handshake initiation is
-  firmer; and success/warning patterns are limited to visible handshake
-  outcomes. Passive collection and background Bluetooth events stay silent.
+  firmer; and the success pattern is limited to a visible handshake outcome.
+  Passive collection and background Bluetooth events stay silent.
 - The dashboard diagnostic control uses the compact circular WHOOP mark plus a
   small plain connection-status dot, green only while the encrypted strap link
   is active and gray otherwise.

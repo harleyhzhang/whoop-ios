@@ -8,7 +8,6 @@ extension WhoopSleepStateTests {
         let unknown = SleepState(rawValue: 99)
         XCTAssertEqual(unknown, .unknown(99))
         XCTAssertEqual(unknown.rawValue, 99)
-        XCTAssertFalse(unknown.isExplicitlyAwake)
         XCTAssertFalse(
             WhoopAutomaticSleepPolicy.canFinalize(
                 latestState: unknown,
