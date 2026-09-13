@@ -164,45 +164,36 @@ discipline, and the limits of historical recovery.
 - RHR follows Recovery in the trend stack, and HRV appears last. Removing HRV
   and live Heart Rate from the compact summary does not stop their collection,
   storage, or use in local Recovery modeling.
-- Chart density is range-aware without altering the stored daily history or
-  exact current value: 1W and 1M use daily points, 1Y uses weekly medians, and
-  All widens adaptive median buckets from weekly toward monthly to stay near
-  40–60 plotted points.
-- The native segmented selector uses `Week`, `Month`, `Year`, and `All` labels
-  with matching full VoiceOver names. Fixed ranges appear only when the stored
-  history is long enough to support them. One-week and one-month
-  charts retain compact start/midpoint/Today labels; one-year and all-history
-  charts show at most four evenly distributed abbreviated month-and-year labels
-  without vertical month gridlines or wasted footer space.
-- The Trends selector persists the most recently used range and restores its
-  selected highlight and charts when the app next opens.
-- For 1Y and All, charts overlay independent contrasting average levels. The
+- Every chart shows all stored history. At rest, adaptive median buckets widen
+  from weekly toward monthly to keep the summary near 40–60 plotted points
+  without altering the stored daily history or exact current value. The
+  dashboard has no range selector or separate `Trends` heading. Charts show at
+  most four evenly distributed abbreviated month-and-year labels without
+  vertical month gridlines or wasted footer space.
+- Charts overlay independent contrasting average levels. The
   history is divided backward from the latest day into adaptive equal-time
   windows, with at most five levels. Each unconnected
   horizontal segment shows its formatted mean above the line. The underlying
-  colored trend remains visible at reduced opacity; pressing or scrubbing hides
-  the levels and restores the normal trend. The endpoint is one same-color dot,
-  with no card-colored knockout, border, or halo separating it from the line.
+  colored trend remains visible at reduced opacity; pressing or scrubbing
+  quickly eases every retained daily point into the line while the average
+  levels fade away, then reverses the morph on release. The endpoint is one
+  same-color dot, with no card-colored knockout, border, or halo separating it
+  from the line.
 - Aggregated trends keep their historical median buckets but anchor the final
   bucket to the exact latest observation, so the endpoint, dot, and current
   card value agree. Chart selection snaps to rendered points, and a fixed
   normalized x-domain with slight endpoint padding prevents the plot width from
   changing while scrubbing or clipping the final dot.
 - Trend lines and area fills use a shape-preserving cubic sampler followed by
-  restrained monotone rendering. Sparse Week values form one continuous curve
-  instead of straight spans with rounded vertices, while extrema remain inside
-  neighboring value intervals. Selection never splits or recomputes the trend:
-  it overlays a translucent future region after the selected point, then adds
-  the rule and dot, leaving line geometry, scales, and layout unchanged while
-  scrubbing.
-- Range changes resample both curves onto the same 48 horizontal anchors, then
-  morph the values and y-domain together. Year/All average steps and passive
-  translucency remain independent opacity layers. The headline and current-card
+  restrained monotone rendering. The summary and daily line share one stable
+  topology during the hold morph, and the complete-detail state lands on every
+  retained daily value. Selection overlays a translucent future region after
+  the selected point, then adds the rule and dot. The headline and current-card
   numbers use a brief restrained digit pop while retaining the previous value
-  underneath; Reduce Motion remains immediate and direct chart scrubbing does
-  not replay the range transition.
+  underneath; Reduce Motion makes the detail transition immediate and direct
+  chart scrubbing does not replay the number animation.
 - Haptics follow a restrained interaction vocabulary: selection ticks occur
-  only when the range or exact selected night changes; lightweight impacts
+  only when the exact selected night changes; lightweight impacts
   accompany diagnostic navigation and rescanning; handshake initiation is
   firmer; and the success pattern is limited to a visible handshake outcome.
   Passive collection and background Bluetooth events stay silent.

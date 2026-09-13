@@ -9,8 +9,8 @@ struct MetricPoint: Identifiable {
 
 enum ChartCurveSampler {
     /// Resample a shape-preserving cubic curve onto the fixed topology used by
-    /// range morphing. Unlike linear resampling followed by rounded joins, the
-    /// sparse Week points produce one continuous curve without overshooting a
+    /// detail morphing. Unlike linear resampling followed by rounded joins,
+    /// sparse points produce one continuous curve without overshooting a
     /// neighboring value interval.
     static func resampledValues(from points: [MetricPoint], count: Int) -> [Double] {
         guard count > 0, let first = points.first else { return [] }
@@ -107,17 +107,12 @@ struct ChartContentOpacity: Equatable {
     let area: Double
 
     static func resolve(
-        longRangeStyleProgress: Double,
-        isScrubbing: Bool
+        detailProgress: Double
     ) -> ChartContentOpacity {
-        if isScrubbing {
-            return ChartContentOpacity(line: 1, area: 0.26)
-        }
-
-        let progress = min(max(longRangeStyleProgress, 0), 1)
+        let progress = min(max(detailProgress, 0), 1)
         return ChartContentOpacity(
-            line: 1 + ((0.3 - 1) * progress),
-            area: 0.26 + ((0.07 - 0.26) * progress)
+            line: 0.3 + ((1 - 0.3) * progress),
+            area: 0.07 + ((0.26 - 0.07) * progress)
         )
     }
 }
@@ -142,39 +137,4 @@ enum MetricKind: Hashable {
     case hrv
     case rhr
     case steps
-}
-
-enum HealthRange: String, CaseIterable, Identifiable {
-    case week = "Week"
-    case month = "Month"
-    case year = "Year"
-    case all = "All"
-
-    var id: String { rawValue }
-
-    var dayCount: Int? {
-        switch self {
-        case .week: 7
-        case .month: 30
-        case .year: 365
-        case .all: nil
-        }
-    }
-
-    var accessibilityName: String {
-        switch self {
-        case .week: "one week"
-        case .month: "one month"
-        case .year: "one year"
-        case .all: "all history"
-        }
-    }
-
-    var usesMonthlyAxis: Bool {
-        switch self {
-        case .week, .month: false
-        case .year, .all: true
-        }
-    }
-
 }

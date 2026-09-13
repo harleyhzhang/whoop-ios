@@ -33,16 +33,9 @@ enum DashboardChartGeometry {
         }
     }
 
-    static func averageLevels(
-        from points: [MetricPoint],
-        for range: HealthRange
-    ) -> [AverageLevel] {
+    static func averageLevels(from points: [MetricPoint]) -> [AverageLevel] {
         guard let firstDate = points.first?.date, let lastDate = points.last?.date else {
             return []
-        }
-        switch range {
-        case .week, .month: return []
-        case .year, .all: break
         }
 
         let calendar = Calendar.current
@@ -94,79 +87,26 @@ enum DashboardChartGeometry {
         return min(max(date.timeIntervalSince(firstDate) / duration, 0), 1)
     }
 
-    static func morphingPoints(
-        target: MetricSeries,
-        source: MetricSeries?,
+    /// Keeps one stable point topology while the calm all-history summary
+    /// expands into the complete day-by-day line under the user's finger.
+    static func detailMorphingPoints(
+        in series: MetricSeries,
         progress: Double
     ) -> [MorphingMetricPoint] {
-        let sampleCount = 48
-        let targetValues = ChartCurveSampler.resampledValues(
-            from: target.plotted,
+        let sampleCount = series.daily.count
+        let summaryValues = ChartCurveSampler.resampledValues(
+            from: series.plotted,
             count: sampleCount
         )
-        guard !targetValues.isEmpty else { return [] }
-        let sampledSource = source.map {
-            ChartCurveSampler.resampledValues(from: $0.plotted, count: sampleCount)
-        }
-        let sourceValues: [Double]
-        if let sampledSource, sampledSource.count == targetValues.count {
-            sourceValues = sampledSource
-        } else {
-            sourceValues = targetValues
-        }
-        return targetValues.indices.map { index in
+        let dailyValues = series.daily.map(\.value)
+        guard summaryValues.count == dailyValues.count else { return [] }
+        let eased = smoothStep(progress)
+        return dailyValues.indices.map { index in
             MorphingMetricPoint(
                 id: index,
-                position: Double(index) / Double(max(targetValues.count - 1, 1)),
-                value: interpolate(sourceValues[index], targetValues[index], progress)
+                position: normalizedPosition(of: series.daily[index].date, in: series.daily),
+                value: interpolate(summaryValues[index], dailyValues[index], eased)
             )
-        }
-    }
-
-    static func morphingDomain(
-        metric: MetricKind,
-        target: MetricSeries,
-        source: MetricSeries?,
-        progress: Double
-    ) -> ClosedRange<Double> {
-        let targetDomain = metric.chartDomain(for: target.daily)
-        guard let source, !source.daily.isEmpty else { return targetDomain }
-        let sourceDomain = metric.chartDomain(for: source.daily)
-        let lowerBound = interpolate(sourceDomain.lowerBound, targetDomain.lowerBound, progress)
-        let upperBound = interpolate(sourceDomain.upperBound, targetDomain.upperBound, progress)
-        return lowerBound...upperBound
-    }
-
-    static func averageOpacity(
-        selectedRange: HealthRange,
-        sourceRange: HealthRange?,
-        progress: Double
-    ) -> Double {
-        let targetIsLong = selectedRange.usesMonthlyAxis
-        guard let sourceRange else { return targetIsLong ? 1 : 0 }
-        let sourceIsLong = sourceRange.usesMonthlyAxis
-        let eased = smoothStep(progress)
-        if targetIsLong { return eased }
-        return sourceIsLong ? 1 - eased : 0
-    }
-
-    static func longRangeStyleProgress(
-        selectedRange: HealthRange,
-        sourceRange: HealthRange?,
-        progress: Double
-    ) -> Double {
-        let target = selectedRange.usesMonthlyAxis ? 1.0 : 0.0
-        guard let sourceRange else { return target }
-        let source = sourceRange.usesMonthlyAxis ? 1.0 : 0.0
-        return interpolate(source, target, progress)
-    }
-
-    static func axisLabel(for date: Date, range: HealthRange) -> String {
-        switch range {
-        case .week, .month:
-            date.formatted(.dateTime.month(.abbreviated).day())
-        case .year, .all:
-            date.formatted(.dateTime.month(.abbreviated).year(.twoDigits))
         }
     }
 
@@ -179,7 +119,7 @@ enum DashboardChartGeometry {
         source + ((target - source) * progress)
     }
 
-    private static func smoothStep(_ rawValue: Double) -> Double {
+    static func smoothStep(_ rawValue: Double) -> Double {
         let value = min(max(rawValue, 0), 1)
         return value * value * (3 - (2 * value))
     }

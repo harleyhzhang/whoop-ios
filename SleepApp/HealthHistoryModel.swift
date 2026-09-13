@@ -12,15 +12,9 @@ final class HealthHistoryModel {
     @ObservationIgnored
     private var reloadGeneration = 0
     @ObservationIgnored
-    private var seriesCache: [ChartSeriesCacheKey: MetricSeries] = [:]
+    private var seriesCache: [MetricKind: MetricSeries] = [:]
     @ObservationIgnored
     private var dateCache: [String: Date] = [:]
-
-    private struct ChartSeriesCacheKey: Hashable {
-        let metric: MetricKind
-        let range: HealthRange
-        let referenceDay: Date
-    }
 
     init(store: WhoopStore = .shared) {
         self.store = store
@@ -56,37 +50,24 @@ final class HealthHistoryModel {
 
     /// Chart construction is intentionally cached outside `View.body` because
     /// date parsing, filtering and bucket medians only need to run when
-    /// history, range, metric, or the reference day changes.
-    func metricSeries(
-        for metric: MetricKind,
-        range: HealthRange,
-        referenceDate: Date
-    ) -> MetricSeries {
-        let calendar = Calendar.current
-        let referenceDay = calendar.startOfDay(for: referenceDate)
-        let key = ChartSeriesCacheKey(metric: metric, range: range, referenceDay: referenceDay)
-        if let cached = seriesCache[key] { return cached }
+    /// history or metric changes.
+    func metricSeries(for metric: MetricKind) -> MetricSeries {
+        if let cached = seriesCache[metric] { return cached }
 
-        let cutoff = range.dayCount.flatMap {
-            calendar.date(byAdding: .day, value: -($0 - 1), to: referenceDay)
-        }
         let daily: [MetricPoint]
         if metric == .steps {
             daily = stepRecords.compactMap { record in
                 let date = cachedDate(dateKey: record.dateKey, fallback: record.date)
-                if let cutoff, date < calendar.startOfDay(for: cutoff) { return nil }
                 return MetricPoint(date: date, value: Double(record.stepCount))
             }
         } else if metric == .recovery {
             daily = recoveryRecords.compactMap { record in
                 let date = cachedDate(dateKey: record.dateKey, fallback: record.date)
-                if let cutoff, date < calendar.startOfDay(for: cutoff) { return nil }
                 return MetricPoint(date: date, value: record.score)
             }
         } else {
             daily = records.compactMap { record -> MetricPoint? in
                 let date = cachedDate(for: record)
-                if let cutoff, date < calendar.startOfDay(for: cutoff) { return nil }
                 let value: Double?
                 switch metric {
                 case .sleep: value = record.sleepScore
@@ -99,17 +80,9 @@ final class HealthHistoryModel {
                 return value.map { MetricPoint(date: date, value: $0) }
             }
         }
-        let plotted: [MetricPoint]
-        switch range {
-        case .week, .month:
-            plotted = daily
-        case .year:
-            plotted = medianBuckets(from: daily, spanning: 7)
-        case .all:
-            plotted = medianBuckets(from: daily, spanning: adaptiveBucketDays(for: daily))
-        }
+        let plotted = medianBuckets(from: daily, spanning: adaptiveBucketDays(for: daily))
         let result = MetricSeries(daily: daily, plotted: plotted)
-        seriesCache[key] = result
+        seriesCache[metric] = result
         return result
     }
 

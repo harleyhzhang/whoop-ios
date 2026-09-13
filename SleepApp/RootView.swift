@@ -2,8 +2,6 @@ import SwiftUI
 
 struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @AppStorage("selectedHealthRange") private var selectedRange: HealthRange = .month
     @State private var chartState = DashboardChartState()
     @State private var showsConnectionDetails = false
     @State private var history = HealthHistoryModel()
@@ -15,18 +13,6 @@ struct RootView: View {
             stepRecords: history.snapshot.stepRecords,
             recoveryRecords: history.snapshot.recoveryRecords
         )
-    }
-
-    private var availableRanges: [HealthRange] {
-        guard let first = history.snapshot.healthRecords.first?.date,
-            let last = history.snapshot.healthRecords.last?.date
-        else { return HealthRange.allCases }
-        let days =
-            (Calendar.current.dateComponents([.day], from: first, to: last).day ?? 0) + 1
-        return HealthRange.allCases.filter { range in
-            guard let required = range.dayCount else { return true }
-            return days >= required
-        }
     }
 
     private var batteryLevel: Int? {
@@ -46,29 +32,6 @@ struct RootView: View {
             dashboard(currentDate: context.date)
         }
         .preferredColorScheme(.dark)
-        .onChange(of: selectedRange) { oldRange, _ in
-            AppHaptics.selection()
-            var transaction = Transaction(animation: nil)
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                chartState.beginRangeTransition(from: oldRange, reduceMotion: reduceMotion)
-            }
-        }
-        .task(id: chartState.morphGeneration) {
-            guard !reduceMotion, chartState.morphProgress == 0 else { return }
-            await Task.yield()
-            guard !Task.isCancelled else { return }
-            withAnimation(.smooth(duration: 0.52, extraBounce: 0)) {
-                chartState.morphProgress = 1
-            }
-            try? await Task.sleep(for: .seconds(0.52))
-            guard !Task.isCancelled else { return }
-            chartState.morphFromRange = nil
-        }
-        .onChange(of: availableRanges) { _, ranges in
-            guard !ranges.isEmpty, !ranges.contains(selectedRange) else { return }
-            selectedRange = ranges.last ?? .all
-        }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else {
                 WhoopStore.shared.flushStorageTelemetry()
@@ -115,19 +78,14 @@ struct RootView: View {
                         showConnectionDetails: { showsConnectionDetails = true }
                     )
                     SummaryGrid(day: publishedDay)
-                    RangePicker(selection: $selectedRange, availableRanges: availableRanges)
 
                     ForEach(MetricKind.trendOrder, id: \.self) { metric in
                         MetricTrendCard(
                             metric: metric,
-                            series: metricSeries(for: metric, currentDate: currentDate),
-                            selectedRange: selectedRange,
+                            series: metricSeries(for: metric),
                             publishedDate: publishedDay.date,
                             currentValue: metricValue(for: metric),
-                            chartState: chartState,
-                            seriesForRange: { range in
-                                metricSeries(for: metric, range: range, currentDate: currentDate)
-                            }
+                            chartState: chartState
                         )
                     }
                 }
@@ -139,17 +97,8 @@ struct RootView: View {
         }
     }
 
-    private func metricSeries(
-        for metric: MetricKind,
-        range: HealthRange? = nil,
-        currentDate: Date
-    ) -> MetricSeries {
-        history.metricSeries(
-            for: metric,
-            range: range ?? selectedRange,
-            referenceDate: (metric == .steps || metric == .recovery)
-                ? currentDate : (publishedDay.date ?? currentDate)
-        )
+    private func metricSeries(for metric: MetricKind) -> MetricSeries {
+        history.metricSeries(for: metric)
     }
 
     private func metricValue(for metric: MetricKind) -> Double? {

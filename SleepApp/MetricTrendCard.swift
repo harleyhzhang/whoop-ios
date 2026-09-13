@@ -3,13 +3,13 @@ import SwiftUI
 import UIKit
 
 struct MetricTrendCard: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     let metric: MetricKind
     let series: MetricSeries
-    let selectedRange: HealthRange
     let publishedDate: Date?
     let currentValue: Double?
     @Bindable var chartState: DashboardChartState
-    let seriesForRange: (HealthRange) -> MetricSeries
 
     private var cardSelection: Date? {
         chartState.activeMetric == metric ? chartState.selectedDate : nil
@@ -17,7 +17,7 @@ struct MetricTrendCard: View {
 
     private var selectedMetricPoint: MetricPoint? {
         cardSelection.flatMap {
-            DashboardChartGeometry.selectedPoint(in: series.plotted, near: $0)
+            DashboardChartGeometry.selectedPoint(in: series.daily, near: $0)
         }
     }
 
@@ -87,7 +87,7 @@ struct MetricTrendCard: View {
             .frame(maxWidth: .infinity)
             .frame(height: 148)
             .accessibilityLabel(
-                "\(metric.trendTitle), no real data in \(selectedRange.accessibilityName)"
+                "\(metric.trendTitle), no real data in all history"
             )
         } else {
             populatedMetricChart
@@ -95,36 +95,23 @@ struct MetricTrendCard: View {
     }
 
     private var populatedMetricChart: some View {
-        let plottedPoints = series.plotted
-        let sourceSeries = chartState.morphFromRange.map(seriesForRange)
-        let chartPoints = DashboardChartGeometry.morphingPoints(
-            target: series,
-            source: sourceSeries,
-            progress: Double(chartState.morphProgress)
+        let detailProgress =
+            chartState.detailedMetric == metric ? Double(chartState.detailProgress) : 0
+        let chartPoints = DashboardChartGeometry.detailMorphingPoints(
+            in: series,
+            progress: detailProgress
         )
-        let domain = DashboardChartGeometry.morphingDomain(
-            metric: metric,
-            target: series,
-            source: sourceSeries,
-            progress: Double(chartState.morphProgress)
-        )
+        let domain = metric.chartDomain(for: series.daily)
         let chartSelection = cardSelection
-        let averageOpacity = chartSelection == nil ? resolvedAverageOpacity : 0
-        let contentOpacity = ChartContentOpacity.resolve(
-            longRangeStyleProgress: DashboardChartGeometry.longRangeStyleProgress(
-                selectedRange: selectedRange,
-                sourceRange: chartState.morphFromRange,
-                progress: Double(chartState.morphProgress)
-            ),
-            isScrubbing: chartSelection != nil
-        )
+        let averageOpacity = 1 - DashboardChartGeometry.smoothStep(detailProgress)
+        let contentOpacity = ChartContentOpacity.resolve(detailProgress: detailProgress)
         let highlightedPoint =
-            DashboardChartGeometry.selectedPoint(in: plottedPoints, near: chartSelection)
-            ?? plottedPoints.last
+            DashboardChartGeometry.selectedPoint(in: series.daily, near: chartSelection)
+            ?? series.daily.last
             ?? MetricPoint(date: .now, value: 0)
         let requestedHighlightPosition = DashboardChartGeometry.normalizedPosition(
             of: highlightedPoint.date,
-            in: plottedPoints
+            in: series.daily
         )
         let highlightedCurvePoint = ChartPointAlignment.nearestCurvePoint(
             to: requestedHighlightPosition,
@@ -132,15 +119,8 @@ struct MetricTrendCard: View {
         )
         let highlightedPosition = highlightedCurvePoint?.position ?? requestedHighlightPosition
         let highlightedValue = highlightedCurvePoint?.value ?? highlightedPoint.value
-        let firstDate = series.daily.first?.date ?? highlightedPoint.date
-        let middleDate = series.daily[series.daily.count / 2].date
         let monthTicks = DashboardChartGeometry.monthlyAxisDates(in: series.daily)
-        let averageRange = resolvedAverageRange
-        let averageSeries = averageRange == selectedRange ? series : seriesForRange(averageRange)
-        let averageLevels = DashboardChartGeometry.averageLevels(
-            from: averageSeries.daily,
-            for: averageRange
-        )
+        let averageLevels = DashboardChartGeometry.averageLevels(from: series.daily)
         let markerSymbolArea: CGFloat = 48
 
         return VStack(spacing: 0) {
@@ -170,7 +150,7 @@ struct MetricTrendCard: View {
                     )
                     .interpolationMethod(.monotone)
                     .lineStyle(
-                        StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round)
+                        StrokeStyle(lineWidth: 2.1, lineCap: .round, lineJoin: .round)
                     )
                     .foregroundStyle(metric.color)
                     .opacity(contentOpacity.line)
@@ -183,14 +163,14 @@ struct MetricTrendCard: View {
                                 "Average window start",
                                 DashboardChartGeometry.normalizedPosition(
                                     of: level.startDate,
-                                    in: averageSeries.daily
+                                    in: series.daily
                                 )
                             ),
                             xEnd: .value(
                                 "Average window end",
                                 DashboardChartGeometry.normalizedPosition(
                                     of: level.endDate,
-                                    in: averageSeries.daily
+                                    in: series.daily
                                 )
                             ),
                             y: .value("Window average", level.value)
@@ -248,7 +228,7 @@ struct MetricTrendCard: View {
             .chartYScale(domain: domain)
             .chartPlotStyle { $0.clipped() }
             .chartXScale(domain: -0.02...1.02)
-            .chartXSelection(value: normalizedSelectionBinding(selectableSeries: plottedPoints))
+            .chartXSelection(value: normalizedSelectionBinding(selectableSeries: series.daily))
             .chartYAxis {
                 AxisMarks(
                     position: .trailing,
@@ -270,70 +250,32 @@ struct MetricTrendCard: View {
             .chartLegend(.hidden)
             .frame(maxWidth: .infinity)
             .frame(height: 126)
-            .accessibilityLabel(
-                "\(metric.trendTitle), \(selectedRange.accessibilityName)"
-            )
+            .accessibilityIdentifier("whoop.chart.\(metric.accessibilityID)")
+            .accessibilityLabel("\(metric.trendTitle), all history")
+            .accessibilityValue(chartSelection == nil ? "Summary line" : "Daily detail line")
 
-            rangeAxisFooter(
-                monthDates: monthTicks,
-                firstDate: firstDate,
-                middleDate: middleDate
-            )
+            rangeAxisFooter(monthDates: monthTicks)
         }
         .frame(height: 145, alignment: .top)
     }
 
     @ViewBuilder
-    private func rangeAxisFooter(
-        monthDates: [Date],
-        firstDate: Date,
-        middleDate: Date
-    ) -> some View {
-        if selectedRange.usesMonthlyAxis {
-            HStack(spacing: 0) {
-                ForEach(Array(monthDates.enumerated()), id: \.offset) { index, date in
-                    VStack(spacing: 0) {
-                        Text(date, format: .dateTime.month(.abbreviated))
-                        Text(date, format: .dateTime.year(.twoDigits))
-                    }
-                    .font(.system(size: 8, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .accessibilityLabel(date.formatted(.dateTime.month(.wide).year()))
-                    .accessibilitySortPriority(Double(monthDates.count - index))
+    private func rangeAxisFooter(monthDates: [Date]) -> some View {
+        HStack(spacing: 0) {
+            ForEach(Array(monthDates.enumerated()), id: \.offset) { index, date in
+                VStack(spacing: 0) {
+                    Text(date, format: .dateTime.month(.abbreviated))
+                    Text(date, format: .dateTime.year(.twoDigits))
                 }
+                .font(.system(size: 8, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .accessibilityLabel(date.formatted(.dateTime.month(.wide).year()))
+                .accessibilitySortPriority(Double(monthDates.count - index))
             }
-            .padding(.trailing, 28)
-            .frame(height: 19, alignment: .top)
-        } else {
-            HStack {
-                Text(DashboardChartGeometry.axisLabel(for: firstDate, range: selectedRange))
-                Spacer()
-                Text(DashboardChartGeometry.axisLabel(for: middleDate, range: selectedRange))
-                Spacer()
-                Text("Today")
-            }
-            .font(.caption2)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
-            .padding(.trailing, 28)
-            .frame(height: 19, alignment: .top)
         }
-    }
-
-    private var resolvedAverageOpacity: Double {
-        DashboardChartGeometry.averageOpacity(
-            selectedRange: selectedRange,
-            sourceRange: chartState.morphFromRange,
-            progress: Double(chartState.morphProgress)
-        )
-    }
-
-    private var resolvedAverageRange: HealthRange {
-        if selectedRange.usesMonthlyAxis { return selectedRange }
-        if let source = chartState.morphFromRange, source.usesMonthlyAxis { return source }
-        return selectedRange
+        .padding(.trailing, 28)
+        .frame(height: 19, alignment: .top)
     }
 
     private func normalizedSelectionBinding(
@@ -366,11 +308,13 @@ struct MetricTrendCard: View {
                     if chartState.activeMetric != metric || chartState.selectedDate != point.date {
                         AppHaptics.selection()
                     }
-                    chartState.activeMetric = metric
-                    chartState.selectedDate = point.date
+                    chartState.beginSelection(
+                        metric: metric,
+                        date: point.date,
+                        reduceMotion: reduceMotion
+                    )
                 } else if chartState.activeMetric == metric {
-                    chartState.activeMetric = nil
-                    chartState.selectedDate = nil
+                    chartState.endSelection(metric: metric, reduceMotion: reduceMotion)
                 }
             }
         )
