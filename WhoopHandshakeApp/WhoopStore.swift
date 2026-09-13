@@ -5,15 +5,19 @@ import SQLite3
 
 /// Append-only local evidence store for direct WHOOP packets and derived samples.
 /// Raw frames are retained so later protocol improvements never require another capture.
-final class WhoopStore: Sendable {
+final class WhoopStore: Sendable, WhoopPacketPersisting {
     static let shared = WhoopStore()
 
     private let sqlite = SQLiteDatabase()
-    private let dashboardRepository = DashboardRepository()
+    private let dashboardReader = DashboardDatabaseReader()
+    private let readiness = WhoopStorageReadiness()
     private let databaseURLOverride: URL?
+    private let databaseURL: URL?
+    private let faultInjector: WhoopStorageFaultInjector
+    private let targetSchemaVersion: Int
     private static let logger = Logger(subsystem: "com.clintonst.sideload.sleep", category: "WhoopStore")
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
-    private static let schemaVersion = 10
+    private static let currentSchemaVersion = 10
     private static let decoderVersion = 3
 
     private var queue: DispatchQueue { sqlite.queue }
@@ -42,28 +46,34 @@ final class WhoopStore: Sendable {
         set { sqlite.nextDeliverySequence = newValue }
     }
 
-    init(databaseURL: URL? = nil, runBackgroundDecoding: Bool = true) {
+    init(
+        databaseURL: URL? = nil,
+        runBackgroundDecoding: Bool = true,
+        faultInjector: WhoopStorageFaultInjector = .none,
+        targetSchemaVersion: Int? = nil
+    ) {
         databaseURLOverride = databaseURL
-        // Opening and migrating a phone-sized database must never block the
-        // main actor during app launch. Subsequent operations enqueue behind
-        // this work and therefore still observe a fully initialized store.
+        self.databaseURL =
+            databaseURL
+            ?? Self.databaseDirectory()?.appendingPathComponent("sleep.sqlite3")
+        self.faultInjector = faultInjector
+        self.targetSchemaVersion = min(
+            max(1, targetSchemaVersion ?? Self.currentSchemaVersion),
+            Self.currentSchemaVersion
+        )
         if databaseURL != nil {
-            // Injected databases are test fixtures. Keep their setup
-            // deterministic so tests may inspect the file immediately.
             queue.sync { [self] in
-                openDatabase()
-                if runBackgroundDecoding {
-                    backfillVersion26PPG()
-                    backfillVersion18Motion()
-                }
+                initializeDatabase(
+                    runBackgroundDecoding: runBackgroundDecoding,
+                    permitsRetry: false
+                )
             }
         } else {
             queue.async { [self] in
-                openDatabase()
-                if runBackgroundDecoding {
-                    backfillVersion26PPG()
-                    backfillVersion18Motion()
-                }
+                initializeDatabase(
+                    runBackgroundDecoding: runBackgroundDecoding,
+                    permitsRetry: true
+                )
             }
         }
     }
@@ -95,6 +105,21 @@ final class WhoopStore: Sendable {
         func ingestionTransactionCountForTesting() -> Int {
             if sqlite.isOnQueue { return sqlite.ingestionTransactionCount }
             return queue.sync { sqlite.ingestionTransactionCount }
+        }
+
+        func storageStateForTesting() -> WhoopStorageState {
+            if sqlite.isOnQueue { return sqlite.storageState }
+            return queue.sync { sqlite.storageState }
+        }
+
+        func blockWriterForTesting(
+            started: DispatchSemaphore,
+            release: DispatchSemaphore
+        ) {
+            queue.async {
+                started.signal()
+                _ = release.wait(timeout: .now() + 5)
+            }
         }
     #endif
 
@@ -140,7 +165,8 @@ final class WhoopStore: Sendable {
             completion(
                 WhoopPacketPersistenceResult(
                     success: result.success,
-                    deliverySequence: result.deliverySequences.first
+                    deliverySequence: result.deliverySequences.first,
+                    failure: result.failure
                 ))
         }
     }
@@ -172,11 +198,22 @@ final class WhoopStore: Sendable {
     func beginHistoricalOffload(
         peripheralID: UUID,
         startedAt: Date = .now,
-        completion: @escaping @Sendable (String?) -> Void
+        completion: @escaping @Sendable (Result<String, WhoopStorageFailure>) -> Void
     ) {
         queue.async { [self] in
             guard let database else {
-                completion(nil)
+                completion(
+                    .failure(
+                        .unavailable(
+                            operation: .historicalOffload,
+                            detail: "database connection is unavailable"
+                        )
+                    )
+                )
+                return
+            }
+            if let injected = faultInjector.failure(for: .historicalOffload) {
+                completion(.failure(injected))
                 return
             }
             let sessionID = UUID().uuidString
@@ -189,15 +226,35 @@ final class WhoopStore: Sendable {
             guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
                 let statement
             else {
-                completion(nil)
+                completion(
+                    .failure(
+                        .sqlite(
+                            operation: .historicalOffload,
+                            database: database,
+                            resultCode: sqlite3_errcode(database)
+                        )
+                    )
+                )
                 return
             }
             bind(sessionID, to: 1, in: statement)
             bind(peripheralID.uuidString, to: 2, in: statement)
             sqlite3_bind_double(statement, 3, startedAt.timeIntervalSince1970)
-            let succeeded = sqlite3_step(statement) == SQLITE_DONE
+            let result = sqlite3_step(statement)
             sqlite3_finalize(statement)
-            completion(succeeded ? sessionID : nil)
+            if result == SQLITE_DONE {
+                completion(.success(sessionID))
+            } else {
+                completion(
+                    .failure(
+                        .sqlite(
+                            operation: .historicalOffload,
+                            database: database,
+                            resultCode: result
+                        )
+                    )
+                )
+            }
         }
     }
 
@@ -238,14 +295,12 @@ final class WhoopStore: Sendable {
     func loadDashboardHistory(
         completion: @escaping @Sendable (Result<DashboardHistorySnapshot, Error>) -> Void
     ) {
-        queue.async { [self] in
-            do {
-                let snapshot = try withTransaction(.deferred) { [dashboardRepository] database in
-                    try dashboardRepository.loadSnapshot(database: database)
-                }
-                completion(.success(snapshot))
-            } catch {
-                completion(.failure(error))
+        readiness.whenResolved { [dashboardReader] result in
+            switch result {
+            case .success(let url):
+                dashboardReader.loadSnapshot(at: url, completion: completion)
+            case .failure(let failure):
+                completion(.failure(failure))
             }
         }
     }
@@ -253,15 +308,12 @@ final class WhoopStore: Sendable {
     func loadDailyStepRecords(
         completion: @escaping @Sendable (Result<[DailyStepRecord], Error>) -> Void
     ) {
-        queue.async { [self] in
-            guard let database else {
-                completion(.failure(DashboardRepository.QueryError.databaseUnavailable))
-                return
-            }
-            do {
-                completion(.success(try dashboardRepository.loadDailyStepRecords(database: database)))
-            } catch {
-                completion(.failure(error))
+        readiness.whenResolved { [dashboardReader] result in
+            switch result {
+            case .success(let url):
+                dashboardReader.loadStepRecords(at: url, completion: completion)
+            case .failure(let failure):
+                completion(.failure(failure))
             }
         }
     }
@@ -269,15 +321,12 @@ final class WhoopStore: Sendable {
     func loadDailyRecoveryRecords(
         completion: @escaping @Sendable (Result<[DailyRecoveryRecord], Error>) -> Void
     ) {
-        queue.async { [self] in
-            guard let database else {
-                completion(.failure(DashboardRepository.QueryError.databaseUnavailable))
-                return
-            }
-            do {
-                completion(.success(try dashboardRepository.loadDailyRecoveryRecords(database: database)))
-            } catch {
-                completion(.failure(error))
+        readiness.whenResolved { [dashboardReader] result in
+            switch result {
+            case .success(let url):
+                dashboardReader.loadRecoveryRecords(at: url, completion: completion)
+            case .failure(let failure):
+                completion(.failure(failure))
             }
         }
     }
@@ -331,88 +380,189 @@ final class WhoopStore: Sendable {
         return directory
     }
 
-    private func openDatabase() {
-        let url: URL
-        if let databaseURLOverride {
-            url = databaseURLOverride
-            try? FileManager.default.createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true
+    private func initializeDatabase(
+        runBackgroundDecoding: Bool,
+        permitsRetry: Bool,
+        attempt: Int = 0
+    ) {
+        sqlite.storageState = .opening
+        switch openDatabase() {
+        case .success(let url):
+            sqlite.storageState = .ready
+            readiness.resolve(.success(url))
+            if databaseURLOverride == nil {
+                queue.asyncAfter(deadline: .now() + 2) { [self] in
+                    performDeferredMaintenance(runBackgroundDecoding: runBackgroundDecoding)
+                }
+            } else {
+                performDeferredMaintenance(runBackgroundDecoding: runBackgroundDecoding)
+            }
+        case .failure(let failure):
+            guard permitsRetry,
+                failure.isTransient,
+                attempt + 1 < WhoopStorageRetryPolicy.maximumAttempts
+            else {
+                sqlite.storageState = .failed(failure)
+                readiness.resolve(.failure(failure))
+                Self.logger.fault("Storage initialization failed: \(failure.localizedDescription, privacy: .public)")
+                return
+            }
+            let nextAttempt = attempt + 1
+            sqlite.storageState = .retrying(attempt: nextAttempt, failure: failure)
+            let delay = WhoopStorageRetryPolicy.delaySeconds(forAttempt: attempt)
+            Self.logger.notice(
+                "Retrying storage initialization attempt \(nextAttempt + 1) in \(delay, privacy: .public) seconds"
             )
-        } else {
-            guard let directory = Self.databaseDirectory() else { return }
-            url = directory.appendingPathComponent("sleep.sqlite3")
+            queue.asyncAfter(deadline: .now() + delay) { [self] in
+                initializeDatabase(
+                    runBackgroundDecoding: runBackgroundDecoding,
+                    permitsRetry: permitsRetry,
+                    attempt: nextAttempt
+                )
+            }
         }
-        guard
-            sqlite3_open_v2(
-                url.path,
-                &database,
-                SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
-                nil
-            ) == SQLITE_OK
-        else {
+    }
+
+    private func performDeferredMaintenance(runBackgroundDecoding: Bool) {
+        guard database != nil else { return }
+        _ = execute("PRAGMA optimize")
+        backfillHistoricalSamplesIfNeeded()
+        if databaseURLOverride == nil {
+            importBundledHistory()
+            importBundledOfficialMetrics()
+            backfillLocalSleepScoresIfNeeded()
+            rebuildWakeAnchoredStepDaysIfNeeded()
+            rebuildRecoveryMetricsIfNeeded()
+        }
+        if runBackgroundDecoding {
+            backfillVersion26PPG()
+            backfillVersion18Motion()
+        }
+    }
+
+    private func openDatabase() -> Result<URL, WhoopStorageFailure> {
+        let signpost = WhoopRuntimeDiagnostics.signposter.beginInterval("StorageOpen")
+        defer {
+            WhoopRuntimeDiagnostics.signposter.endInterval("StorageOpen", signpost)
+        }
+        guard let url = databaseURL else {
+            return .failure(
+                .unavailable(operation: .open, detail: "Application Support is unavailable")
+            )
+        }
+        if let injected = faultInjector.failure(for: .open) {
+            return .failure(injected)
+        }
+        if databaseURLOverride != nil {
+            do {
+                try FileManager.default.createDirectory(
+                    at: url.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+            } catch {
+                return .failure(
+                    .unavailable(operation: .open, detail: error.localizedDescription)
+                )
+            }
+        }
+        let openResult = sqlite3_open_v2(
+            url.path,
+            &database,
+            SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
+            nil
+        )
+        guard openResult == SQLITE_OK else {
+            let failure = WhoopStorageFailure.sqlite(
+                operation: .open,
+                database: database,
+                resultCode: openResult
+            )
             if let database { sqlite3_close(database) }
             database = nil
-            return
+            return .failure(failure)
         }
         // Install the busy handler before changing journal mode. A prior
         // connection can have released its last Swift reference while SQLite
         // is still finishing WAL cleanup; without an early timeout, an
         // immediate reopen fails `PRAGMA journal_mode=WAL` with SQLITE_BUSY and
         // leaves the store permanently unavailable.
-        guard let openedDatabase = database,
-            sqlite3_busy_timeout(openedDatabase, 5_000) == SQLITE_OK
-        else {
+        guard let openedDatabase = database else {
+            return .failure(
+                .unavailable(operation: .open, detail: "SQLite returned no connection")
+            )
+        }
+        sqlite3_extended_result_codes(openedDatabase, 1)
+        let busyResult = sqlite3_busy_timeout(openedDatabase, 5_000)
+        guard busyResult == SQLITE_OK else {
+            let failure = WhoopStorageFailure.sqlite(
+                operation: .configure,
+                database: openedDatabase,
+                resultCode: busyResult
+            )
             if let database { sqlite3_close_v2(database) }
             database = nil
-            return
+            return .failure(failure)
         }
         try? FileManager.default.setAttributes(
             [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
             ofItemAtPath: url.path
         )
-        let configured =
-            execute("PRAGMA journal_mode=WAL")
-            && execute("PRAGMA foreign_keys=ON")
-            && execute("PRAGMA wal_autocheckpoint=1000")
-            && execute("PRAGMA journal_size_limit=8388608")
-        guard configured else {
+        if let injected = faultInjector.failure(for: .configure) {
             if let database { sqlite3_close(database) }
             database = nil
-            return
+            return .failure(injected)
+        }
+        for statement in [
+            "PRAGMA journal_mode=WAL",
+            "PRAGMA synchronous=FULL",
+            "PRAGMA foreign_keys=ON",
+            "PRAGMA wal_autocheckpoint=1000",
+            "PRAGMA journal_size_limit=8388608",
+        ] {
+            let result = sqlite3_exec(openedDatabase, statement, nil, nil, nil)
+            guard result == SQLITE_OK else {
+                let failure = WhoopStorageFailure.sqlite(
+                    operation: .configure,
+                    database: openedDatabase,
+                    resultCode: result
+                )
+                sqlite3_close_v2(openedDatabase)
+                database = nil
+                return .failure(failure)
+            }
         }
         let versionBeforeMigration = try? scalarInt(openedDatabase, sql: "PRAGMA user_version")
+        if let injected = faultInjector.failure(for: .migrate) {
+            sqlite3_close_v2(openedDatabase)
+            database = nil
+            return .failure(injected)
+        }
         guard
             createPreMigrationSnapshotIfNeeded(databaseURL: url),
             migrateSchema()
         else {
+            let failure = WhoopStorageFailure.sqlite(
+                operation: .migrate,
+                database: openedDatabase,
+                resultCode: sqlite3_errcode(openedDatabase)
+            )
             if let database { sqlite3_close(database) }
             database = nil
-            return
+            return .failure(failure)
         }
         if let versionBeforeMigration,
             versionBeforeMigration > 0,
-            versionBeforeMigration < Self.schemaVersion
+            versionBeforeMigration < targetSchemaVersion
         {
             let retainedSnapshot = Self.migrationSnapshotURL(
                 databaseURL: url,
                 sourceVersion: versionBeforeMigration,
-                targetVersion: Int64(Self.schemaVersion)
+                targetVersion: Int64(targetSchemaVersion)
             )
             Self.pruneMigrationBackups(
                 in: retainedSnapshot.deletingLastPathComponent(),
                 keeping: retainedSnapshot
             )
-            // Dropping the dense decode ledger and rebuilding the realtime
-            // projection releases hundreds of megabytes in a phone-sized
-            // store. VACUUM is atomic and runs off the main actor; if the
-            // device cannot provide temporary space, the migrated database
-            // remains valid and will reuse its freelist for future packets.
-            if !execute("VACUUM") {
-                Self.logger.notice(
-                    "Storage compaction completed without reclaiming filesystem space"
-                )
-            }
         }
         nextDeliverySequence =
             ((try? scalarInt(
@@ -428,21 +578,13 @@ final class WhoopStore: Sendable {
                     """)) ?? 0) + 1
         abandonInterruptedOffloads()
         recordTimeZoneObservation()
-        _ = execute("PRAGMA optimize")
-        backfillHistoricalSamplesIfNeeded()
-        if databaseURLOverride == nil {
-            importBundledHistory()
-            importBundledOfficialMetrics()
-            backfillLocalSleepScoresIfNeeded()
-            rebuildWakeAnchoredStepDaysIfNeeded()
-            rebuildRecoveryMetricsIfNeeded()
-        }
         // Injected database URLs are short-lived test fixtures. Avoid starting
         // an asynchronous census that could outlive a fixture directory.
         if databaseURLOverride == nil {
             storageTelemetry = WhoopStorageTelemetry(databaseURL: url, ownerQueue: queue)
             storageTelemetry?.captureIfDue()
         }
+        return .success(url)
     }
 
     /// Creates a standalone, WAL-free snapshot before any non-empty schema
@@ -453,13 +595,13 @@ final class WhoopStore: Sendable {
         guard let database,
             let current = try? scalarInt(database, sql: "PRAGMA user_version"),
             current > 0,
-            current < Self.schemaVersion
+            current < targetSchemaVersion
         else { return true }
 
         let snapshotURL = Self.migrationSnapshotURL(
             databaseURL: databaseURL,
             sourceVersion: current,
-            targetVersion: Int64(Self.schemaVersion)
+            targetVersion: Int64(targetSchemaVersion)
         )
         let directory = snapshotURL.deletingLastPathComponent()
         let fileManager = FileManager.default
@@ -609,10 +751,10 @@ final class WhoopStore: Sendable {
     private func migrateSchema() -> Bool {
         guard let database,
             let current = try? scalarInt(database, sql: "PRAGMA user_version"),
-            current <= Self.schemaVersion
+            current <= targetSchemaVersion
         else { return false }
-        guard current < Self.schemaVersion else { return true }
-        for version in (Int(current) + 1)...Self.schemaVersion {
+        guard current < targetSchemaVersion else { return true }
+        for version in (Int(current) + 1)...targetSchemaVersion {
             do {
                 try withTransaction(.immediate) { database in
                     guard applyMigration(version), execute("PRAGMA user_version = \(version)") else {
@@ -1614,21 +1756,6 @@ final class WhoopStore: Sendable {
         }
     }
 
-    private func withStatement<Value>(
-        database: OpaquePointer,
-        sql: String,
-        _ operation: (OpaquePointer) throws -> Value
-    ) throws -> Value {
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-            let statement
-        else {
-            throw StoreError.queryFailed(errorMessage(database))
-        }
-        defer { sqlite3_finalize(statement) }
-        return try operation(statement)
-    }
-
     /// Cached statements are always returned to a reset, binding-free state,
     /// including when a caller exits while a SELECT is positioned on a row.
     private func withCachedStatement<Value>(
@@ -1668,15 +1795,51 @@ final class WhoopStore: Sendable {
         _ envelopes: [WhoopPacketEnvelope],
         queueWaitNanoseconds: UInt64
     ) -> WhoopPacketBatchPersistenceResult {
+        let signpost = WhoopRuntimeDiagnostics.signposter.beginInterval("PacketBatchCommit")
+        defer {
+            WhoopRuntimeDiagnostics.signposter.endInterval("PacketBatchCommit", signpost)
+        }
         let telemetryStartedAt = DispatchTime.now().uptimeNanoseconds
-        guard let database, execute("BEGIN IMMEDIATE") else {
+        guard let database else {
             recordBatchTelemetry(
                 envelopes: envelopes,
                 outcomes: Array(repeating: .failed, count: envelopes.count),
                 transactionNanoseconds: DispatchTime.now().uptimeNanoseconds - telemetryStartedAt,
                 queueWaitNanoseconds: queueWaitNanoseconds
             )
-            return WhoopPacketBatchPersistenceResult(success: false, deliverySequences: [])
+            return WhoopPacketBatchPersistenceResult(
+                success: false,
+                deliverySequences: [],
+                failure: .unavailable(
+                    operation: .beginTransaction,
+                    detail: "database connection is unavailable"
+                )
+            )
+        }
+        if let injected = faultInjector.failure(for: .beginTransaction) {
+            return WhoopPacketBatchPersistenceResult(
+                success: false,
+                deliverySequences: [],
+                failure: injected
+            )
+        }
+        let beginResult = sqlite3_exec(database, "BEGIN IMMEDIATE", nil, nil, nil)
+        guard beginResult == SQLITE_OK else {
+            recordBatchTelemetry(
+                envelopes: envelopes,
+                outcomes: Array(repeating: .failed, count: envelopes.count),
+                transactionNanoseconds: DispatchTime.now().uptimeNanoseconds - telemetryStartedAt,
+                queueWaitNanoseconds: queueWaitNanoseconds
+            )
+            return WhoopPacketBatchPersistenceResult(
+                success: false,
+                deliverySequences: [],
+                failure: .sqlite(
+                    operation: .beginTransaction,
+                    database: database,
+                    resultCode: beginResult
+                )
+            )
         }
         #if DEBUG
             sqlite.ingestionTransactionCount += 1
@@ -1689,6 +1852,22 @@ final class WhoopStore: Sendable {
         var materializedStepDays: Set<String> = []
 
         for envelope in envelopes {
+            if let injected = faultInjector.failure(for: .insert) {
+                _ = execute("ROLLBACK")
+                pendingStepDateKeys = pendingStepDaysBeforeTransaction
+                recordBatchTelemetry(
+                    envelopes: envelopes,
+                    outcomes: Array(repeating: .failed, count: envelopes.count),
+                    transactionNanoseconds:
+                        DispatchTime.now().uptimeNanoseconds - telemetryStartedAt,
+                    queueWaitNanoseconds: queueWaitNanoseconds
+                )
+                return WhoopPacketBatchPersistenceResult(
+                    success: false,
+                    deliverySequences: [],
+                    failure: injected
+                )
+            }
             guard
                 let insertion = insertInOpenTransaction(
                     envelope,
@@ -1704,13 +1883,31 @@ final class WhoopStore: Sendable {
                         DispatchTime.now().uptimeNanoseconds - telemetryStartedAt,
                     queueWaitNanoseconds: queueWaitNanoseconds
                 )
-                return WhoopPacketBatchPersistenceResult(success: false, deliverySequences: [])
+                return WhoopPacketBatchPersistenceResult(
+                    success: false,
+                    deliverySequences: [],
+                    failure: .sqlite(
+                        operation: .insert,
+                        database: database,
+                        resultCode: sqlite3_errcode(database)
+                    )
+                )
             }
             outcomes.append(insertion.outcome)
             deliverySequences.append(insertion.deliverySequence)
             materializedStepDays.formUnion(insertion.materializedStepDays)
         }
-        guard execute("COMMIT") else {
+        if let injected = faultInjector.failure(for: .commit) {
+            _ = execute("ROLLBACK")
+            pendingStepDateKeys = pendingStepDaysBeforeTransaction
+            return WhoopPacketBatchPersistenceResult(
+                success: false,
+                deliverySequences: [],
+                failure: injected
+            )
+        }
+        let commitResult = sqlite3_exec(database, "COMMIT", nil, nil, nil)
+        guard commitResult == SQLITE_OK else {
             _ = execute("ROLLBACK")
             pendingStepDateKeys = pendingStepDaysBeforeTransaction
             recordBatchTelemetry(
@@ -1719,7 +1916,15 @@ final class WhoopStore: Sendable {
                 transactionNanoseconds: DispatchTime.now().uptimeNanoseconds - telemetryStartedAt,
                 queueWaitNanoseconds: queueWaitNanoseconds
             )
-            return WhoopPacketBatchPersistenceResult(success: false, deliverySequences: [])
+            return WhoopPacketBatchPersistenceResult(
+                success: false,
+                deliverySequences: [],
+                failure: .sqlite(
+                    operation: .commit,
+                    database: database,
+                    resultCode: commitResult
+                )
+            )
         }
         let telemetryFinishedAt = DispatchTime.now().uptimeNanoseconds
         finishCommittedStepMaterialization(materializedStepDays)
@@ -3289,13 +3494,6 @@ final class WhoopStore: Sendable {
                 finalizedRecord: newest
             )
         }
-    }
-
-    func sleepDiagnostics(
-        now: Date = .now,
-        completion: @escaping @Sendable (WhoopSleepDiagnostics) -> Void
-    ) {
-        queue.async { [self] in completion(buildSleepDiagnostics(now: now)) }
     }
 
     func completedOffloadCoversLatestHistoryForTesting() -> Bool {

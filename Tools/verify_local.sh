@@ -18,7 +18,7 @@ trap cleanup EXIT
 
 cd "$repo_dir"
 
-required_commands=(actionlint gitleaks jq shellcheck uv xcodebuild xcodegen)
+required_commands=(actionlint gitleaks jq shellcheck swiftlint uv xcodebuild xcodegen)
 for command_name in "${required_commands[@]}"; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     echo "Missing required tool: $command_name. Run: brew bundle --file Brewfile" >&2
@@ -125,13 +125,24 @@ echo "WHOOP.app coverage: ${coverage}% (minimum ${minimum_coverage}%)."
 uv run --frozen python Tools/check_critical_coverage.py "$result_bundle_path"
 
 echo "Building Release for iOS Simulator..."
-xcodebuild build -quiet \
+release_build_log="$derived_data_path/release-build.log"
+if ! xcodebuild clean build \
   -project Sleep.xcodeproj \
   -scheme Sleep \
   -configuration Release \
   -destination 'generic/platform=iOS Simulator' \
   -derivedDataPath "$derived_data_path" \
-  CODE_SIGNING_ALLOWED=NO
+  CODE_SIGNING_ALLOWED=NO >"$release_build_log"; then
+  tail -n 200 "$release_build_log" >&2
+  exit 1
+fi
+
+echo "Checking production source for unused declarations..."
+swiftlint analyze \
+  --strict \
+  --config .swiftlint.yml \
+  --baseline Tools/swiftlint-baseline.json \
+  --compiler-log-path "$release_build_log"
 
 echo "Running Xcode static analysis..."
 xcodebuild analyze -quiet \

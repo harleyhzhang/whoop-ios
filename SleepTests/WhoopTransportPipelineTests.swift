@@ -379,12 +379,13 @@ final class WhoopTransportPipelineTests: XCTestCase {
     }
 
     private func beginOffload(store: WhoopStore, peripheralID: UUID) async throws -> String {
-        let sessionID: String? = await withCheckedContinuation { continuation in
+        let result: Result<String, WhoopStorageFailure> = await withCheckedContinuation {
+            continuation in
             store.beginHistoricalOffload(peripheralID: peripheralID) {
                 continuation.resume(returning: $0)
             }
         }
-        return try XCTUnwrap(sessionID)
+        return try result.get()
     }
 
     private func appendBatch(

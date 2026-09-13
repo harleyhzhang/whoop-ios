@@ -1,9 +1,16 @@
 import Foundation
+import SQLite3
 
 struct WhoopTransportUISnapshot: Sendable {
     let heartRate: Int?
     let heartRateReceivedAt: Date?
     let batteryObservation: BatteryObservation?
+}
+
+struct WhoopTransportPressureSnapshot: Equatable, Sendable {
+    let isBackpressured: Bool
+    let queuedEnvelopeCount: Int
+    let capacity: Int
 }
 
 struct WhoopTransportMetadataEvent: Sendable {
@@ -85,15 +92,22 @@ final class WhoopTransportPipeline: @unchecked Sendable {
         qos: .userInitiated
     )
     private let queueSpecificKey = DispatchSpecificKey<Void>()
-    private let store: WhoopStore
+    static let defaultMaximumQueuedEnvelopeCount = 4_096
+    static let defaultPersistenceRetryLimit = 3
+
+    private let store: any WhoopPacketPersisting
     private let idleFlushDelay: TimeInterval
     private let uiSnapshotInterval: TimeInterval
+    private let maximumQueuedEnvelopeCount: Int
+    private let persistenceRetryLimit: Int
+    private let persistenceRetryDelay: @Sendable (Int) -> TimeInterval
     private let didPublishUI: @Sendable (WhoopTransportUISnapshot) -> Void
     private let didPersist:
         @Sendable (
             WhoopPacketBatchPersistenceResult,
             WhoopTransportBatchSummary
         ) -> Void
+    private let didChangePressure: @Sendable (WhoopTransportPressureSnapshot) -> Void
     private var batcher: WhoopPacketBatcher
     private var proprietaryPacketCount = 0
     private var lastCompletedOffloadSessionID: String?
@@ -101,8 +115,11 @@ final class WhoopTransportPipeline: @unchecked Sendable {
     private var uiPublishGeneration: UInt64 = 0
     private var inFlightBatchCount = 0
     private var pendingPersistenceBatches: [[WhoopPacketEnvelope]] = []
+    private var pendingPersistenceHead = 0
+    private var queuedEnvelopeCount = 0
     private var persistenceIsActive = false
     private var failedHistorySessionID: String?
+    private var lastPressureState = false
     private var drainWaiters: [@Sendable () -> Void] = []
     private var lastUISnapshotAt: Date?
     private var pendingUI = PendingUI()
@@ -110,8 +127,13 @@ final class WhoopTransportPipeline: @unchecked Sendable {
     private var latestBatteryStatus = BatteryStatus.unavailable
 
     init(
-        store: WhoopStore,
+        store: any WhoopPacketPersisting,
         maximumBatchSize: Int = WhoopPacketBatcher.defaultMaximumBatchSize,
+        maximumQueuedEnvelopeCount: Int = defaultMaximumQueuedEnvelopeCount,
+        persistenceRetryLimit: Int = defaultPersistenceRetryLimit,
+        persistenceRetryDelay: @escaping @Sendable (Int) -> TimeInterval = {
+            WhoopStorageRetryPolicy.delaySeconds(forAttempt: $0)
+        },
         idleFlushDelay: TimeInterval = defaultIdleFlushDelay,
         uiSnapshotInterval: TimeInterval = defaultUISnapshotInterval,
         didPublishUI: @escaping @Sendable (WhoopTransportUISnapshot) -> Void,
@@ -119,14 +141,19 @@ final class WhoopTransportPipeline: @unchecked Sendable {
             @escaping @Sendable (
                 WhoopPacketBatchPersistenceResult,
                 WhoopTransportBatchSummary
-            ) -> Void
+            ) -> Void,
+        didChangePressure: @escaping @Sendable (WhoopTransportPressureSnapshot) -> Void = { _ in }
     ) {
         self.store = store
         self.batcher = WhoopPacketBatcher(maximumBatchSize: maximumBatchSize)
         self.idleFlushDelay = idleFlushDelay
         self.uiSnapshotInterval = uiSnapshotInterval
+        self.maximumQueuedEnvelopeCount = max(maximumBatchSize, maximumQueuedEnvelopeCount)
+        self.persistenceRetryLimit = max(0, persistenceRetryLimit)
+        self.persistenceRetryDelay = persistenceRetryDelay
         self.didPublishUI = didPublishUI
         self.didPersist = didPersist
+        self.didChangePressure = didChangePressure
         queue.setSpecific(key: queueSpecificKey, value: ())
     }
 
@@ -260,16 +287,45 @@ final class WhoopTransportPipeline: @unchecked Sendable {
 
     private func persist(_ batch: [WhoopPacketEnvelope]) {
         requireQueue()
+        guard queuedEnvelopeCount + batch.count <= maximumQueuedEnvelopeCount else {
+            let summary = WhoopTransportBatchSummary(envelopes: batch)
+            if let sessionID = summary.offloadSessionID {
+                failedHistorySessionID = sessionID
+            }
+            let failure = WhoopStorageFailure(
+                operation: .insert,
+                kind: .full,
+                primaryCode: SQLITE_FULL,
+                extendedCode: SQLITE_FULL,
+                detail: "transport persistence buffer reached \(maximumQueuedEnvelopeCount) envelopes"
+            )
+            didPersist(
+                WhoopPacketBatchPersistenceResult(
+                    success: false,
+                    deliverySequences: [],
+                    failure: failure
+                ),
+                summary
+            )
+            publishPressure(isBackpressured: true)
+            return
+        }
         pendingPersistenceBatches.append(batch)
+        queuedEnvelopeCount += batch.count
         inFlightBatchCount += 1
+        publishPressure(isBackpressured: queuedEnvelopeCount >= maximumQueuedEnvelopeCount)
         startNextPersistenceBatchIfNeeded()
     }
 
     private func startNextPersistenceBatchIfNeeded() {
         requireQueue()
-        guard !persistenceIsActive, !pendingPersistenceBatches.isEmpty else { return }
+        guard !persistenceIsActive, pendingPersistenceHead < pendingPersistenceBatches.count else {
+            return
+        }
         persistenceIsActive = true
-        let batch = pendingPersistenceBatches.removeFirst()
+        let batch = pendingPersistenceBatches[pendingPersistenceHead]
+        pendingPersistenceHead += 1
+        compactPendingPersistenceStorageIfNeeded()
         let summary = WhoopTransportBatchSummary(envelopes: batch)
         if summary.metadataEvents.contains(where: { $0.type == .historyStart }) {
             failedHistorySessionID = nil
@@ -287,9 +343,45 @@ final class WhoopTransportPipeline: @unchecked Sendable {
             endsLogicalHistoryBoundary && boundaryHasPriorFailure
             ? batch.map { $0.replacingOffloadSessionID(nil) }
             : batch
+        submitPersistence(
+            persistenceBatch,
+            originalEnvelopeCount: batch.count,
+            summary: summary,
+            endsLogicalHistoryBoundary: endsLogicalHistoryBoundary,
+            boundaryHasPriorFailure: boundaryHasPriorFailure,
+            retryAttempt: 0
+        )
+    }
+
+    private func submitPersistence(
+        _ persistenceBatch: [WhoopPacketEnvelope],
+        originalEnvelopeCount: Int,
+        summary: WhoopTransportBatchSummary,
+        endsLogicalHistoryBoundary: Bool,
+        boundaryHasPriorFailure: Bool,
+        retryAttempt: Int
+    ) {
         store.appendBatch(persistenceBatch) { [weak self] result in
             guard let self else { return }
             self.queue.async { [self] in
+                if let failure = result.failure,
+                    failure.isTransient,
+                    retryAttempt < persistenceRetryLimit
+                {
+                    let nextAttempt = retryAttempt + 1
+                    let delay = persistenceRetryDelay(retryAttempt)
+                    queue.asyncAfter(deadline: .now() + delay) { [self] in
+                        submitPersistence(
+                            persistenceBatch,
+                            originalEnvelopeCount: originalEnvelopeCount,
+                            summary: summary,
+                            endsLogicalHistoryBoundary: endsLogicalHistoryBoundary,
+                            boundaryHasPriorFailure: boundaryHasPriorFailure,
+                            retryAttempt: nextAttempt
+                        )
+                    }
+                    return
+                }
                 if !result.success, let offloadSessionID = summary.offloadSessionID {
                     failedHistorySessionID = offloadSessionID
                 }
@@ -301,7 +393,8 @@ final class WhoopTransportPipeline: @unchecked Sendable {
                     ? result
                     : WhoopPacketBatchPersistenceResult(
                         success: false,
-                        deliverySequences: []
+                        deliverySequences: [],
+                        failure: result.failure
                     )
                 if endsLogicalHistoryBoundary {
                     if !boundaryIsDurable,
@@ -315,7 +408,9 @@ final class WhoopTransportPipeline: @unchecked Sendable {
                 }
                 didPersist(publishedResult, summary)
                 inFlightBatchCount -= 1
+                queuedEnvelopeCount -= originalEnvelopeCount
                 persistenceIsActive = false
+                publishPressure(isBackpressured: false)
                 startNextPersistenceBatchIfNeeded()
                 guard inFlightBatchCount == 0, !drainWaiters.isEmpty else { return }
                 let waiters = drainWaiters
@@ -323,6 +418,26 @@ final class WhoopTransportPipeline: @unchecked Sendable {
                 for waiter in waiters { waiter() }
             }
         }
+    }
+
+    private func compactPendingPersistenceStorageIfNeeded() {
+        guard pendingPersistenceHead > 32,
+            pendingPersistenceHead * 2 >= pendingPersistenceBatches.count
+        else { return }
+        pendingPersistenceBatches.removeFirst(pendingPersistenceHead)
+        pendingPersistenceHead = 0
+    }
+
+    private func publishPressure(isBackpressured: Bool) {
+        guard isBackpressured != lastPressureState else { return }
+        lastPressureState = isBackpressured
+        didChangePressure(
+            WhoopTransportPressureSnapshot(
+                isBackpressured: isBackpressured,
+                queuedEnvelopeCount: queuedEnvelopeCount,
+                capacity: maximumQueuedEnvelopeCount
+            )
+        )
     }
 
     private func publishHeartRate(_ realtime: WhoopDecodedRealtime?, deliveredAt: Date) {

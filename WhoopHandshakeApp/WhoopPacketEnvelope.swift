@@ -124,17 +124,10 @@ struct WhoopPacketEnvelope: Sendable {
             frameType == .wristState,
             integrityIsValid
         else { return nil }
-        let timestamp =
-            UInt32(bytes[12])
-            | (UInt32(bytes[13]) << 8)
-            | (UInt32(bytes[14]) << 16)
-            | (UInt32(bytes[15]) << 24)
-        let eventDate = Date(timeIntervalSince1970: TimeInterval(timestamp))
-        guard abs(deliveredAt.timeIntervalSince(eventDate)) <= freshnessWindow else { return nil }
-        switch bytes[10] {
-        case 9: return true
-        case 10: return false
-        default: return nil
-        }
+        return WhoopBluetoothPolicy.freshWristState(
+            bytes: bytes,
+            receivedAt: deliveredAt,
+            freshnessWindow: freshnessWindow
+        )
     }
 }
