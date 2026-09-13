@@ -22,6 +22,13 @@ generation instead of exposing independently changing history families. Data
 contracts remain in `SleepModels.swift`, while scoring features and model
 bundles live in `ScoreModels.swift`.
 
+SwiftUI owns presentation-time invalidation: the dashboard's current-day
+reference comes from a periodic `TimelineView`, and diagnostic connection age
+uses `Text(date, style: .relative)`. `HealthHistoryModel`,
+`DashboardChartState`, and the probe's six view-facing state values use iOS 17
+Observation; Bluetooth, persistence, and task internals are explicitly excluded
+from observation tracking.
+
 `Tools/model_features.json` is the single semantic feature-order manifest.
 `Tools/generate_model_features.py` deterministically emits the Swift and Python
 contracts plus one synthetic cross-language golden vector; the merge gate

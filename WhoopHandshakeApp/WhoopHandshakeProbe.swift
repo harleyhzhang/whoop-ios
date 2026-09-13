@@ -1,6 +1,7 @@
 @preconcurrency import CoreBluetooth
 import Foundation
 import OSLog
+import Observation
 
 enum WhoopReconnectPolicy {
     static func delaySeconds(forAttempt attempt: Int) -> Double {
@@ -10,15 +11,16 @@ enum WhoopReconnectPolicy {
 }
 
 @MainActor
-final class WhoopHandshakeProbe: NSObject, ObservableObject {
-    @Published private(set) var deviceName = "—"
-    @Published private(set) var handshakePhase = HandshakePhase.waitingForDevice
-    @Published private(set) var batteryLevel: Int?
-    @Published private(set) var batteryStatus = BatteryStatus.unavailable
-    @Published private(set) var isSleeping = false
-    @Published private(set) var lastConnectedAt: Date?
-    private var lastHeartRateReceivedAt: Date?
-    private var canAttemptHandshake = false
+@Observable
+final class WhoopHandshakeProbe: NSObject {
+    private(set) var deviceName = "—"
+    private(set) var handshakePhase = HandshakePhase.waitingForDevice
+    private(set) var batteryLevel: Int?
+    private(set) var batteryStatus = BatteryStatus.unavailable
+    private(set) var isSleeping = false
+    private(set) var lastConnectedAt: Date?
+    @ObservationIgnored private var lastHeartRateReceivedAt: Date?
+    @ObservationIgnored private var canAttemptHandshake = false
 
     var handshakeState: String { handshakePhase.displayText }
     var isCharging: Bool { batteryStatus.isCharging }
@@ -75,38 +77,38 @@ final class WhoopHandshakeProbe: NSObject, ObservableObject {
         }
     }
 
-    private lazy var central = CBCentralManager(
+    @ObservationIgnored private lazy var central = CBCentralManager(
         delegate: self,
         queue: .main,
         options: [CBCentralManagerOptionRestoreIdentifierKey: "com.clintonst.sleep.whoop-central"]
     )
-    private var peripheral: CBPeripheral?
-    private var commandCharacteristic: CBCharacteristic?
-    private var heartRateCharacteristic: CBCharacteristic?
-    private var batteryPowerStateCharacteristic: CBCharacteristic?
-    private var batteryLevelStatusCharacteristic: CBCharacteristic?
-    private var lastObservedWristState: Bool?
-    private var notifyCharacteristics: [CBCharacteristic] = []
-    private var helloOutstanding = false
-    private var helloAttemptID: UUID?
-    private var commandSequence: UInt8 = 1
-    private var lastTelemetryCacheWriteAt: Date?
-    private var realtimeKeepaliveTask: Task<Void, Never>?
-    private var historicalRefreshTask: Task<Void, Never>?
-    private var historicalWatchdogTask: Task<Void, Never>?
-    private var handshakeTask: Task<Void, Never>?
-    private var connectionRetryTask: Task<Void, Never>?
-    private var reconnectAttempt = 0
-    private var historicalSyncActive = false
-    private var historicalSessionID: String?
-    private var lastHistoricalProgressAt: Date?
-    private var newestHistoricalSampleAtInSync: Date?
-    private var lastAcknowledgedHistoricalEndData: [UInt8]?
-    private var lastHistoricalAcknowledgementAt: Date?
-    private var lastSleepAnalysisAt: Date?
-    private var lastFinalizedSleepID: String?
+    @ObservationIgnored private var peripheral: CBPeripheral?
+    @ObservationIgnored private var commandCharacteristic: CBCharacteristic?
+    @ObservationIgnored private var heartRateCharacteristic: CBCharacteristic?
+    @ObservationIgnored private var batteryPowerStateCharacteristic: CBCharacteristic?
+    @ObservationIgnored private var batteryLevelStatusCharacteristic: CBCharacteristic?
+    @ObservationIgnored private var lastObservedWristState: Bool?
+    @ObservationIgnored private var notifyCharacteristics: [CBCharacteristic] = []
+    @ObservationIgnored private var helloOutstanding = false
+    @ObservationIgnored private var helloAttemptID: UUID?
+    @ObservationIgnored private var commandSequence: UInt8 = 1
+    @ObservationIgnored private var lastTelemetryCacheWriteAt: Date?
+    @ObservationIgnored private var realtimeKeepaliveTask: Task<Void, Never>?
+    @ObservationIgnored private var historicalRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var historicalWatchdogTask: Task<Void, Never>?
+    @ObservationIgnored private var handshakeTask: Task<Void, Never>?
+    @ObservationIgnored private var connectionRetryTask: Task<Void, Never>?
+    @ObservationIgnored private var reconnectAttempt = 0
+    @ObservationIgnored private var historicalSyncActive = false
+    @ObservationIgnored private var historicalSessionID: String?
+    @ObservationIgnored private var lastHistoricalProgressAt: Date?
+    @ObservationIgnored private var newestHistoricalSampleAtInSync: Date?
+    @ObservationIgnored private var lastAcknowledgedHistoricalEndData: [UInt8]?
+    @ObservationIgnored private var lastHistoricalAcknowledgementAt: Date?
+    @ObservationIgnored private var lastSleepAnalysisAt: Date?
+    @ObservationIgnored private var lastFinalizedSleepID: String?
     private let store = WhoopStore.shared
-    private lazy var transportPipeline = WhoopTransportPipeline(
+    @ObservationIgnored private lazy var transportPipeline = WhoopTransportPipeline(
         store: store,
         didPublishUI: { [weak self] snapshot in
             DispatchQueue.main.async { [weak self] in

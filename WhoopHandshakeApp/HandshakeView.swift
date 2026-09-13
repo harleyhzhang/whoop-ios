@@ -2,7 +2,7 @@ import SwiftUI
 
 struct HandshakeView: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var probe: WhoopHandshakeProbe
+    var probe: WhoopHandshakeProbe
 
     private var isConnected: Bool {
         probe.isConnected || WhoopLaunchOverrides.isConnected
@@ -26,13 +26,14 @@ struct HandshakeView: View {
         }
     }
 
-    private var lastConnectedStatus: String {
-        if WhoopLaunchOverrides.isConnected { return "Just now" }
-
-        guard let date = probe.lastConnectedAt else { return "Not yet" }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .short
-        return formatter.localizedString(for: date, relativeTo: .now)
+    @ViewBuilder private var lastConnectedValue: some View {
+        if WhoopLaunchOverrides.isConnected {
+            Text("Now")
+        } else if let date = probe.lastConnectedAt {
+            Text(date, style: .relative)
+        } else {
+            Text("Not yet")
+        }
     }
 
     var body: some View {
@@ -73,19 +74,21 @@ struct HandshakeView: View {
 
             statusRow(
                 title: "Collection",
-                value: isConnected ? "Active" : "Paused",
                 symbol: "waveform.path.ecg",
                 positive: isConnected
-            )
+            ) {
+                Text(isConnected ? "Active" : "Paused")
+            }
 
             Divider().padding(.leading, 31)
 
             statusRow(
                 title: "Last connected",
-                value: lastConnectedStatus,
                 symbol: "clock",
                 positive: false
-            )
+            ) {
+                lastConnectedValue
+            }
 
             if !isConnected {
                 Button("Reconnect") {
@@ -152,11 +155,11 @@ struct HandshakeView: View {
         .frame(maxWidth: .infinity)
     }
 
-    private func statusRow(
+    private func statusRow<Value: View>(
         title: String,
-        value: String,
         symbol: String,
-        positive: Bool
+        positive: Bool,
+        @ViewBuilder value: () -> Value
     ) -> some View {
         HStack(spacing: 12) {
             Image(systemName: symbol)
@@ -169,7 +172,7 @@ struct HandshakeView: View {
 
             Spacer()
 
-            Text(value)
+            value()
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(positive ? Color.green : Color.secondary)
         }
