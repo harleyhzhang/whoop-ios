@@ -3704,10 +3704,11 @@ final class WhoopStore: Sendable {
             .map { $0.rounded() }
     }
 
-    /// RMSSD requires differences between adjacent heartbeats. Historical v18
-    /// records are too sparse to prove adjacency: almost every record contains
-    /// zero or one R-R value. Use the dense realtime stream and preserve packet
-    /// boundaries and device timestamps instead of flattening unrelated beats.
+    /// Prefer the live stream for RMSSD, then fall back to the completed history
+    /// offload. iOS can suspend live Bluetooth delivery for an entire night even
+    /// though the strap later supplies a dense, timestamped R-R history. Keeping
+    /// every historical row as a packet preserves both its boundary and sample
+    /// timestamp, so the same continuity and artifact rules apply to both paths.
     private func nightlyRMSSD(for candidate: SleepCandidate) -> Double? {
         guard let database else { return nil }
         let standardPackets = realtimeRRPackets(
@@ -3735,7 +3736,18 @@ final class WhoopStore: Sendable {
         let asleepProprietaryPackets = proprietaryPackets.filter { packet in
             ranges.contains { packet.timestamp >= $0.lowerBound && packet.timestamp <= $0.upperBound }
         }
-        return Self.rmssdFromRealtimePackets(asleepProprietaryPackets)
+        if let value = Self.rmssdFromRealtimePackets(asleepProprietaryPackets) {
+            return value
+        }
+        let historicalPackets = historicalRRPackets(
+            database: database,
+            from: candidate.firstSleep.timestamp - 30,
+            through: candidate.lastSleep.timestamp + 30
+        )
+        let asleepHistoricalPackets = historicalPackets.filter { packet in
+            ranges.contains { packet.timestamp >= $0.lowerBound && packet.timestamp <= $0.upperBound }
+        }
+        return Self.rmssdFromRealtimePackets(asleepHistoricalPackets)
     }
 
     private func realtimeRRPackets(
@@ -3761,6 +3773,45 @@ final class WhoopStore: Sendable {
         bind(source, to: 1, in: statement)
         sqlite3_bind_double(statement, 2, start)
         sqlite3_bind_double(statement, 3, end)
+        var packets: [RealtimeRRPacket] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let text = textColumn(statement, 1) ?? "[]"
+            let intervals = (try? JSONDecoder().decode([Double].self, from: Data(text.utf8))) ?? []
+            if !intervals.isEmpty {
+                packets.append(
+                    RealtimeRRPacket(
+                        timestamp: sqlite3_column_double(statement, 0),
+                        intervals: intervals
+                    ))
+            }
+        }
+        return packets
+    }
+
+    private func historicalRRPackets(
+        database: OpaquePointer,
+        from start: TimeInterval,
+        through end: TimeInterval
+    ) -> [RealtimeRRPacket] {
+        let sql = """
+            SELECT sample_at, rr_intervals_json
+            FROM whoop_historical_sample
+            WHERE peripheral_id = (
+                SELECT peripheral_id FROM whoop_historical_sample
+                ORDER BY sample_at DESC LIMIT 1
+            )
+              AND sample_at BETWEEN ? AND ?
+              AND sleep_state = 2
+              AND rr_intervals_json != '[]'
+            ORDER BY sample_at, ordinal
+            """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+            let statement
+        else { return [] }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_double(statement, 1, start)
+        sqlite3_bind_double(statement, 2, end)
         var packets: [RealtimeRRPacket] = []
         while sqlite3_step(statement) == SQLITE_ROW {
             let text = textColumn(statement, 1) ?? "[]"
@@ -3873,7 +3924,7 @@ final class WhoopStore: Sendable {
     /// archived WHOOP row and is authoritative.
     private static let bundledSleepScoreModel = SleepScoreModelBundle.load()
     private static let bundledRecoveryScoreModel = RecoveryScoreModelBundle.load()
-    static let localSource = "\(bundledSleepScoreModel?.version ?? "whoop5_local_v5_fallback")_materialized_2"
+    static let localSource = "\(bundledSleepScoreModel?.version ?? "whoop5_local_v5_fallback")_materialized_3"
     static let localSourcePrefix = "whoop5_local"
 
     /// A deterministic, coefficient-only safety net for development builds
