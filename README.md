@@ -266,11 +266,12 @@ discipline, and the limits of historical recovery.
   within ninety minutes silently reopens and grows the same night, including
   correcting its wake-anchored step boundary. Partial evidence can never shrink
   a stored night or replace the previous coherent dashboard day.
-- The grow-only repair is grounded in the 2026-09-06 failure capture: manual processing
-  stored 230.4 minutes at 12:05 while the strap was actively offloading, then
-  the completed local history showed 512 minutes for the same night. The manual
-  path now rejects that in-flight prefix and the fuller candidate automatically
-  repairs the premature row.
+- The grow-only repair is grounded in the 2026-09-06 failure capture: the former
+  manual path stored 230.4 minutes at 12:05 while the strap was actively
+  offloading, then the completed local history showed 512 minutes for the same
+  night. That manual path no longer exists. Automatic publication waits for the
+  durable completion marker, and a fuller candidate can still repair a
+  premature row without shrinking one.
 - Historical offload is self-healing. A missing final metadata packet no longer
   leaves the in-memory sync latch active forever: a watchdog resets and retries
   an offload after 90 seconds without history progress. Repeated chunk endings

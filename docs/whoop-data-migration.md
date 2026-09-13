@@ -782,9 +782,9 @@ Then verify behavior, not only row counts:
 
 - the app launches without a sample-data fallback;
 - the compact summary reads Sleep, Duration, Steps, Recovery, and RHR;
-- a detected or processing sleep makes every current-day headline—Sleep,
-  Duration, Steps, Recovery, RHR, and HRV—an em dash until the wake is manually
-  or automatically published;
+- an unresolved sleep leaves the latest coherent published day visible until
+  the completed history is automatically finalized; there is no manual Process
+  control or loading state;
 - Steps appears as `Steps`, with no `Beta` label, and spans the official/local
   boundary without duplicate days;
 - Recovery follows Steps, historical dates show exact official targets, and

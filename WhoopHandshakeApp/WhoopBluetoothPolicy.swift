@@ -1,11 +1,5 @@
 import Foundation
 
-enum WhoopHistoryCompletionAction: Equatable {
-    case ignore
-    case finalizeManualProcess
-    case analyzeAutomatically
-}
-
 struct WhoopHistoricalMetadata: Equatable {
     let type: UInt8
     let chunkEndData: [UInt8]?
@@ -112,13 +106,11 @@ enum WhoopBluetoothPolicy {
         return now.timeIntervalSince(previousAcknowledgedAt) >= minimumRetryInterval
     }
 
-    static func historyCompletionAction(
+    static func shouldAnalyzeHistoryCompletion(
         metadataType: UInt8?,
-        historicalSyncActive: Bool,
-        hasPendingProcess: Bool
-    ) -> WhoopHistoryCompletionAction {
-        guard metadataType == 3, historicalSyncActive || hasPendingProcess else { return .ignore }
-        return hasPendingProcess ? .finalizeManualProcess : .analyzeAutomatically
+        historicalSyncActive: Bool
+    ) -> Bool {
+        metadataType == 3 && historicalSyncActive
     }
 
     static func commandFrame(command: UInt8, sequence: UInt8, payload: [UInt8]) -> [UInt8] {
