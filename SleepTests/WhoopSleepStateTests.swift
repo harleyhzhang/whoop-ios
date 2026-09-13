@@ -198,6 +198,63 @@ final class WhoopSleepStateTests: XCTestCase {
         XCTAssertEqual(snapshot.recoveryRecords.first?.score, 81)
     }
 
+    func testDashboardRepositoryPreservesSyntheticQueryResults() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("sleep.sqlite3")
+        let store = WhoopStore(databaseURL: databaseURL, runBackgroundDecoding: false)
+        store.shutdownForTesting()
+
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(databaseURL.path, &database), SQLITE_OK)
+        guard let database else { throw XCTSkip("Could not open SQLite fixture") }
+        defer { sqlite3_close(database) }
+        XCTAssertEqual(
+            sqlite3_exec(
+                database,
+                """
+                INSERT INTO daily_health_metric
+                    (date_key, sleep_score, sleep_duration_minutes,
+                     hrv_rmssd_milliseconds, resting_heart_rate_bpm,
+                     source, source_updated_at, imported_at)
+                VALUES ('2026-09-10', 87, 471, 63, 51,
+                        'synthetic', '2026-09-10T12:00:00Z', 0);
+                INSERT INTO whoop_official_daily_metric
+                    (date_key, official_recovery_score, official_steps,
+                     source_archive, source_manifest_sha256, imported_at)
+                VALUES ('2026-09-10', 79, 6543, 'synthetic', 'synthetic', 0);
+                """, nil, nil, nil), SQLITE_OK)
+
+        let snapshot = try DashboardRepository().loadSnapshot(database: database)
+
+        XCTAssertEqual(snapshot.healthRecords.count, 1)
+        XCTAssertEqual(snapshot.healthRecords.first?.dateKey, "2026-09-10")
+        XCTAssertEqual(snapshot.healthRecords.first?.sleepScore, 87)
+        XCTAssertEqual(snapshot.healthRecords.first?.sleepDurationMinutes, 471)
+        XCTAssertEqual(snapshot.healthRecords.first?.hrvRMSSDMilliseconds, 63)
+        XCTAssertEqual(snapshot.healthRecords.first?.restingHeartRateBPM, 51)
+        XCTAssertEqual(snapshot.stepRecords.first?.stepCount, 6_543)
+        XCTAssertEqual(snapshot.recoveryRecords.first?.score, 79)
+    }
+
+    func testSQLiteDatabaseSerializesPersistenceState() {
+        let database = SQLiteDatabase()
+        let group = DispatchGroup()
+
+        for _ in 0..<200 {
+            group.enter()
+            database.queue.async {
+                database.nextDeliverySequence += 1
+                group.leave()
+            }
+        }
+
+        XCTAssertEqual(group.wait(timeout: .now() + 5), .success)
+        XCTAssertFalse(database.isOnQueue)
+        XCTAssertEqual(database.queue.sync { database.nextDeliverySequence }, 201)
+    }
+
     func testPhysiologicalDayDoesNotRollAtMidnightBeforeWake() {
         let firstWake = Date(timeIntervalSince1970: 1_000)
         let nextWake = Date(timeIntervalSince1970: 100_000)
