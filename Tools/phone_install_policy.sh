@@ -99,6 +99,7 @@ non_presentation_files=$(printf '%s\n' "$production_files" | awk '
   /^SleepApp\/RootView\.swift$/ { next }
   /^SleepApp\/DashboardComponents\.swift$/ { next }
   /^SleepApp\/DashboardHeader\.swift$/ { next }
+  /^SleepApp\/DashboardChartState\.swift$/ { next }
   /^SleepApp\/DashboardChartGeometry\.swift$/ { next }
   /^SleepApp\/MetricTrendCard\.swift$/ { next }
   /^SleepApp\/Assets\.xcassets\// { next }
@@ -111,7 +112,8 @@ non_presentation_files=$(printf '%s\n' "$production_files" | awk '
 # in either component.
 if git diff -U0 "$base_commit..$head_commit" -- \
   SleepApp/RootView.swift SleepApp/DashboardComponents.swift SleepApp/DashboardHeader.swift \
-  SleepApp/DashboardChartGeometry.swift SleepApp/MetricTrendCard.swift | \
+  SleepApp/DashboardChartState.swift SleepApp/DashboardChartGeometry.swift \
+  SleepApp/MetricTrendCard.swift | \
   grep -E '^[+-]' | grep -Ev '^(\+\+\+|---)' | \
   grep -Eiq 'SQLite|WhoopStore|schema|migrat|DELETE[[:space:]]+FROM|DROP[[:space:]]+TABLE|bundleIdentifier|FileManager.*remove'; then
   printf 'mode=migration\nbase=%s\nhead=%s\nreason=risk-sensitive storage or identity code appeared in a presentation component\n' \
