@@ -28,8 +28,8 @@ Tools/install_git_hooks.sh
 - Run `Tools/verify_local.sh` and fix every failure before requesting review.
 - For storage, concurrency, or unsafe-memory work, also run
   `Tools/verify_sanitizers.sh`.
-- Follow the phone data-preservation policy in `AGENTS.md` before any physical
-  install.
+- Use `Tools/ship_phone.sh --commit <exact-merged-sha>` for every physical
+  install; follow the data-preservation and resume policy in `AGENTS.md`.
 
 ## Pull requests
 

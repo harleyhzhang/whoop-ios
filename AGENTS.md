@@ -18,9 +18,13 @@
   layer may reuse compatible NOOP packages after license and integration review.
 - Verify UI changes by building for an iPhone simulator and, when requested,
   installing on Harley's paired development iPhone.
-- Before every physical-phone install, run `Tools/phone_install_policy.sh`
-  against the last installed commit recorded in the private install-state file.
-  Follow its result; do not substitute an ad hoc full container copy:
+- Every physical-phone install must use
+  `Tools/ship_phone.sh --commit <exact-merged-sha>`. It runs the doctor and
+  classifier, builds that clean `origin/main` commit, signs with a matching
+  device profile, verifies private model/seed contents and hashes, installs in
+  place through CoreDevice, launches, proves database activity, and atomically
+  records success. Do not substitute an ad hoc Xcode, `devicectl`, or iPhone
+  Mirroring flow. The internal classifier selects:
   - `none`: do not reinstall.
   - `fast`: for presentation-only changes, verify a recent known-good full
     backup exists, install the exact merged build in place, confirm the data-
@@ -31,9 +35,11 @@
     suspended pre- and post-install snapshots and validate standalone SQLite
     images. Prefer a wired CoreDevice connection for these large transfers.
   The classifier fails closed to `full` when its baseline or classification is
-  uncertain. After successful verification, update the private install-state
-  file with the exact installed commit, data-container UUID, verification mode,
-  and latest known-good full backup. Never commit that state file.
+  uncertain. The shipping command owns suspension/resumption, coherent backup
+  validation, data-container preservation, and install-state updates. If it
+  reports `needs-unlock` or `needs-verification`, rerun only its printed
+  `--resume` command; never uninstall. Never commit its private state or backup
+  manifests.
 - Run `Tools/verify_local.sh` before merging code changes. Hosted iOS CI is a
   manual fallback only; do not trigger it unless local verification is blocked
   or Harley explicitly requests a hosted run.

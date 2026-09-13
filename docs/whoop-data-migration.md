@@ -531,12 +531,53 @@ then, a new run is the correct retry unit.
 
 ## 10. Build, sign, install, and preserve migration backups
 
-### Choose the verification tier first
+### Canonical one-command workflow
 
-Run `Tools/phone_install_policy.sh` before a physical install. By default it
-compares `HEAD` with `installedCommit` in the file named by
-`WHOOP_DEVICE_INSTALL_STATE_PATH`; `--base` can supply the known installed
-commit explicitly.
+Do not perform the build, signing, backup, or CoreDevice steps below by hand in
+normal operation. From a clean worktree checked out at the exact merged commit,
+run:
+
+```sh
+Tools/ship_phone.sh --commit "$(git rev-parse HEAD)"
+```
+
+`ship_phone.sh` is the only supported routine installation path. It:
+
+1. requires a clean HEAD that is already reachable from the current
+   `origin/main`;
+2. runs the install classifier and a `Tools/doctor.sh` preflight for Xcode,
+   iPhoneOS SDK, CoreDevice, pairing, Developer Mode, free space, signing
+   identity/profile, the existing app container, and all five private assets;
+3. validates model feature versions and dimensions, archive/projection hashes,
+   and SQLite integrity before building;
+4. builds and signs the exact commit, embeds that SHA in `WHOOPSourceCommit`,
+   verifies the signature/profile and byte-matches every bundled private asset;
+5. uses CoreDevice directly, without iPhone Mirroring, and installs in place;
+6. for `full`, suspends the app with guaranteed resume cleanup while taking
+   coherent pre/post copies, creates standalone SQLite images, validates schema,
+   `quick_check`, foreign keys, hashes, and nondecreasing durable health rows;
+7. launches the app, proves the process is alive and the database or WAL
+   advanced, then atomically updates the private install-state file.
+
+The defaults point to Harley's canonical private seed, backup, and install-state
+locations outside Git. Override `--private-root`, `--backup-root`, `--state`, or
+`--device` only for a deliberate recovery or test. `Tools/doctor.sh --mode full`
+is a read-only preflight, and `Tools/ship_phone.sh ... --dry-run` resolves and
+prints the complete plan without building or installing.
+
+If installation completes while the phone is locked, the command exits 75 with
+`status=needs-unlock` and prints one exact `--resume <manifest>` command. Unlock
+the phone and run that command. The same mechanism reports
+`needs-verification` if a post-install connection is interrupted. Resume never
+reinstalls the app, and neither state is permission to uninstall it.
+`status=needs-device` means CoreDevice cannot currently reach the paired phone;
+keep it awake on the same network and rerun the unchanged command.
+
+### Verification tiers
+
+The shipping command invokes `Tools/phone_install_policy.sh` internally. The
+classifier compares the requested commit with `installedCommit` in the private
+state file.
 
 - `none` means no production app code changed, so there is nothing to install.
 - `fast` is restricted to presentation-only changes in `RootView.swift` or the
@@ -554,6 +595,9 @@ The policy intentionally fails closed to `full` if the installed baseline is
 missing, unavailable, divergent, or ambiguous. A fast install is a verification
 optimization, not permission to skip exact-commit building, signing checks,
 private-asset hash checks, in-place installation, launch, or runtime validation.
+
+The remaining commands in this section document what the orchestrator enforces
+for diagnosis and recovery. They are not a parallel routine install procedure.
 
 Generate the Xcode project after changing `project.yml`:
 
@@ -660,7 +704,7 @@ explicitly with `CODE_SIGN_STYLE=Manual`, `PROVISIONING_PROFILE_SPECIFIER`, and
 `CODE_SIGN_IDENTITY`. Verify the resulting bundle identifier, version,
 signature, embedded profile, and private-asset hashes before installation.
 
-The store currently targets schema 9. Before any non-empty schema upgrade, it
+The store currently targets schema 10. Before any non-empty schema upgrade, it
 uses SQLite's online backup API to create a WAL-consistent standalone database
 under Application Support's `migration-backups` directory, then runs
 `PRAGMA quick_check`. Migration fails closed if that snapshot cannot be made.

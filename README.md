@@ -27,6 +27,21 @@ minutes. `.github/workflows/ios-ci.yml` is a manual hosted fallback only.
 See [testing and CI](docs/testing.md), [architecture](docs/architecture.md), and
 [contributing](CONTRIBUTING.md) before making a behavioral change.
 
+## Physical-phone shipping
+
+From a clean worktree at the exact merged `origin/main` commit, run:
+
+```bash
+Tools/ship_phone.sh --commit "$(git rev-parse HEAD)"
+```
+
+This is the canonical build, signing, backup, in-place install, launch, and
+verification path. `Tools/doctor.sh --mode full` performs the read-only preflight.
+If shipping returns `needs-unlock` or `needs-verification`, run only the exact
+`--resume` command it prints; never uninstall the app. See the
+[migration runbook](docs/whoop-data-migration.md#10-build-sign-install-and-preserve-migration-backups)
+for the fail-closed verification tiers.
+
 ## Product target
 
 The app should eventually cover the complete personal loop:
