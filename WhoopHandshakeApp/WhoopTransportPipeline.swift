@@ -3,8 +3,7 @@ import Foundation
 struct WhoopTransportUISnapshot: Sendable {
     let heartRate: Int?
     let heartRateReceivedAt: Date?
-    let batteryLevel: Int?
-    let batteryStatus: BatteryStatus?
+    let batteryObservation: BatteryObservation?
 }
 
 struct WhoopTransportMetadataEvent: Sendable {
@@ -107,6 +106,8 @@ final class WhoopTransportPipeline: @unchecked Sendable {
     private var drainWaiters: [@Sendable () -> Void] = []
     private var lastUISnapshotAt: Date?
     private var pendingUI = PendingUI()
+    private var latestBatteryLevel: Int?
+    private var latestBatteryStatus = BatteryStatus.unavailable
 
     init(
         store: WhoopStore,
@@ -181,7 +182,11 @@ final class WhoopTransportPipeline: @unchecked Sendable {
     func submitBatteryLevel(_ data: Data, deliveredAt: Date) {
         queue.async { [self] in
             guard let level = data.first else { return }
-            pendingUI.batteryLevel = Int(level)
+            latestBatteryLevel = Int(level)
+            pendingUI.batteryObservation = BatteryObservation(
+                level: latestBatteryLevel,
+                status: latestBatteryStatus
+            )
             publishUIIfDue(now: deliveredAt)
         }
     }
@@ -189,7 +194,11 @@ final class WhoopTransportPipeline: @unchecked Sendable {
     func submitBatteryLevelStatus(_ data: Data, deliveredAt: Date) {
         queue.async { [self] in
             guard let status = WhoopBluetoothPolicy.batteryLevelStatus(data) else { return }
-            pendingUI.batteryStatus = status
+            latestBatteryStatus = status
+            pendingUI.batteryObservation = BatteryObservation(
+                level: latestBatteryLevel,
+                status: latestBatteryStatus
+            )
             publishUIIfDue(now: deliveredAt)
         }
     }
@@ -197,7 +206,11 @@ final class WhoopTransportPipeline: @unchecked Sendable {
     func submitLegacyBatteryStatus(_ data: Data, deliveredAt: Date) {
         queue.async { [self] in
             guard let status = WhoopBluetoothPolicy.legacyBatteryStatus(data) else { return }
-            pendingUI.batteryStatus = status
+            latestBatteryStatus = status
+            pendingUI.batteryObservation = BatteryObservation(
+                level: latestBatteryLevel,
+                status: latestBatteryStatus
+            )
             publishUIIfDue(now: deliveredAt)
         }
     }
@@ -343,8 +356,7 @@ final class WhoopTransportPipeline: @unchecked Sendable {
         let snapshot = WhoopTransportUISnapshot(
             heartRate: pendingUI.heartRate,
             heartRateReceivedAt: pendingUI.heartRateReceivedAt,
-            batteryLevel: pendingUI.batteryLevel,
-            batteryStatus: pendingUI.batteryStatus
+            batteryObservation: pendingUI.batteryObservation
         )
         pendingUI = PendingUI()
         lastUISnapshotAt = now
@@ -354,11 +366,10 @@ final class WhoopTransportPipeline: @unchecked Sendable {
     private struct PendingUI {
         var heartRate: Int?
         var heartRateReceivedAt: Date?
-        var batteryLevel: Int?
-        var batteryStatus: BatteryStatus?
+        var batteryObservation: BatteryObservation?
 
         var isEmpty: Bool {
-            heartRate == nil && batteryLevel == nil && batteryStatus == nil
+            heartRate == nil && batteryObservation == nil
         }
     }
 

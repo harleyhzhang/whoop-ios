@@ -213,4 +213,10 @@ struct DashboardHistorySnapshot: Sendable {
     let healthRecords: [DailyHealthRecord]
     let stepRecords: [DailyStepRecord]
     let recoveryRecords: [DailyRecoveryRecord]
+
+    static let empty = DashboardHistorySnapshot(
+        healthRecords: [],
+        stepRecords: [],
+        recoveryRecords: []
+    )
 }

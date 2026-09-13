@@ -12,11 +12,15 @@
 ## Boundaries
 
 `SleepApp` is the composition and presentation layer. `SleepApp.swift` owns app
-lifecycle and notification orchestration; `RootView.swift` renders snapshots and
-forwards user intent. Presentation helpers live in `DashboardComponents.swift`,
-`DashboardMetric.swift`, and `TrendSupport.swift`. `HealthHistoryModel.swift`
-adapts store snapshots for charts. Data contracts remain in `SleepModels.swift`,
-while scoring features and model bundles live in `ScoreModels.swift`.
+lifecycle and notification orchestration; `RootView.swift` is a small dashboard
+coordinator. `DashboardHeader.swift`, `SummaryGrid.swift`, `RangePicker.swift`,
+and `MetricTrendCard.swift` own their corresponding sections, while
+`DashboardChartGeometry.swift` and `DashboardChartState.swift` separate pure
+chart calculations from interaction state. `HealthHistoryModel.swift` uses
+Observation and publishes one atomic `DashboardHistorySnapshot` per database
+generation instead of exposing independently changing history families. Data
+contracts remain in `SleepModels.swift`, while scoring features and model
+bundles live in `ScoreModels.swift`.
 
 `WhoopHandshakeApp` is the device and persistence layer:
 
@@ -64,6 +68,11 @@ Framework APIs belong behind small adapters so decisions can be unit tested.
 5. A durable `HISTORY_COMPLETE` permits finalization and snapshot publication.
 6. SwiftUI observes the published snapshot; it does not infer missing evidence.
 
+Battery transport follows the same coherence rule: a typed `BatteryObservation`
+carries level plus charging state from the serial transport snapshot through the
+probe into notification policy. Low-battery reminders require an explicit
+non-charging observation, so a charging strap cannot emit “Charge now.”
+
 ## Storage representation
 
 SQLite separates immutable evidence from rebuildable query projections:
@@ -107,3 +116,6 @@ Project structure and compiler policy live in `project.yml`; the checked-in
 Xcode project is generated output for Xcode usability. Private build assets are
 embedded through the data-driven `Tools/embed_private_assets.sh` helper, and
 test protocol fixtures are constructed by `WhoopTestFrameFactory`.
+The large store integration suite is partitioned by migrations, packet
+persistence, sleep analysis, step materialization, recovery models, and
+dashboard behavior; shared SQLite/frame helpers live in `WhoopTestFixtures.swift`.

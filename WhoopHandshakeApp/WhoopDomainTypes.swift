@@ -161,3 +161,16 @@ enum BatteryStatus: Sendable, Equatable {
         }
     }
 }
+
+/// One coherent battery reading carried from transport decoding through UI and
+/// notification policy. A missing level is valid when the charging
+/// characteristic arrives before the percentage characteristic.
+struct BatteryObservation: Sendable, Equatable {
+    let level: Int?
+    let status: BatteryStatus
+
+    init(level: Int?, status: BatteryStatus) {
+        self.level = level.map { min(max($0, 0), 100) }
+        self.status = status
+    }
+}

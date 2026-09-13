@@ -39,6 +39,9 @@ xcrun swift-format lint \
   --strict \
   SleepApp WhoopHandshakeApp SleepTests SleepUITests SleepPrivateTests
 
+echo "Checking Swift presentation and test file sizes..."
+Tools/check_swift_file_sizes.sh
+
 echo "Checking shell scripts..."
 shellcheck Tools/*.sh .githooks/*
 
