@@ -102,6 +102,7 @@ non_presentation_files=$(printf '%s\n' "$production_files" | awk '
   /^SleepApp\/DashboardChartState\.swift$/ { next }
   /^SleepApp\/DashboardChartGeometry\.swift$/ { next }
   /^SleepApp\/MetricTrendCard\.swift$/ { next }
+  /^SleepApp\/TrendSupport\.swift$/ { next }
   /^SleepApp\/Assets\.xcassets\// { next }
   /^Sleep\.xcodeproj\// { next }
   { print }
@@ -113,7 +114,7 @@ non_presentation_files=$(printf '%s\n' "$production_files" | awk '
 if git diff -U0 "$base_commit..$head_commit" -- \
   SleepApp/RootView.swift SleepApp/DashboardComponents.swift SleepApp/DashboardHeader.swift \
   SleepApp/DashboardChartState.swift SleepApp/DashboardChartGeometry.swift \
-  SleepApp/MetricTrendCard.swift | \
+  SleepApp/MetricTrendCard.swift SleepApp/TrendSupport.swift | \
   grep -E '^[+-]' | grep -Ev '^(\+\+\+|---)' | \
   grep -Eiq 'SQLite|WhoopStore|schema|migrat|DELETE[[:space:]]+FROM|DROP[[:space:]]+TABLE|bundleIdentifier|FileManager.*remove'; then
   printf 'mode=migration\nbase=%s\nhead=%s\nreason=risk-sensitive storage or identity code appeared in a presentation component\n' \
