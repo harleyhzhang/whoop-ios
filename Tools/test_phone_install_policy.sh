@@ -38,6 +38,7 @@ mkdir -p SleepApp/Assets.xcassets WhoopHandshakeApp docs
 printf 'struct RootView {}\n' > SleepApp/RootView.swift
 printf 'struct DashboardComponents {}\n' > SleepApp/DashboardComponents.swift
 printf 'struct DashboardHeader {}\n' > SleepApp/DashboardHeader.swift
+printf 'struct DashboardChartState {}\n' > SleepApp/DashboardChartState.swift
 printf 'struct DashboardChartGeometry {}\n' > SleepApp/DashboardChartGeometry.swift
 printf 'struct MetricTrendCard {}\n' > SleepApp/MetricTrendCard.swift
 printf 'struct WhoopStore {}\n' > SleepApp/SleepModels.swift
@@ -64,10 +65,24 @@ git commit -qam dashboard_components_ui
 dashboard_components_ui_commit=$(git rev-parse HEAD)
 assert_mode fast --base "$ui_commit" --head "$dashboard_components_ui_commit"
 
+printf '// transient chart interaction state\n' >> SleepApp/DashboardChartState.swift
+git commit -qam dashboard_chart_state_ui
+dashboard_chart_state_ui_commit=$(git rev-parse HEAD)
+assert_mode fast --base "$dashboard_components_ui_commit" --head "$dashboard_chart_state_ui_commit"
+
+printf '// SQLite schema migration\n' >> SleepApp/DashboardChartState.swift
+git commit -qam risky_dashboard_chart_state
+risky_dashboard_chart_state_commit=$(git rev-parse HEAD)
+assert_mode migration --base "$dashboard_chart_state_ui_commit" --head "$risky_dashboard_chart_state_commit"
+
+sed -i '' '$d' SleepApp/DashboardChartState.swift
+git commit -qam restore_dashboard_chart_state
+dashboard_chart_state_restored_commit=$(git rev-parse HEAD)
+
 printf '// SQLite schema migration\n' >> SleepApp/DashboardComponents.swift
 git commit -qam risky_dashboard_components
 risky_dashboard_components_commit=$(git rev-parse HEAD)
-assert_mode migration --base "$dashboard_components_ui_commit" --head "$risky_dashboard_components_commit"
+assert_mode migration --base "$dashboard_chart_state_restored_commit" --head "$risky_dashboard_components_commit"
 
 printf '// schema migration\n' >> SleepApp/RootView.swift
 git commit -qam risky_ui
