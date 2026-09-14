@@ -122,11 +122,15 @@ discipline, and the limits of historical recovery.
   in the first 17 seconds, then another 47 frames during the following 44-second
   locked interval. The recovered stream contained command responses and type-40
   heart-rate/R–R measurements without opening the collector controls.
-- The main dashboard no longer generates sample values. A refreshed read-only
-  WHOOP API archive is reduced to one primary-sleep row per local date and
-  imported idempotently into `daily_health_metric` in the existing SQLite
-  database. The initial private seed contains 306 scored nights from 2025-10-16
-  through 2026-09-01. Sleep uses WHOOP's archived sleep-performance percentage;
+- The main dashboard no longer generates sample values. As soon as the strap
+  reports sleep, every current-day metric changes to an em dash and remains
+  blank through a short provisional wake instead of flashing the previously
+  published day; automatic wake processing publishes the next coherent day. A
+  refreshed read-only WHOOP API archive is reduced to one primary-sleep row per
+  local date and imported idempotently into `daily_health_metric` in the
+  existing SQLite database. The initial private seed contains 306 scored nights
+  from 2025-10-16 through 2026-09-01. Sleep uses WHOOP's archived
+  sleep-performance percentage;
   duration is the sum of light, REM, and slow-wave sleep; HRV is RMSSD; and RHR
   is the archived resting-heart-rate value. The import also retains sleep start,
   end, dynamic need, sufficiency, consistency, and efficiency as underlying

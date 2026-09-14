@@ -276,6 +276,23 @@ extension WhoopSleepStateTests {
         XCTAssertEqual(try XCTUnwrap(day.recovery).dateKey, health.dateKey)
     }
 
+    func testSleepingDashboardSuppressesEveryPreviousDayMetric() {
+        let health = dailyHealthRecord(dateKey: "2026-09-08")
+        let day = PublishedDashboardDay(
+            healthRecords: [health],
+            stepRecords: [dailyStepRecord(dateKey: health.dateKey, stepCount: 8_432)],
+            recoveryRecords: [
+                DailyRecoveryRecord(dateKey: health.dateKey, score: 82, source: "synthetic")
+            ],
+            metricsArePending: true
+        )
+
+        XCTAssertNil(day.health)
+        XCTAssertNil(day.steps)
+        XCTAssertNil(day.recovery)
+        XCTAssertNil(day.date)
+    }
+
     func testPublishedDashboardWaitsForEveryMetricFamily() {
         let health = dailyHealthRecord(dateKey: "2026-09-08")
         let day = PublishedDashboardDay(
