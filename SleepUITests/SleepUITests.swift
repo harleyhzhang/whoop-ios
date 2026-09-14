@@ -36,6 +36,20 @@ final class SleepUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Finishing sleep…"].exists)
     }
 
+    func testSleepingDashboardShowsEmDashesUntilAutomaticProcessing() {
+        let app = configuredApplication()
+        app.launchEnvironment["WHOOP_MOCK_SLEEPING"] = "1"
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["Sleep"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.descendants(matching: .any)[
+                "Sleep —, duration —, steps —, recovery —, resting heart rate — beats per minute"
+            ].exists
+        )
+        XCTAssertFalse(app.buttons["Process"].exists)
+    }
+
     func testDashboardUsesOnlyAllHistoryCharts() {
         let app = configuredApplication()
         app.launch()

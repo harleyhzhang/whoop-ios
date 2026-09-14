@@ -11,8 +11,13 @@ struct RootView: View {
         PublishedDashboardDay(
             healthRecords: history.snapshot.healthRecords,
             stepRecords: history.snapshot.stepRecords,
-            recoveryRecords: history.snapshot.recoveryRecords
+            recoveryRecords: history.snapshot.recoveryRecords,
+            metricsArePending: sleepMetricsArePending
         )
+    }
+
+    private var sleepMetricsArePending: Bool {
+        WhoopLaunchOverrides.isSleeping || whoopCollector.isSleeping
     }
 
     private var batteryLevel: Int? {
@@ -66,7 +71,7 @@ struct RootView: View {
     }
 
     private func dashboard(currentDate: Date) -> some View {
-        let referenceDate = publishedDay.date ?? currentDate
+        let referenceDate = sleepMetricsArePending ? currentDate : (publishedDay.date ?? currentDate)
         return ZStack {
             Color(uiColor: .systemGroupedBackground).ignoresSafeArea()
 
