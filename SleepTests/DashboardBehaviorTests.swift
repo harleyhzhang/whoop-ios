@@ -278,12 +278,14 @@ extension WhoopSleepStateTests {
 
     func testSleepingDashboardSuppressesEveryPreviousDayMetric() {
         let health = dailyHealthRecord(dateKey: "2026-09-08")
-        let day = PublishedDashboardDay(
-            healthRecords: [health],
-            stepRecords: [dailyStepRecord(dateKey: health.dateKey, stepCount: 8_432)],
-            recoveryRecords: [
-                DailyRecoveryRecord(dateKey: health.dateKey, score: 82, source: "synthetic")
-            ],
+        let day = DashboardCurrentDayPolicy.displayedDay(
+            snapshot: DashboardHistorySnapshot(
+                healthRecords: [health],
+                stepRecords: [dailyStepRecord(dateKey: health.dateKey, stepCount: 8_432)],
+                recoveryRecords: [
+                    DailyRecoveryRecord(dateKey: health.dateKey, score: 82, source: "synthetic")
+                ]
+            ),
             metricsArePending: true
         )
 
