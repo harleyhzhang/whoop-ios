@@ -1,5 +1,18 @@
 import SwiftUI
 
+enum DashboardCurrentDayPolicy {
+    static func displayedDay(
+        snapshot: DashboardHistorySnapshot,
+        metricsArePending: Bool
+    ) -> PublishedDashboardDay {
+        PublishedDashboardDay(
+            healthRecords: metricsArePending ? [] : snapshot.healthRecords,
+            stepRecords: metricsArePending ? [] : snapshot.stepRecords,
+            recoveryRecords: metricsArePending ? [] : snapshot.recoveryRecords
+        )
+    }
+}
+
 struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -8,16 +21,19 @@ struct RootView: View {
     var whoopCollector: WhoopHandshakeProbe
 
     private var publishedDay: PublishedDashboardDay {
-        PublishedDashboardDay(
-            healthRecords: history.snapshot.healthRecords,
-            stepRecords: history.snapshot.stepRecords,
-            recoveryRecords: history.snapshot.recoveryRecords,
+        DashboardCurrentDayPolicy.displayedDay(
+            snapshot: history.snapshot,
             metricsArePending: sleepMetricsArePending
         )
     }
 
     private var sleepMetricsArePending: Bool {
-        WhoopLaunchOverrides.isSleeping || whoopCollector.isSleeping
+        #if DEBUG
+            if ProcessInfo.processInfo.environment["WHOOP_MOCK_SLEEPING"] == "1" {
+                return true
+            }
+        #endif
+        return whoopCollector.isSleeping
     }
 
     private var batteryLevel: Int? {
@@ -71,7 +87,7 @@ struct RootView: View {
     }
 
     private func dashboard(currentDate: Date) -> some View {
-        let referenceDate = sleepMetricsArePending ? currentDate : (publishedDay.date ?? currentDate)
+        let referenceDate = publishedDay.date ?? currentDate
         return ZStack {
             Color(uiColor: .systemGroupedBackground).ignoresSafeArea()
 
