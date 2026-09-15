@@ -3007,7 +3007,8 @@ final class WhoopStore: Sendable, WhoopPacketPersisting {
 
         /// Evidence gates decide whether the night can be honestly scored at all.
         var meetsEvidenceGates: Bool {
-            sleepSeconds >= 3 * 60 * 60 && sessionCoverage >= 0.50
+            sleepSeconds >= WhoopAutomaticSleepPolicy.primarySleepMinimum
+                && sessionCoverage >= 0.50
         }
 
         /// Explicit awake is final immediately. The ambiguous `up` state gets
@@ -3071,26 +3072,6 @@ final class WhoopStore: Sendable, WhoopPacketPersisting {
             total += delta <= cap ? delta : cadence
         }
         return total
-    }
-
-    /// A long `up` interval can occur inside a night and then return to the
-    /// strap's explicit asleep state. Keep that as one sleep session. A gap
-    /// longer than 90 minutes is treated as a separate sleep instead.
-    static func groupedAsleepRows(
-        _ asleepRows: [HistoricalRow],
-        maximumInterruptionSeconds: Double = WhoopAutomaticSleepPolicy.reopenWindow
-    ) -> [[HistoricalRow]] {
-        var groups: [[HistoricalRow]] = []
-        for row in asleepRows {
-            if let last = groups.last?.last,
-                row.timestamp - last.timestamp <= maximumInterruptionSeconds
-            {
-                groups[groups.count - 1].append(row)
-            } else {
-                groups.append([row])
-            }
-        }
-        return groups
     }
 
     private enum SleepAnalysis {
@@ -3428,7 +3409,8 @@ final class WhoopStore: Sendable, WhoopPacketPersisting {
 
     /// Automatic path. Explicit awake finalizes immediately; ambiguous `up`
     /// finalizes after ten minutes. Both remain gated on a coherent completed
-    /// offload and can grow silently if sleep resumes within ninety minutes.
+    /// offload and can grow silently if sleep resumes within ninety minutes,
+    /// or within two hours after a completed main sleep on the same morning.
     private func analyzeLatestSleep(
         now: Date = .now,
         allowAutomaticFinalization: Bool = false
@@ -3567,7 +3549,7 @@ final class WhoopStore: Sendable, WhoopPacketPersisting {
             let inSession = rows.filter { $0.timestamp >= first.timestamp && $0.timestamp <= last.timestamp }
             let sessionCadence = Self.cadenceSeconds(of: inSession)
             let wakeRows = rows.filter { $0.timestamp > last.timestamp && $0.sleepState != .asleep }
-            let duration = Self.elapsedSeconds(across: inSession, cadence: sessionCadence)
+            let duration = Self.elapsedSeconds(across: group, cadence: sessionCadence)
             let coverage = Self.observedFraction(of: inSession, cadence: sessionCadence)
             let density = min(1.0, Double(inSession.count) / max(1.0, span / sessionCadence))
             let wake = Self.elapsedSeconds(across: wakeRows, cadence: sessionCadence)
@@ -3577,7 +3559,7 @@ final class WhoopStore: Sendable, WhoopPacketPersisting {
                 timeZone: .autoupdatingCurrent
             )
             let stored = storedSleepID(forDateKey: dateKey, database: database)
-            let durationGate = duration >= 3 * 60 * 60
+            let durationGate = duration >= WhoopAutomaticSleepPolicy.primarySleepMinimum
             let coverageGate = coverage >= 0.50
             let latestSampleIsCurrent = abs(now.timeIntervalSince1970 - latest.timestamp) <= 30 * 60
             let automaticWakeGate = WhoopAutomaticSleepPolicy.canFinalize(
@@ -4122,7 +4104,7 @@ final class WhoopStore: Sendable, WhoopPacketPersisting {
     /// archived WHOOP row and is authoritative.
     private static let bundledSleepScoreModel = SleepScoreModelBundle.load()
     private static let bundledRecoveryScoreModel = RecoveryScoreModelBundle.load()
-    static let localSource = "\(bundledSleepScoreModel?.version ?? "whoop5_local_v5_fallback")_materialized_3"
+    static let localSource = "\(bundledSleepScoreModel?.version ?? "whoop5_local_v5_fallback")_materialized_4"
     static let localSourcePrefix = "whoop5_local"
 
     /// A deterministic, coefficient-only safety net for development builds

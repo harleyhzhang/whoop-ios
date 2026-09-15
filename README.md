@@ -276,16 +276,18 @@ discipline, and the limits of historical recovery.
   so range changes cannot stretch outside the card or shear the final dot.
 - Sleep finalization is automatic and card-free. The first coherent
   finalization still emits the normal one-time morning notification. While a
-  new sleep is unresolved, the dashboard keeps the latest coherent published
-  day visible; there is no routine Process card or loading state. Explicit
+  new sleep is unresolved, every current-day metric is masked with an em dash;
+  there is no routine Process card or loading state. Explicit
   awake finalizes immediately, while the ambiguous `up` state becomes a
   provisional wake after ten minutes.
   Publication still requires at least three hours of detected sleep, 50%
   observed-session coverage, all four primary metrics, and a persisted
   HISTORY_COMPLETE marker covering the newest sample. State-2 sleep returning
-  within ninety minutes silently reopens and grows the same night, including
-  correcting its wake-anchored step boundary. Partial evidence can never shrink
-  a stored night or replace the previous coherent dashboard day.
+  within ninety minutes silently reopens and grows the same night. A completed
+  main sleep gets a narrow extension to two hours when sleep resumes before
+  noon on the same local morning, without folding afternoon naps or clusters of
+  short sleeps into the preceding night. Both paths correct the wake-anchored
+  step boundary. Partial evidence can never shrink a stored night.
 - Nightly HRV prefers the live R-R stream, then automatically falls back to the
   timestamped R-R packets in a completed historical offload. This covers nights
   when iOS suspends live Bluetooth delivery without weakening the all-metrics or
