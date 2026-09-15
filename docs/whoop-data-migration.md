@@ -12,6 +12,8 @@ The current implementation contract is schema 10 and automatic-only sleep
 publication. There is no manual Process control or loading state: explicit
 awake evidence finalizes immediately, ambiguous `up` evidence waits ten
 minutes, and sleep returning within 90 minutes silently grows the same night.
+A completed main sleep also reopens when sleep returns within two hours on the
+same local morning before noon.
 
 ## Data sources and authority
 
@@ -400,7 +402,8 @@ After pairing, verify all of these on real hardware:
 - historical offload completion and acknowledgement ordering;
 - no duplicate raw growth from repeated transport frames; and
 - a completed local sleep only after evidence, automatic wake, metric-completeness,
-  and HISTORY_COMPLETE gates pass; resumed sleep within ninety minutes repairs it.
+  and HISTORY_COMPLETE gates pass; resumed sleep within ninety minutes repairs
+  it, with the narrow same-morning two-hour extension for a completed main sleep.
 
 ## 8. Backtest Sleep Score and Recovery without leakage
 

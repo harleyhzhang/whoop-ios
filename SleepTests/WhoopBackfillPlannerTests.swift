@@ -69,7 +69,7 @@ final class WhoopBackfillPlannerTests: XCTestCase {
         }
     }
 
-    func testSleepRangeBoundaryMatchesNinetyMinuteReopenRule() {
+    func testSleepRangeBoundaryMatchesStandardReopenRule() {
         let reopen = WhoopAutomaticSleepPolicy.reopenWindow
         let rows = [
             SyntheticSleepRow(timestamp: 0, isAsleep: true),
@@ -91,6 +91,34 @@ final class WhoopBackfillPlannerTests: XCTestCase {
                 WhoopIndexedSleepRange(sessionRange: 3..<4, asleepIndices: [3]),
             ]
         )
+    }
+
+    func testBackfillMergesCompletedMainSleepReturningSameMorning() throws {
+        let timeZone = try XCTUnwrap(TimeZone(identifier: "America/Toronto"))
+        let formatter = ISO8601DateFormatter()
+        let first = try XCTUnwrap(formatter.date(from: "2026-09-15T05:05:00Z"))
+        let last = try XCTUnwrap(formatter.date(from: "2026-09-15T10:41:59Z"))
+        let resumed = try XCTUnwrap(formatter.date(from: "2026-09-15T12:23:00Z"))
+        var rows: [SyntheticSleepRow] = []
+        for timestamp in stride(
+            from: first.timeIntervalSince1970,
+            through: last.timeIntervalSince1970,
+            by: 20 * 60
+        ) {
+            rows.append(SyntheticSleepRow(timestamp: timestamp, isAsleep: true))
+        }
+        rows.append(SyntheticSleepRow(timestamp: last.timeIntervalSince1970, isAsleep: true))
+        rows.append(SyntheticSleepRow(timestamp: resumed.timeIntervalSince1970, isAsleep: true))
+
+        let ranges = WhoopBackfillPlanner.indexedSleepRanges(
+            in: rows,
+            timeZone: timeZone,
+            timestamp: { $0.timestamp },
+            isAsleep: { $0.isAsleep }
+        )
+
+        XCTAssertEqual(ranges.count, 1)
+        XCTAssertEqual(ranges[0].asleepIndices.count, rows.count)
     }
 
     func testSleepRangeIndexIncludesRowsSharingBoundaryTimestamps() {
@@ -160,9 +188,13 @@ final class WhoopBackfillPlannerTests: XCTestCase {
         let asleepIndices = rows.indices.filter { rows[$0].isAsleep }
         var groups: [[Int]] = []
         for index in asleepIndices {
-            if let last = groups.last?.last,
-                rows[index].timestamp - rows[last].timestamp
-                    <= WhoopAutomaticSleepPolicy.reopenWindow
+            if let first = groups.last?.first, let last = groups.last?.last,
+                WhoopAutomaticSleepPolicy.shouldMergeAsleepRuns(
+                    firstAsleepTimestamp: rows[first].timestamp,
+                    lastAsleepTimestamp: rows[last].timestamp,
+                    nextAsleepTimestamp: rows[index].timestamp,
+                    timeZone: .autoupdatingCurrent
+                )
             {
                 groups[groups.count - 1].append(index)
             } else {

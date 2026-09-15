@@ -91,6 +91,69 @@ extension WhoopSleepStateTests {
         XCTAssertEqual(WhoopStore.groupedAsleepRows(rows).count, 2)
     }
 
+    func testTonightReturnAfter101MinutesMergesIntoCompletedMorningSleep() throws {
+        let timeZone = try XCTUnwrap(TimeZone(identifier: "America/Toronto"))
+        let formatter = ISO8601DateFormatter()
+        let firstAsleep = try XCTUnwrap(formatter.date(from: "2026-09-15T05:05:00Z"))
+        let lastAsleep = try XCTUnwrap(formatter.date(from: "2026-09-15T10:41:59Z"))
+        let resumedAsleep = try XCTUnwrap(formatter.date(from: "2026-09-15T12:23:00Z"))
+        let resumedEnd = try XCTUnwrap(formatter.date(from: "2026-09-15T13:21:59Z"))
+        var rows: [WhoopStore.HistoricalRow] = []
+        for timestamp in stride(
+            from: firstAsleep.timeIntervalSince1970,
+            through: lastAsleep.timeIntervalSince1970,
+            by: 20
+        ) {
+            rows.append(row(at: timestamp, state: 2))
+        }
+        rows.append(row(at: lastAsleep.timeIntervalSince1970, state: 2))
+        for timestamp in stride(
+            from: resumedAsleep.timeIntervalSince1970,
+            through: resumedEnd.timeIntervalSince1970,
+            by: 20
+        ) {
+            rows.append(row(at: timestamp, state: 2))
+        }
+        rows.append(row(at: resumedEnd.timeIntervalSince1970, state: 2))
+
+        let groups = WhoopStore.groupedAsleepRows(rows, timeZone: timeZone)
+
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups[0].first?.timestamp, firstAsleep.timeIntervalSince1970)
+        XCTAssertEqual(groups[0].last?.timestamp, resumedEnd.timeIntervalSince1970)
+        let duration = WhoopStore.elapsedSeconds(across: groups[0], cadence: 20) / 60
+        XCTAssertGreaterThanOrEqual(duration, 396)
+        XCTAssertLessThan(duration, 397)
+    }
+
+    func testExtendedReopenDoesNotMergeShortSleepOrAfternoonNap() throws {
+        let timeZone = try XCTUnwrap(TimeZone(identifier: "America/Toronto"))
+        let formatter = ISO8601DateFormatter()
+        let morningFirst = try XCTUnwrap(formatter.date(from: "2026-09-15T09:00:00Z"))
+        let morningLast = try XCTUnwrap(formatter.date(from: "2026-09-15T10:00:00Z"))
+        let shortSleepReturn = try XCTUnwrap(formatter.date(from: "2026-09-15T11:41:00Z"))
+        XCTAssertFalse(
+            WhoopAutomaticSleepPolicy.shouldMergeAsleepRuns(
+                firstAsleepTimestamp: morningFirst.timeIntervalSince1970,
+                lastAsleepTimestamp: morningLast.timeIntervalSince1970,
+                nextAsleepTimestamp: shortSleepReturn.timeIntervalSince1970,
+                timeZone: timeZone
+            )
+        )
+
+        let mainSleepFirst = try XCTUnwrap(formatter.date(from: "2026-09-15T08:00:00Z"))
+        let mainSleepLast = try XCTUnwrap(formatter.date(from: "2026-09-15T14:20:00Z"))
+        let afternoonNap = try XCTUnwrap(formatter.date(from: "2026-09-15T16:01:00Z"))
+        XCTAssertFalse(
+            WhoopAutomaticSleepPolicy.shouldMergeAsleepRuns(
+                firstAsleepTimestamp: mainSleepFirst.timeIntervalSince1970,
+                lastAsleepTimestamp: mainSleepLast.timeIntervalSince1970,
+                nextAsleepTimestamp: afternoonNap.timeIntervalSince1970,
+                timeZone: timeZone
+            )
+        )
+    }
+
     func testUpStateGroupsOneNightButDoesNotAddSleepDuration() {
         let asleep = [
             row(at: 0, state: 2),

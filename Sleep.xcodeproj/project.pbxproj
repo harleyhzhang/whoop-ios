@@ -55,6 +55,7 @@
 		BB4DCB3FFF1EE3EEA05CC1A1 /* WhoopStorageTelemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0F9C972CD43F547A9632824 /* WhoopStorageTelemetry.swift */; };
 		BDFAFF674B60CF9A6C7F5583 /* WhoopPacketEnvelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = A915438470BA7CA309A59AB2 /* WhoopPacketEnvelope.swift */; };
 		BE1A47FC4A13BE01CB72B9B9 /* DashboardDatabaseReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 399E6CB25AC610710C8012EF /* DashboardDatabaseReader.swift */; };
+		BF4388334F63CB6C14B6D1A2 /* WhoopSleepSessionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD38AB35480B8A5A3AEAC0EF /* WhoopSleepSessionPolicy.swift */; };
 		C528C01D6A52E036F36ECA35 /* DashboardChartState.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2EE87F55409A24FE6F1E253 /* DashboardChartState.swift */; };
 		CFD8A1ADF45336338058B536 /* WhoopTestFrameFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AC2FA9FA806C60322E8CA6C /* WhoopTestFrameFactory.swift */; };
 		D63687041869BB4EF8C234C2 /* WhoopStorageTelemetryModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A51A1D38E6C2F623FE0E21D /* WhoopStorageTelemetryModels.swift */; };
@@ -149,6 +150,7 @@
 		C08B65E67D08A01C62A13C9E /* WhoopReliabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopReliabilityTests.swift; sourceTree = "<group>"; };
 		C64559828E79DB6EC5514DB2 /* ModelFeatureGoldenVectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelFeatureGoldenVectorTests.swift; sourceTree = "<group>"; };
 		CCA3A18B9DA557D605FBC178 /* WhoopStorageTelemetryCensus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopStorageTelemetryCensus.swift; sourceTree = "<group>"; };
+		CD38AB35480B8A5A3AEAC0EF /* WhoopSleepSessionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopSleepSessionPolicy.swift; sourceTree = "<group>"; };
 		D0EBA7B3CE7453E056495763 /* WhoopHistoricalSyncState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopHistoricalSyncState.swift; sourceTree = "<group>"; };
 		E2EE87F55409A24FE6F1E253 /* DashboardChartState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardChartState.swift; sourceTree = "<group>"; };
 		E337614D3958D7A40C244A3A /* WhoopBluetoothPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopBluetoothPolicy.swift; sourceTree = "<group>"; };
@@ -264,6 +266,7 @@
 				A915438470BA7CA309A59AB2 /* WhoopPacketEnvelope.swift */,
 				0CB469B3852FB6D3294099DF /* WhoopProtocol.swift */,
 				B0A89FD93D426348F4C6177A /* WhoopRuntimeDiagnostics.swift */,
+				CD38AB35480B8A5A3AEAC0EF /* WhoopSleepSessionPolicy.swift */,
 				0D67C2E6C94DDE79F867C8C6 /* WhoopStorageReliability.swift */,
 				A0F9C972CD43F547A9632824 /* WhoopStorageTelemetry.swift */,
 				CCA3A18B9DA557D605FBC178 /* WhoopStorageTelemetryCensus.swift */,
@@ -484,6 +487,7 @@
 				BDFAFF674B60CF9A6C7F5583 /* WhoopPacketEnvelope.swift in Sources */,
 				9072C8D530E6F2332C373F82 /* WhoopProtocol.swift in Sources */,
 				334963B6F896820E0164B9AC /* WhoopRuntimeDiagnostics.swift in Sources */,
+				BF4388334F63CB6C14B6D1A2 /* WhoopSleepSessionPolicy.swift in Sources */,
 				DCD341A0BEB7C24CDDB5DC59 /* WhoopStorageReliability.swift in Sources */,
 				BB4DCB3FFF1EE3EEA05CC1A1 /* WhoopStorageTelemetry.swift in Sources */,
 				6656E4EFFD958DF273A88B86 /* WhoopStorageTelemetryCensus.swift in Sources */,

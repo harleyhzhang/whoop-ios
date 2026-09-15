@@ -27,12 +27,13 @@ struct WhoopIndexedSleepRange: Sendable, Equatable {
 enum WhoopBackfillPlanner {
     static func indexedSleepRanges<Row>(
         in rows: [Row],
-        maximumInterruptionSeconds: TimeInterval = WhoopAutomaticSleepPolicy.reopenWindow,
+        timeZone: TimeZone = .autoupdatingCurrent,
         timestamp: (Row) -> TimeInterval,
         isAsleep: (Row) -> Bool
     ) -> [WhoopIndexedSleepRange] {
         var ranges: [WhoopIndexedSleepRange] = []
         var firstAsleepIndex: Int?
+        var firstAsleepTimestamp: TimeInterval?
         var lastIncludedIndex: Int?
         var lastAsleepTimestamp: TimeInterval?
         var previousRowTimestamp: TimeInterval?
@@ -59,14 +60,23 @@ enum WhoopBackfillPlanner {
                 if rowTimestamp == lastAsleepTimestamp { lastIncludedIndex = index }
                 continue
             }
-            if let lastAsleepTimestamp,
-                rowTimestamp - lastAsleepTimestamp > maximumInterruptionSeconds
+            if let currentFirstAsleepTimestamp = firstAsleepTimestamp, let lastAsleepTimestamp,
+                !WhoopAutomaticSleepPolicy.shouldMergeAsleepRuns(
+                    firstAsleepTimestamp: currentFirstAsleepTimestamp,
+                    lastAsleepTimestamp: lastAsleepTimestamp,
+                    nextAsleepTimestamp: rowTimestamp,
+                    timeZone: timeZone
+                )
             {
                 finishRange()
                 firstAsleepIndex = timestampRunStartIndex
+                firstAsleepTimestamp = rowTimestamp
                 asleepIndices = [index]
             } else {
-                if firstAsleepIndex == nil { firstAsleepIndex = timestampRunStartIndex }
+                if firstAsleepIndex == nil {
+                    firstAsleepIndex = timestampRunStartIndex
+                    firstAsleepTimestamp = rowTimestamp
+                }
                 asleepIndices.append(index)
             }
             lastIncludedIndex = index

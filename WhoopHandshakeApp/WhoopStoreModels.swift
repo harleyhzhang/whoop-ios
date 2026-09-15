@@ -3,6 +3,33 @@ import Foundation
 enum WhoopAutomaticSleepPolicy {
     static let provisionalWakeDelay: TimeInterval = 10 * 60
     static let reopenWindow: TimeInterval = 90 * 60
+    static let sameMorningReopenWindow: TimeInterval = 2 * 60 * 60
+    static let primarySleepMinimum: TimeInterval = 3 * 60 * 60
+
+    /// The ordinary 90-minute window handles interruptions anywhere in a
+    /// sleep. A narrow two-hour exception handles a completed main sleep that
+    /// resumes the same local morning, without broadly folding afternoon naps
+    /// or clusters of short sleeps into the preceding night.
+    static func shouldMergeAsleepRuns(
+        firstAsleepTimestamp: TimeInterval,
+        lastAsleepTimestamp: TimeInterval,
+        nextAsleepTimestamp: TimeInterval,
+        timeZone: TimeZone
+    ) -> Bool {
+        let interruption = nextAsleepTimestamp - lastAsleepTimestamp
+        guard interruption >= 0 else { return false }
+        if interruption <= reopenWindow { return true }
+        guard interruption <= sameMorningReopenWindow,
+            lastAsleepTimestamp - firstAsleepTimestamp >= primarySleepMinimum
+        else { return false }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let lastAsleep = Date(timeIntervalSince1970: lastAsleepTimestamp)
+        let nextAsleep = Date(timeIntervalSince1970: nextAsleepTimestamp)
+        return calendar.isDate(lastAsleep, inSameDayAs: nextAsleep)
+            && calendar.component(.hour, from: nextAsleep) < 12
+    }
 
     static func reportsSleeping(
         latestState: SleepState,
