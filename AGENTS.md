@@ -46,6 +46,12 @@
   reports `needs-unlock` or `needs-verification`, rerun only its printed
   `--resume` command; never uninstall. Never commit its private state or backup
   manifests.
+- Old pre-pipeline `app-backups` are not ordinary source archives. Consolidate
+  them only with `Tools/consolidate_legacy_backups.sh`: it imports the fullest
+  valid database for each missing schema into the managed restore-point set,
+  proves normalized row counts and integrity, and quarantines the originals.
+  Never retire a valid manifested or install-state-protected backup merely
+  because optional compaction fails.
 - Run `Tools/verify_local.sh` before merging code changes. Hosted iOS CI is a
   manual fallback only; do not trigger it unless local verification is blocked
   or Harley explicitly requests a hosted run.
