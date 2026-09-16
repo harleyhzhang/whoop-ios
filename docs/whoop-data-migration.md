@@ -677,6 +677,24 @@ After reviewing the retained set, `Tools/maintain_device_backups.sh --apply
 private quarantine record. It cannot select an active backup, shipping run, or
 canonical WHOOP source directory.
 
+Snapshots from the older manual `app-backups` workflow are consolidated across
+the whole set so recursive migration copies do not masquerade as independent
+restore points:
+
+```sh
+Tools/consolidate_legacy_backups.sh
+Tools/consolidate_legacy_backups.sh --apply --retire-unusable
+Tools/maintain_device_backups.sh
+```
+
+The importer keeps the fullest valid candidate for each otherwise-unrepresented
+schema, materializes it through SQLite's online-backup API, compares all
+preserved-table counts, writes and rechecks a hash manifest, and preserves the
+source snapshot time. Only after every discovered valid schema has a managed
+restore point does it quarantine the old directories. A later explicit
+`--apply --purge-now` deletes those recorded entries. A failed compaction never
+makes an existing valid manifested or install-state-protected backup disposable.
+
 The remaining commands in this section document what the orchestrator enforces
 for diagnosis and recovery. They are not a parallel routine install procedure.
 

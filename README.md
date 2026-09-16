@@ -69,6 +69,17 @@ source/archive directories. `--apply --purge-now` permanently removes only
 already-recorded quarantine entries and is reserved for an explicitly reviewed
 cleanup after the retained restore points are revalidated.
 
+Restore points created before the shipping pipeline live in the separate legacy
+`app-backups` tree and require a cross-snapshot pass rather than per-directory
+deletion. Run `Tools/consolidate_legacy_backups.sh` first as a dry run. With
+`--apply`, it selects the fullest integrity-clean database for every schema not
+already represented by a managed backup, creates a standalone normalized image,
+checks exact preserved-table counts and hashes, and only then quarantines the
+redundant folders. `--retire-unusable` includes malformed or empty legacy
+folders after schema coverage succeeds; `--purge-now` removes only recorded
+quarantine entries. Re-run `Tools/maintain_device_backups.sh` and review a clean
+`invalid=0` inventory before an immediate purge.
+
 ## Product target
 
 The app should eventually cover the complete personal loop:

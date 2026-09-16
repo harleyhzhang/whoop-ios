@@ -80,6 +80,47 @@ def protected_backup_paths(state_path: Path, backup_root: Path) -> set[Path]:
     return protected
 
 
+def synchronize_state_backup(state_path: Path, backup: BackupResult) -> bool:
+    """Refresh integrity fields when an in-place compaction preserves a state path."""
+    if not state_path.is_file():
+        return False
+    state = object_dict(load_json(state_path, "device install state"), "device install state")
+    backup_path = Path(backup.path).resolve()
+    changed = False
+    for key in (
+        "latestPreinstallBackup",
+        "latestPostinstallBackup",
+        "lastVerifiedBackup",
+        "lastFullBackup",
+    ):
+        raw = state.get(key)
+        if not isinstance(raw, dict):
+            continue
+        direct_path = raw.get("path")
+        postinstall_path = raw.get("postinstall")
+        matches_direct = (
+            isinstance(direct_path, str) and Path(direct_path).expanduser().resolve() == backup_path
+        )
+        matches_postinstall = (
+            isinstance(postinstall_path, str)
+            and Path(postinstall_path).expanduser().resolve() == backup_path
+        )
+        if not matches_direct and not matches_postinstall:
+            continue
+        raw.update(
+            {
+                "quickCheck": backup.quick_check,
+                "foreignKeyViolations": backup.foreign_key_violations,
+                "schemaVersion": backup.schema_version,
+                "hashes": backup.hashes,
+            }
+        )
+        changed = True
+    if changed:
+        atomic_write_json(state_path, state)
+    return changed
+
+
 def plan_retention(
     backup_root: Path,
     state_path: Path,
@@ -143,6 +184,10 @@ def plan_retention(
 
 def apply_retention(plan: RetentionPlan, backup_root: Path, *, now: datetime | None = None) -> None:
     root = backup_root.resolve()
+    kept = {path.resolve() for path in plan.keep}
+    conflicting = [path for path in (*plan.retire, *plan.retire_unusable) if path.resolve() in kept]
+    if conflicting:
+        raise ShippingError(f"Refusing to retire retained backup: {conflicting[0]}")
     retired_root = root / RETIRED_DIRECTORY
     retired_root.mkdir(parents=True, exist_ok=True, mode=0o700)
     retired_root.chmod(0o700)
@@ -251,6 +296,12 @@ def adopt_legacy_backup(directory: Path) -> BackupResult:
     schema, quick_check, foreign_keys, table_counts = sqlite_checks(standalone)
     if quick_check != "ok" or foreign_keys != 0:
         raise ShippingError(f"Legacy backup failed SQLite checks: {root}")
+    standalone_sidecars = [Path(f"{standalone}{suffix}") for suffix in ("-wal", "-journal")]
+    nonempty_sidecars = [
+        path for path in standalone_sidecars if path.is_file() and path.stat().st_size != 0
+    ]
+    if nonempty_sidecars:
+        raise ShippingError(f"Standalone backup has a nonempty sidecar: {nonempty_sidecars[0]}")
     archive_candidates = sorted(root.rglob("whoop-official-archive.sqlite3"))
     if not archive_candidates:
         raise ShippingError(f"Legacy backup has no official archive: {root}")
@@ -282,6 +333,18 @@ def adopt_legacy_backup(directory: Path) -> BackupResult:
         if telemetry != canonical_telemetry:
             os.replace(telemetry, canonical_telemetry)
         retained.append(canonical_telemetry)
+    diagnostics_candidates = sorted(root.rglob("sleep-diagnostics.json"))
+    if diagnostics_candidates:
+        canonical_diagnostics = root / "sleep-diagnostics.json"
+        if canonical_diagnostics in diagnostics_candidates:
+            diagnostics = canonical_diagnostics
+        elif len(diagnostics_candidates) == 1:
+            diagnostics = diagnostics_candidates[0]
+        else:
+            raise ShippingError(f"Legacy backup has ambiguous diagnostics: {root}")
+        if diagnostics != canonical_diagnostics:
+            os.replace(diagnostics, canonical_diagnostics)
+        retained.append(canonical_diagnostics)
     hashes = {path.name: sha256(path) for path in retained}
     atomic_write_json(root / "SHA256SUMS.json", hashes)
     result = BackupResult(
@@ -298,9 +361,12 @@ def adopt_legacy_backup(directory: Path) -> BackupResult:
         path.chmod(0o600)
     root.chmod(0o700)
     validate_backup_result(result)
-    raw = root / "raw"
-    if raw.is_dir():
-        shutil.rmtree(raw)
+    for transport_name in ("raw", "Sleep"):
+        transport = root / transport_name
+        if transport.is_dir():
+            shutil.rmtree(transport)
+    for suffix in ("-wal", "-shm", "-journal"):
+        Path(f"{canonical_standalone}{suffix}").unlink(missing_ok=True)
     validate_backup_result(result)
     os.utime(root, ns=original_times)
     return result
@@ -364,17 +430,30 @@ def main() -> int:
         for candidate in sorted(backup_root.iterdir()):
             if not candidate.is_dir() or candidate.name in {"shipping-runs", RETIRED_DIRECTORY}:
                 continue
-            if candidate.resolve() in protected:
-                print(f"PROTECTED\t{candidate}")
-                continue
-            if not (candidate / "raw").is_dir() and (candidate / "backup-result.json").is_file():
+            transport_roots = (candidate / "raw", candidate / "Sleep")
+            if (
+                not any(path.is_dir() for path in transport_roots)
+                and (candidate / "backup-result.json").is_file()
+            ):
                 continue
             try:
-                adopt_legacy_backup(candidate)
-                print(f"ADOPTED\t{candidate}")
+                result = adopt_legacy_backup(candidate)
+                synchronized = synchronize_state_backup(state_path, result)
+                label = "ADOPTED-PROTECTED" if candidate.resolve() in protected else "ADOPTED"
+                suffix = "\tstate-synchronized" if synchronized else ""
+                print(f"{label}\t{candidate}{suffix}")
             except (OSError, ShippingError) as error:
                 print(f"UNADOPTED\t{candidate}\t{error}")
-                unusable.append(candidate)
+                manifested = False
+                manifest = candidate / "backup-result.json"
+                if manifest.is_file():
+                    try:
+                        validate_backup_result(backup_from_json(manifest))
+                        manifested = True
+                    except (OSError, ShippingError):
+                        pass
+                if candidate.resolve() not in protected and not manifested:
+                    unusable.append(candidate)
     plan = plan_retention(backup_root, state_path, keep_newest=args.keep_newest)
     if args.retire_unusable:
         if not plan.keep:

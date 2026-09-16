@@ -28,6 +28,24 @@ persisted so a crash during a census does not silently discard the interval.
 The sidecar retains ten daily snapshots and eight days of 15-minute samples.
 Full phone backups validate and hash it when present.
 
+## Backup amplification
+
+A restore point is one validated standalone database plus irreplaceable bounded
+sidecars. The live database/WAL used for transport and the app's recursive
+`migration-backups` directory are temporary inputs, not additional restore
+points. `Tools/maintain_device_backups.sh --apply --adopt-legacy` normalizes
+older managed layouts only after the standalone database and official archive
+pass their checks; if the path is referenced by install state, the rewritten
+hash set is synchronized before the maintenance run completes. A compaction error leaves any already-valid
+manifested or protected backup active and ineligible for unusable cleanup.
+
+The pre-pipeline `app-backups` tree needs global deduplication because the same
+schema-transition image may appear in several later folders. Use
+`Tools/consolidate_legacy_backups.sh`: it selects one fullest valid image for
+each missing schema, materializes and revalidates a standalone copy, then moves
+the old folders into recorded quarantine. This keeps recovery coverage without
+multiplying copied historical databases.
+
 ## Collect and analyze
 
 Analyze any copied sidecar:

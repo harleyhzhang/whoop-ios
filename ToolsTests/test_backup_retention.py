@@ -107,6 +107,29 @@ def test_retention_refuses_unverified_and_outside_state_paths(tmp_path: Path) ->
     assert (root / backup_retention.RETIRED_DIRECTORY / "unusable--broken").is_dir()
 
 
+def test_retention_refuses_a_keep_and_unusable_overlap(tmp_path: Path) -> None:
+    root = tmp_path / "backups"
+    root.mkdir()
+    retained = root / "retained"
+    retained.mkdir()
+    plan = backup_retention.RetentionPlan(
+        keep=(retained,),
+        retire=(),
+        retire_shipping_runs=(),
+        retire_unusable=(retained,),
+        manual_review=(),
+        invalid=(),
+    )
+
+    try:
+        backup_retention.apply_retention(plan, root)
+    except core.ShippingError as error:
+        assert "Refusing to retire retained backup" in str(error)
+    else:
+        raise AssertionError("overlapping retention plan was accepted")
+    assert retained.is_dir()
+
+
 def test_retention_keeps_resumable_and_two_latest_completed_shipping_runs(
     tmp_path: Path,
 ) -> None:
@@ -145,6 +168,63 @@ def test_legacy_adoption_compacts_raw_tree_only_after_validation(tmp_path: Path)
         "sleep-standalone.sqlite3",
         "whoop-official-archive.sqlite3",
     }
+    core.validate_backup_result(result)
+
+
+def test_legacy_adoption_compacts_sleep_tree_and_synchronizes_protected_state(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "backups" / "protected"
+    transport = root / "Sleep"
+    transport.mkdir(parents=True)
+    standalone = root / "sleep-standalone.sqlite3"
+    archive = transport / "whoop-official-archive.sqlite3"
+    diagnostics = transport / "sleep-diagnostics.json"
+    for path, version in ((standalone, 10), (archive, 1)):
+        connection = sqlite3.connect(path)
+        connection.execute(f"PRAGMA user_version = {version}")
+        connection.close()
+    diagnostics.write_text('{"status":"ok"}')
+    (root / "sleep-standalone.sqlite3-shm").write_bytes(b"discardable shared-memory index")
+    hashes = {
+        "sleep-standalone.sqlite3": core.sha256(standalone),
+        "Sleep/whoop-official-archive.sqlite3": core.sha256(archive),
+    }
+    core.atomic_write_json(root / "SHA256SUMS.json", hashes)
+    original = core.BackupResult(
+        path=str(root),
+        standalone_database=str(standalone),
+        schema_version=10,
+        quick_check="ok",
+        foreign_key_violations=0,
+        table_counts={},
+        hashes=hashes,
+    )
+    core.atomic_write_json(root / "backup-result.json", core.backup_to_json(original))
+    state = tmp_path / "state.json"
+    core.atomic_write_json(
+        state,
+        {
+            "latestPostinstallBackup": {
+                "path": str(root),
+                "hashes": hashes,
+                "quickCheck": "ok",
+                "foreignKeyViolations": 0,
+                "schemaVersion": 10,
+            }
+        },
+    )
+
+    result = backup_retention.adopt_legacy_backup(root)
+
+    assert backup_retention.synchronize_state_backup(state, result)
+    assert not transport.exists()
+    assert (root / "whoop-official-archive.sqlite3").is_file()
+    assert (root / "sleep-diagnostics.json").is_file()
+    assert not (root / "sleep-standalone.sqlite3-shm").exists()
+    stored = core.object_dict(core.load_json(state, "state"), "state")
+    latest = core.object_dict(stored["latestPostinstallBackup"], "latest")
+    assert latest["hashes"] == result.hashes
     core.validate_backup_result(result)
 
 
