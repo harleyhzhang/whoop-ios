@@ -386,10 +386,25 @@ discipline, and the limits of historical recovery.
   history, both fitted models, projection, or raw sidecar is absent; CI rejects
   their filenames if staged. The app contains no API client secret or refresh
   token.
+- A private personal Convex project now stores a bounded encrypted disaster-
+  recovery replica. `Tools/convex_replica.py upload` selects the exact
+  `lastVerifiedBackup` from the private install-state file, validates SQLite,
+  packages the database and official-response sidecar, compresses with zstd,
+  encrypts with age, and uploads only ciphertext. The API token and age identity
+  live in macOS Keychain under `com.clintonst.whoop.convex-replica`; Convex keeps
+  the two newest archives. `Tools/convex_replica.py restore <empty-directory>`
+  downloads, decrypts, verifies every recorded hash, and reruns SQLite
+  `quick_check`. Successful physical-phone shipments automatically upload their
+  newly verified snapshot; set `WHOOP_SKIP_CONVEX_REPLICA=1` only for an
+  intentional one-off skip. Backend deployment is manual, never a push/PR CI
+  side effect.
 - Sustained worn live capture, foreground/background persistence, historical
   offload, conservative local sleep finalization, and local notifications work.
   Longer unattended overnight calibration, disconnect recovery, stage models,
-  and backend replication remain.
+  and direct phone-to-backend replication remain. The encrypted Convex bridge
+  currently mirrors verified Mac-side snapshots after physical shipments; it
+  does not yet replace iCloud's automatic backup of phone data collected since
+  the most recent shipment.
 
 ## Immediate milestone
 

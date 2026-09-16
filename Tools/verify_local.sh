@@ -18,7 +18,7 @@ trap cleanup EXIT
 
 cd "$repo_dir"
 
-required_commands=(actionlint gitleaks jq shellcheck swiftlint uv xcodebuild xcodegen)
+required_commands=(actionlint age age-keygen gitleaks jq npm shellcheck swiftlint uv xcodebuild xcodegen zstd)
 for command_name in "${required_commands[@]}"; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     echo "Missing required tool: $command_name. Run: brew bundle --file Brewfile" >&2
@@ -54,6 +54,10 @@ actionlint
 
 echo "Checking Python tools..."
 Tools/check_python.sh
+
+echo "Checking Convex backend types without deploying..."
+npm ci --ignore-scripts --no-audit --no-fund >/dev/null
+npx tsc -p convex/tsconfig.json --noEmit
 
 echo "Checking generated model feature contract..."
 uv run --frozen python Tools/generate_model_features.py --check
