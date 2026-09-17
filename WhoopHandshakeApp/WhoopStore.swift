@@ -2495,32 +2495,26 @@ final class WhoopStore: Sendable, WhoopPacketPersisting {
         return result == SQLITE_DONE ? dateKeys : nil
     }
 
-    /// One-time correction for data written by the old civil-midnight policy.
-    /// Official daily totals stay untouched; only the local raw-sample
-    /// projection is reassigned and rebuilt from retained evidence.
     private func rebuildWakeAnchoredStepDaysIfNeeded() {
         guard let database,
-            metadataValue(database: database, key: "wake-anchored-step-days") != "2"
+            metadataValue(database: database, key: "wake-anchored-step-days") != "3"
         else { return }
         let boundaries = publishedWakeBoundaries(database: database)
         guard !boundaries.isEmpty, execute("BEGIN IMMEDIATE") else { return }
-        guard execute("DELETE FROM whoop_daily_step_metric") else {
+        guard execute("DELETE FROM whoop_daily_step_metric"),
+            execute(WhoopStepDayMigration.civilFallbackSQL)
+        else {
             execute("ROLLBACK")
             return
         }
-        for (index, boundary) in boundaries.enumerated() {
-            let upperBound =
-                boundaries.indices.contains(index + 1)
-                ? boundaries[index + 1].wokeAt.timeIntervalSince1970
-                : nil
-            guard
-                assignStepSamples(
-                    to: boundary.dateKey.rawValue,
-                    from: boundary.wokeAt.timeIntervalSince1970,
-                    until: upperBound,
-                    database: database
-                )
-            else {
+        for interval in WhoopStepDayMigration.intervals(for: boundaries) {
+            let assigned = assignStepSamples(
+                to: interval.dateKey,
+                from: interval.lowerBound,
+                until: interval.upperBound,
+                database: database
+            )
+            guard assigned else {
                 execute("ROLLBACK")
                 return
             }
@@ -2530,7 +2524,7 @@ final class WhoopStore: Sendable, WhoopPacketPersisting {
             setMetadataValue(
                 database: database,
                 key: "wake-anchored-step-days",
-                value: "2"
+                value: "3"
             ),
             execute("COMMIT")
         else {
@@ -2542,9 +2536,8 @@ final class WhoopStore: Sendable, WhoopPacketPersisting {
         if !dateKeys.isEmpty { publishStepUpdate() }
     }
 
-    /// Re-buckets the newly published day's post-wake samples atomically with
-    /// its sleep metrics. Samples before this wake—including after midnight and
-    /// during the just-finished sleep—remain on the preceding day.
+    /// Re-buckets post-wake samples. Samples before the wake—including during
+    /// the just-finished sleep—remain on the preceding day.
     private func assignStepsToPublishedDay(
         _ record: DailyHealthRecord,
         replacingWakeAt previousWakeAt: Date?,
@@ -2609,6 +2602,26 @@ final class WhoopStore: Sendable, WhoopPacketPersisting {
             else { return false }
             affectedDateKeys.formUnion(correctionDateKeys)
             affectedDateKeys.insert(previousDateKey)
+        }
+        if let repair = WhoopStepDayMigration.fallbackRepair(
+            before: wokeAt,
+            boundaries: boundaries
+        ) {
+            guard
+                let fallbackDateKeys = stepDateKeys(
+                    from: repair.lowerBound,
+                    until: lowerBound,
+                    database: database
+                ),
+                assignStepSamples(
+                    to: repair.dateKey,
+                    from: repair.lowerBound,
+                    until: lowerBound,
+                    database: database
+                )
+            else { return false }
+            affectedDateKeys.formUnion(fallbackDateKeys)
+            affectedDateKeys.insert(repair.dateKey)
         }
         for dateKey in affectedDateKeys {
             guard deleteLocalStepMetric(dateKey: dateKey, database: database) else {

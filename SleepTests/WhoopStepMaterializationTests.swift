@@ -51,6 +51,18 @@ extension WhoopSleepStateTests {
         XCTAssertEqual(summary.coverageFraction, 0.25, accuracy: 0.001)
     }
 
+    func testStepSummaryRejectsAmbiguousWrapAcrossLongMissingInterval() {
+        let summary = WhoopStepDaySummary.summarize([
+            WhoopStepCounterSample(timestamp: 0, counter: 8_819),
+            WhoopStepCounterSample(timestamp: 12 * 60 * 60, counter: 15),
+            WhoopStepCounterSample(timestamp: 12 * 60 * 60 + 1, counter: 20),
+        ])
+
+        XCTAssertEqual(summary.stepCount, 5)
+        XCTAssertEqual(summary.counterWrapCount, 0)
+        XCTAssertEqual(summary.rejectedDeltaCount, 1)
+    }
+
     func testCompletedOffloadMaterializesDailyStepsWithProvenance() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

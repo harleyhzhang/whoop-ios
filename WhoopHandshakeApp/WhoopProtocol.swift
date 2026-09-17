@@ -208,13 +208,15 @@ struct WhoopStepCounterSample: Sendable, Equatable {
 }
 
 struct WhoopStepDaySummary: Sendable, Equatable {
-    /// Version 2 changes the day boundary from civil midnight to the latest
-    /// published wake. Counter math is otherwise unchanged.
-    static let algorithmVersion = 2
+    /// Version 3 refuses to infer a 16-bit wrap across an unobserved gap. A
+    /// reset and a true wrap are indistinguishable there, so undercounting the
+    /// gap is safer than fabricating tens of thousands of steps.
+    static let algorithmVersion = 3
     /// A deliberately permissive physiological ceiling. Values above it are
     /// treated as counter resets/corruption rather than tens of thousands of
     /// fabricated steps; ordinary walk/run deltas are far below this bound.
     static let maximumStepsPerSecond = 8.0
+    static let maximumWrapObservationGap: TimeInterval = 5 * 60
 
     let stepCount: Int
     let sampleCount: Int
@@ -263,6 +265,11 @@ struct WhoopStepDaySummary: Sendable, Equatable {
             let elapsed = current.timestamp - previous.timestamp
             guard elapsed > 0 else { continue }
             gapSeconds += max(0, Int(elapsed.rounded(.down)) - 1)
+            let decreased = current.counter < previous.counter
+            guard !decreased || elapsed <= maximumWrapObservationGap else {
+                rejected += 1
+                continue
+            }
             let delta = Int(current.counter &- previous.counter)
             let maximumPlausible = max(8, Int(ceil(elapsed * maximumStepsPerSecond)))
             guard delta <= maximumPlausible else {
@@ -270,7 +277,7 @@ struct WhoopStepDaySummary: Sendable, Equatable {
                 continue
             }
             steps += delta
-            if current.counter < previous.counter, delta > 0 { wraps += 1 }
+            if decreased, delta > 0 { wraps += 1 }
         }
 
         let span = max(1, Int((last.timestamp - first.timestamp).rounded(.down)) + 1)
@@ -294,9 +301,12 @@ struct WhoopWakeBoundary: Sendable, Equatable {
 }
 
 enum WhoopPhysiologicalDay {
-    /// A day starts only when a completed sleep is published. Until then,
-    /// including after civil midnight and throughout sleep, movement remains
-    /// part of the preceding wake-to-sleep day.
+    static let maximumOpenDayDuration: TimeInterval = 24 * 60 * 60
+
+    /// A completed sleep remains the authoritative boundary. If no later wake
+    /// exists, an open day falls back to civil dates after 24 hours so a missed
+    /// sleep cannot accumulate forever. Once a later sleep is published, its
+    /// real wake boundary wins and the store repairs the temporary fallback.
     static func dateKey(
         for sampleAt: Date,
         publishedWakes: [WhoopWakeBoundary],
@@ -312,7 +322,13 @@ enum WhoopPhysiologicalDay {
                 upper = middle
             }
         }
-        return lower > 0 ? publishedWakes[lower - 1].dateKey : civilFallback
+        guard lower > 0 else { return civilFallback }
+        let latest = publishedWakes[lower - 1]
+        let laterWakeIsKnown = lower < publishedWakes.count
+        if laterWakeIsKnown || sampleAt.timeIntervalSince(latest.wokeAt) < maximumOpenDayDuration {
+            return latest.dateKey
+        }
+        return civilFallback
     }
 }
 
