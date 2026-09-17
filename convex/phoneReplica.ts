@@ -2,7 +2,10 @@ import { v } from "convex/values";
 
 import { internalMutation, internalQuery } from "./_generated/server";
 
-const retainedSnapshotCount = 2;
+// File storage is shared with the independent age-encrypted Mac archive. Keep
+// one complete direct snapshot so both recovery formats fit below the free
+// deployment's hard 1 GB cap.
+const retainedSnapshotCount = 1;
 const maximumChunkCount = 512;
 
 export const missingChunks = internalQuery({
@@ -80,16 +83,15 @@ export const commitSnapshot = internalMutation({
         query.eq("sourceFingerprint", args.sourceFingerprint),
       )
       .unique();
-    if (existing !== null) {
-      return { reused: true };
+    const reused = existing !== null;
+    if (!reused) {
+      await ctx.db.insert("phoneReplicaSnapshots", {
+        ...args,
+        compression: "zlib",
+        encryption: "aes-gcm-v1",
+        format: 1,
+      });
     }
-
-    await ctx.db.insert("phoneReplicaSnapshots", {
-      ...args,
-      compression: "zlib",
-      encryption: "aes-gcm-v1",
-      format: 1,
-    });
     const snapshots = await ctx.db
       .query("phoneReplicaSnapshots")
       .withIndex("by_created_at")
@@ -107,7 +109,7 @@ export const commitSnapshot = internalMutation({
         await ctx.db.delete(chunk._id);
       }
     }
-    return { reused: false };
+    return { reused };
   },
 });
 
