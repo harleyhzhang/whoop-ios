@@ -2,7 +2,10 @@ import { v } from "convex/values";
 
 import { internalMutation, internalQuery } from "./_generated/server";
 
-const retainedArchiveCount = 2;
+// The free deployment has a 1 GB file-storage cap shared with the direct phone
+// replica. One current age archive plus one current chunked phone snapshot are
+// independent recovery formats without retaining redundant full generations.
+const retainedArchiveCount = 1;
 
 export const generateUploadUrl = internalMutation({
   args: {},
@@ -31,6 +34,15 @@ export const commit = internalMutation({
     if (existing !== null) {
       if (existing.storageId !== args.storageId) {
         await ctx.storage.delete(args.storageId);
+      }
+      const archives = await ctx.db
+        .query("replicaArchives")
+        .withIndex("by_created_at")
+        .order("desc")
+        .collect();
+      for (const stale of archives.slice(retainedArchiveCount)) {
+        await ctx.storage.delete(stale.storageId);
+        await ctx.db.delete(stale._id);
       }
       return { archiveId: existing._id, reused: true };
     }

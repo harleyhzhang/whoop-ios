@@ -392,7 +392,7 @@ discipline, and the limits of historical recovery.
   packages the database and official-response sidecar, compresses with zstd,
   encrypts with age, and uploads only ciphertext. The API token and age identity
   live in macOS Keychain under `com.clintonst.whoop.convex-replica`; Convex keeps
-  the two newest archives. `Tools/convex_replica.py restore <empty-directory>`
+  the newest archive. `Tools/convex_replica.py restore <empty-directory>`
   downloads, decrypts, verifies every recorded hash, and reruns SQLite
   `quick_check`. Successful physical-phone shipments automatically upload their
   newly verified snapshot; set `WHOOP_SKIP_CONVEX_REPLICA=1` only for an
@@ -412,8 +412,10 @@ discipline, and the limits of historical recovery.
 - The phone uses a separate write-only bearer token. Its token and encryption
   key are injected only into signed personal device builds from macOS Keychain;
   neither value is committed. The Mac API token alone can list and download
-  snapshots. Convex retains the two newest manifests and deletes encrypted
-  chunks no retained manifest references.
+  snapshots. Convex retains the newest manifest and deletes encrypted chunks it
+  no longer references. Together with the newest independent age archive, this
+  keeps two recovery formats while respecting the free deployment's shared
+  1 GB file-storage cap.
 - `uv run --frozen python Tools/phone_replica.py status` inspects the bounded
   replica. `... seed [database]` seeds it from a verified Mac snapshot so the
   first phone run uploads only changed chunks. `... restore <empty-directory>`
