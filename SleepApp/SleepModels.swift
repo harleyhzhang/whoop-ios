@@ -175,8 +175,9 @@ struct DailyRecoveryRecord: Hashable, Identifiable, Sendable {
     }
 }
 
-/// One coherent, wake-published dashboard day. While a new sleep is still being
-/// detected or corrected, the last completely published day stays visible.
+/// One coherent, wake-published dashboard day. A later step-only day represents
+/// an explicit missed-sleep fallback: movement remains visible while sleep and
+/// recovery stay blank rather than being invented or carried forward.
 struct PublishedDashboardDay: Sendable {
     let health: DailyHealthRecord?
     let steps: DailyStepRecord?
@@ -187,6 +188,23 @@ struct PublishedDashboardDay: Sendable {
         stepRecords: [DailyStepRecord],
         recoveryRecords: [DailyRecoveryRecord]
     ) {
+        if let latestSteps = stepRecords.last,
+            let latestStepKey = DayKey(rawValue: latestSteps.dateKey)
+        {
+            let latestHealthKey = healthRecords.last.flatMap {
+                DayKey(rawValue: $0.dateKey)
+            }
+            let displaysMissedSleepDay =
+                latestHealthKey.map {
+                    latestStepKey.rawValue > $0.rawValue
+                } ?? true
+            if displaysMissedSleepDay {
+                self.health = nil
+                self.steps = latestSteps
+                self.recovery = nil
+                return
+            }
+        }
         guard let health = healthRecords.last,
             let dayKey = DayKey(rawValue: health.dateKey),
             let steps = stepRecords.last(where: { DayKey(rawValue: $0.dateKey) == dayKey }),
@@ -203,7 +221,7 @@ struct PublishedDashboardDay: Sendable {
         self.recovery = recovery
     }
 
-    var date: Date? { health?.date }
+    var date: Date? { health?.date ?? steps?.date }
 }
 
 /// One database-generation of every history family consumed by the dashboard.
