@@ -53,6 +53,7 @@ enum WhoopDeploymentHealthReporter {
                 current.quickCheck == "ok",
                 current.foreignKeyViolations == 0
             {
+                WhoopReplicaRecovery.finalizeIfHealthy(databaseURL: databaseURL)
                 return
             }
             for attempt in 0..<30 {
@@ -63,6 +64,7 @@ enum WhoopDeploymentHealthReporter {
                         sourceCommit: sourceCommit
                     )
                     try write(report, to: reportURL)
+                    WhoopReplicaRecovery.finalizeIfHealthy(databaseURL: databaseURL)
                     return
                 } catch {
                     if attempt == 29 {

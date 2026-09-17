@@ -19,6 +19,7 @@ struct RootView: View {
     @State private var chartState = DashboardChartState()
     @State private var history = HealthHistoryModel()
     var whoopCollector: WhoopHandshakeProbe
+    let replicaCoordinator: WhoopReplicaCoordinator
 
     private var publishedDay: PublishedDashboardDay {
         DashboardCurrentDayPolicy.displayedDay(
@@ -70,6 +71,7 @@ struct RootView: View {
             history.reload()
             whoopCollector.refreshHistoricalData()
             WhoopStore.shared.writeSleepDiagnostics()
+            replicaCoordinator.requestSync(reason: .foreground)
         }
         .onReceive(NotificationCenter.default.publisher(for: .whoopDailyHealthUpdated)) {
             notification in
@@ -137,5 +139,9 @@ struct RootView: View {
 }
 
 #Preview {
-    RootView(whoopCollector: WhoopHandshakeProbe())
+    let coordinator = WhoopReplicaCoordinator(configuration: nil, sourceURL: nil)
+    RootView(
+        whoopCollector: WhoopHandshakeProbe(replicaScheduler: coordinator),
+        replicaCoordinator: coordinator
+    )
 }

@@ -18,6 +18,7 @@ final class WhoopStore: Sendable, WhoopPacketPersisting {
     private static let logger = Logger(subsystem: "com.clintonst.sideload.sleep", category: "WhoopStore")
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
     private static let currentSchemaVersion = 10
+    static let expectedSchemaVersion = currentSchemaVersion
     private static let decoderVersion = 3
 
     private var queue: DispatchQueue { sqlite.queue }
@@ -378,6 +379,10 @@ final class WhoopStore: Sendable, WhoopPacketPersisting {
         let directory = base.appendingPathComponent("Sleep", isDirectory: true)
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
+    }
+
+    static func productionDatabaseURL() -> URL? {
+        databaseDirectory()?.appendingPathComponent("sleep.sqlite3")
     }
 
     private func initializeDatabase(

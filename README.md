@@ -398,13 +398,40 @@ discipline, and the limits of historical recovery.
   newly verified snapshot; set `WHOOP_SKIP_CONVEX_REPLICA=1` only for an
   intentional one-off skip. Backend deployment is manual, never a push/PR CI
   side effect.
+- The iPhone also maintains a direct encrypted replica without making the
+  backend part of collection or scoring. At launch, after a published sleep,
+  and while new packets arrive, a throttled coordinator creates a consistent
+  SQLite online-backup snapshot on a separate connection. It divides that
+  snapshot into position-bound 8 MiB chunks, compresses each chunk with zlib,
+  encrypts it with AES-GCM, and uploads only chunks the backend does not already
+  have. The source fingerprint and chunk IDs are keyed HMACs, so Convex never
+  receives raw health data or ordinary plaintext hashes. Routine sync is capped
+  at once per six hours; a newly published sleep can advance it after one hour,
+  and failures back off for fifteen minutes. The app remains fully useful when
+  every network operation fails.
+- The phone uses a separate write-only bearer token. Its token and encryption
+  key are injected only into signed personal device builds from macOS Keychain;
+  neither value is committed. The Mac API token alone can list and download
+  snapshots. Convex retains the two newest manifests and deletes encrypted
+  chunks no retained manifest references.
+- `uv run --frozen python Tools/phone_replica.py status` inspects the bounded
+  replica. `... seed [database]` seeds it from a verified Mac snapshot so the
+  first phone run uploads only changed chunks. `... restore <empty-directory>`
+  reconstructs the exact SQLite file, authenticates every chunk and the whole
+  source, and reruns SQLite `quick_check`.
+- `Tools/restore_phone_from_convex.sh --apply` is the guarded physical-device
+  recovery path. It requires wired migration-grade checks, takes a verified
+  pre-recovery device backup, downloads and verifies Convex, stages the database
+  into the app container, launches the app's fail-safe atomic swap, waits for a
+  fresh commit-bound health report, takes a post-recovery backup, and rejects
+  any preserved table whose row count fell below the recovered snapshot. The
+  app retains its on-device rollback until that health report succeeds.
 - Sustained worn live capture, foreground/background persistence, historical
-  offload, conservative local sleep finalization, and local notifications work.
-  Longer unattended overnight calibration, disconnect recovery, stage models,
-  and direct phone-to-backend replication remain. The encrypted Convex bridge
-  currently mirrors verified Mac-side snapshots after physical shipments; it
-  does not yet replace iCloud's automatic backup of phone data collected since
-  the most recent shipment.
+  offload, conservative local sleep finalization, local notifications, and
+  direct encrypted phone replication work. Longer unattended overnight
+  calibration, disconnect recovery, and stage models remain. Keep iCloud Backup
+  enabled until the direct path has completed on the physical phone and the
+  guarded phone recovery drill has passed there.
 
 ## Immediate milestone
 

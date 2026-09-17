@@ -69,6 +69,17 @@ runtime decoding ahead of the external private-file replacement boundary.
   read-only WAL connection so projection maintenance cannot stall the dashboard.
 - `WhoopRuntimeDiagnostics.swift` records MetricKit payloads locally and exposes
   signposts for storage open, batch commits, and dashboard reads.
+- `WhoopReplicaCoordinator.swift` is the throttled, failure-isolated network
+  orchestrator. `WhoopReplicaSnapshotter.swift` opens a separate SQLite read
+  connection and produces a standalone online-backup image without becoming a
+  second writer. `WhoopReplicaModels.swift` owns the keyed chunk identity,
+  compression, encryption, and schedule policy; `WhoopReplicaClient.swift`
+  owns the narrow write-only HTTP boundary. Convex receives only AES-GCM
+  ciphertext, keyed identifiers, sizes, and schema metadata.
+- `WhoopReplicaRecovery.swift` applies only a separately staged, integrity-
+  checked schema-compatible database before the store opens. It preserves the
+  former database as an on-device rollback and removes that rollback only after
+  the normal deployment-health reporter verifies the recovered store.
 - `WhoopBackfillPlanner.swift` owns bounded recovery history and the single-pass
   sleep-range index used by model backfills.
 - `WhoopStore.swift` remains the persistence façade while schema migration,
@@ -96,6 +107,11 @@ Framework APIs belong behind small adapters so decisions can be unit tested.
    completion may publish an acknowledgement decision to the main actor.
 5. A durable `HISTORY_COMPLETE` permits finalization and snapshot publication.
 6. SwiftUI observes the published snapshot; it does not infer missing evidence.
+7. Replica scheduling observes successful persistence but never participates in
+   the persist-before-ACK path. It snapshots through SQLite's online-backup API,
+   deduplicates fixed-position chunks with keyed HMAC-SHA256 identifiers, and
+   uploads compressed AES-GCM ciphertext. Failure changes only replica
+   freshness; it cannot block collection, acknowledgement, scoring, or UI.
 
 Battery transport follows the same coherence rule: a typed `BatteryObservation`
 carries level plus charging state from the serial transport snapshot through the

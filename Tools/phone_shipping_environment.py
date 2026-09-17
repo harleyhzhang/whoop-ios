@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import os
 import plistlib
 import re
@@ -570,4 +571,17 @@ def validate_staged_app(
             raise ShippingError(
                 f"Bundled private asset does not match its validated source: {name}"
             )
+    replica_path = app_path / "whoop-replica-config.json"
+    if not replica_path.is_file():
+        raise ShippingError("The signed device build has no phone replica configuration.")
+    replica = object_dict(load_json(replica_path, "phone replica configuration"), "phone replica")
+    site_url = required_string(replica, "siteURL", "phone replica")
+    upload_token = required_string(replica, "uploadToken", "phone replica")
+    encoded_key = required_string(replica, "encryptionKeyBase64", "phone replica")
+    try:
+        decoded_key = base64.b64decode(encoded_key, validate=True)
+    except ValueError as error:
+        raise ShippingError("The phone replica encryption key is not valid base64.") from error
+    if not site_url.startswith("https://") or len(upload_token) < 32 or len(decoded_key) != 32:
+        raise ShippingError("The phone replica configuration is structurally invalid.")
     return BuildResult(app_path=app_path, version=version, build=build)
