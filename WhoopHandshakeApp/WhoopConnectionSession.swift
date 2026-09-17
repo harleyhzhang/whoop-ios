@@ -1,5 +1,12 @@
 import Foundation
 
+enum WhoopReconnectPolicy {
+    static func delaySeconds(forAttempt attempt: Int) -> Double {
+        let boundedAttempt = min(max(attempt, 0), 5)
+        return min(60, pow(2, Double(boundedAttempt + 1)))
+    }
+}
+
 struct WhoopConnectionSession: Equatable, Sendable {
     struct Token: Equatable, Sendable {
         let generation: UInt64

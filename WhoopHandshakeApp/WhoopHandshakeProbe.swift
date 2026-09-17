@@ -4,13 +4,6 @@ import OSLog
 import Observation
 import UIKit
 
-enum WhoopReconnectPolicy {
-    static func delaySeconds(forAttempt attempt: Int) -> Double {
-        let boundedAttempt = min(max(attempt, 0), 5)
-        return min(60, pow(2, Double(boundedAttempt + 1)))
-    }
-}
-
 @MainActor
 @Observable
 final class WhoopHandshakeProbe: NSObject {
@@ -57,6 +50,7 @@ final class WhoopHandshakeProbe: NSObject {
     @ObservationIgnored private var lastHistoricalAcknowledgementAt: Date?
     @ObservationIgnored private var lastSleepAnalysisAt: Date?
     @ObservationIgnored private var lastFinalizedSleepID: String?
+    @ObservationIgnored private weak var replicaScheduler: WhoopReplicaScheduling?
     private let store = WhoopStore.shared
     @ObservationIgnored private lazy var transportPipeline = WhoopTransportPipeline(
         store: store,
@@ -99,7 +93,8 @@ final class WhoopHandshakeProbe: NSObject {
     private let clientHello = Data(WhoopCommand.clientHello.frame(sequence: 0x01))
     private static let logger = Logger(subsystem: "com.clintonst.sleep", category: "WhoopHandshake")
 
-    override init() {
+    init(replicaScheduler: WhoopReplicaScheduling? = nil) {
+        self.replicaScheduler = replicaScheduler
         super.init()
         restoreCachedTelemetry()
         record("Probe initialized")
@@ -187,6 +182,7 @@ final class WhoopHandshakeProbe: NSObject {
                     self.lastFinalizedSleepID = record.sleepID
                     WhoopNotificationManager.shared.sendMorningSummary(for: record)
                     WhoopHealthHistoryEvents.post(.dayPublished(record))
+                    self.replicaScheduler?.requestSync(reason: .sleepPublished)
                 }
             }
         }
@@ -268,6 +264,7 @@ final class WhoopHandshakeProbe: NSObject {
             WhoopNotificationManager.shared.observeWristState(isWorn: isWorn)
             record("Wrist state: \(isWorn ? "on" : "off")")
         }
+        replicaScheduler?.requestSync(reason: .dataChanged)
         let belongsToCurrentOffload =
             summary.offloadSessionID == nil
             || summary.offloadSessionID == historicalSync.sessionID

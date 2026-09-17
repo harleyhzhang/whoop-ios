@@ -9,6 +9,7 @@
  */
 
 import type * as http from "../http.js";
+import type * as phoneReplica from "../phoneReplica.js";
 import type * as replica from "../replica.js";
 
 import type {
@@ -19,6 +20,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   http: typeof http;
+  phoneReplica: typeof phoneReplica;
   replica: typeof replica;
 }>;
 
