@@ -236,6 +236,17 @@ extension WhoopSleepStateTests {
     }
 
     @MainActor
+    func testChartTransitionsUseQuickerHighCadenceTiming() {
+        let revealDuration = DashboardChartState.revealDuration
+        let releaseFrameCount = DashboardChartState.releaseFrameCount
+        let releaseFrameDuration = DashboardChartState.releaseFrameDuration
+
+        XCTAssertEqual(revealDuration, 0.22, accuracy: 0.001)
+        XCTAssertEqual(releaseFrameCount, 34)
+        XCTAssertEqual(releaseFrameDuration, .milliseconds(8))
+    }
+
+    @MainActor
     func testReleaseKeepsVisualSelectionUntilEndpointAnimationFinishes() async {
         let state = DashboardChartState()
         let date = Date(timeIntervalSinceReferenceDate: 123)

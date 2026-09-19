@@ -4,9 +4,9 @@ import SwiftUI
 @Observable
 @MainActor
 final class DashboardChartState {
-    private static let revealDuration = 0.28
-    private static let releaseFrameCount = 34
-    private static let releaseFrameDuration = Duration.milliseconds(10)
+    static let revealDuration = 0.22
+    static let releaseFrameCount = 34
+    static let releaseFrameDuration = Duration.milliseconds(8)
 
     var selectedDate: Date?
     var activeMetric: MetricKind?
