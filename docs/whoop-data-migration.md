@@ -10,8 +10,9 @@ measurement.
 
 The current implementation contract is schema 10 and automatic-only sleep
 publication. There is no manual Process control or loading state: explicit
-awake evidence finalizes immediately, ambiguous `up` evidence waits ten
-minutes, and sleep returning within 90 minutes silently grows the same night.
+awake evidence and a current ambiguous `up` sample finalize immediately, and
+sleep returning within 90 minutes grows the same night and replaces that date's
+morning notification with the corrected summary.
 A completed main sleep also reopens when sleep returns within two hours on the
 same local morning before noon.
 
