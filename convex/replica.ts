@@ -2,62 +2,40 @@ import { v } from "convex/values";
 
 import { internalMutation, internalQuery } from "./_generated/server";
 
-// The free deployment has a 1 GB file-storage cap shared with the direct phone
-// replica. One current age archive plus one current chunked phone snapshot are
-// independent recovery formats without retaining redundant full generations.
-const retainedArchiveCount = 1;
-
-export const generateUploadUrl = internalMutation({
-  args: {},
-  returns: v.string(),
-  handler: async (ctx) => await ctx.storage.generateUploadUrl(),
-});
-
-export const commit = internalMutation({
+// Full age-encrypted archives now live in independent offsite cold storage.
+// Convex retains only the current chunked phone replica. This mutation removes
+// the legacy archive only when the caller pins both it and the newer surviving
+// phone snapshot, so a stale maintenance command cannot delete the wrong copy.
+export const retire = internalMutation({
   args: {
-    createdAt: v.number(),
-    encryptedBytes: v.number(),
-    encryptedSha256: v.string(),
-    idempotencyKey: v.string(),
-    schemaVersion: v.number(),
-    sourceBytes: v.number(),
-    sourceCommit: v.optional(v.string()),
-    sourceSha256: v.string(),
-    storageId: v.id("_storage"),
+    expectedArchiveId: v.id("replicaArchives"),
+    expectedEncryptedSha256: v.string(),
+    expectedPhoneFingerprint: v.string(),
   },
-  returns: v.object({ archiveId: v.id("replicaArchives"), reused: v.boolean() }),
+  returns: v.object({ deletedEncryptedBytes: v.number() }),
   handler: async (ctx, args) => {
-    const existing = await ctx.db
-      .query("replicaArchives")
-      .withIndex("by_idempotency_key", (query) => query.eq("idempotencyKey", args.idempotencyKey))
-      .unique();
-    if (existing !== null) {
-      if (existing.storageId !== args.storageId) {
-        await ctx.storage.delete(args.storageId);
-      }
-      const archives = await ctx.db
-        .query("replicaArchives")
-        .withIndex("by_created_at")
-        .order("desc")
-        .collect();
-      for (const stale of archives.slice(retainedArchiveCount)) {
-        await ctx.storage.delete(stale.storageId);
-        await ctx.db.delete(stale._id);
-      }
-      return { archiveId: existing._id, reused: true };
+    const archive = await ctx.db.get(args.expectedArchiveId);
+    if (archive === null || archive.encryptedSha256 !== args.expectedEncryptedSha256) {
+      throw new Error("archive_changed");
     }
-
-    const archiveId = await ctx.db.insert("replicaArchives", args);
-    const archives = await ctx.db
-      .query("replicaArchives")
+    const phone = await ctx.db
+      .query("phoneReplicaSnapshots")
       .withIndex("by_created_at")
       .order("desc")
-      .collect();
-    for (const stale of archives.slice(retainedArchiveCount)) {
-      await ctx.storage.delete(stale.storageId);
-      await ctx.db.delete(stale._id);
+      .first();
+    if (phone === null || phone.sourceFingerprint !== args.expectedPhoneFingerprint) {
+      throw new Error("phone_snapshot_changed");
     }
-    return { archiveId, reused: false };
+    if (
+      phone.createdAt < archive.createdAt ||
+      phone.schemaVersion < archive.schemaVersion ||
+      phone.sourceBytes < archive.sourceBytes
+    ) {
+      throw new Error("phone_snapshot_not_newer");
+    }
+    await ctx.storage.delete(archive.storageId);
+    await ctx.db.delete(archive._id);
+    return { deletedEncryptedBytes: archive.encryptedBytes };
   },
 });
 

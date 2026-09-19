@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Upload and restore encrypted WHOOP SQLite snapshots through Convex.
+"""Export, verify, restore, and retire encrypted WHOOP recovery archives.
 
-Convex stores only an age-encrypted zstd archive. The API token and age identity
-live in the macOS Keychain, never in Git or ordinary configuration files.
+The current phone replica remains in Convex. Full age-encrypted archives live
+in independent offsite cold storage so they do not compete with the phone
+replica for Convex's 1 GB file-storage allowance. Secrets remain in macOS
+Keychain and archive payloads remain ciphertext outside this process.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -36,15 +39,7 @@ def sha256_file(path: Path) -> str:
 
 def keychain_value(account: str) -> str:
     result = subprocess.run(
-        [
-            "security",
-            "find-generic-password",
-            "-a",
-            account,
-            "-s",
-            KEYCHAIN_SERVICE,
-            "-w",
-        ],
+        ["security", "find-generic-password", "-a", account, "-s", KEYCHAIN_SERVICE, "-w"],
         check=True,
         capture_output=True,
         text=True,
@@ -73,12 +68,9 @@ def request_json(
         f"{site_url}{path}",
         data=encoded,
         method=method,
-        headers={
-            "authorization": f"Bearer {token}",
-            "content-type": "application/json",
-        },
+        headers={"authorization": f"Bearer {token}", "content-type": "application/json"},
     )
-    with urllib.request.urlopen(request, timeout=60) as response:
+    with urllib.request.urlopen(request, timeout=90) as response:
         return cast(dict[str, Any], json.loads(response.read()))
 
 
@@ -137,6 +129,9 @@ def create_archive(database: Path, output: Path) -> dict[str, Any]:
     schema_version, source_bytes = sqlite_metadata(database)
     source_sha256 = sha256_file(database)
     sidecar = matching_sidecar(database)
+    if sidecar is None:
+        raise RuntimeError(f"Verified snapshot has no official-response sidecar: {database.parent}")
+    sidecar_schema, sidecar_bytes = sqlite_metadata(sidecar)
     manifest: dict[str, Any] = {
         "format": 1,
         "createdAt": int(time.time() * 1000),
@@ -146,30 +141,36 @@ def create_archive(database: Path, output: Path) -> dict[str, Any]:
             "sha256": source_sha256,
             "schemaVersion": schema_version,
         },
-    }
-    if sidecar is not None:
-        manifest["officialArchive"] = {
+        "officialArchive": {
             "path": "whoop-official-archive.sqlite3",
-            "bytes": sidecar.stat().st_size,
+            "bytes": sidecar_bytes,
             "sha256": sha256_file(sidecar),
-        }
+            "schemaVersion": sidecar_schema,
+        },
+    }
 
     identity = age_identity()
     recipient = age_recipient(identity)
-    with tempfile.TemporaryDirectory(prefix="whoop-convex-stage-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="whoop-offsite-stage-") as temporary:
         staging = Path(temporary)
         os.link(database, staging / "sleep.sqlite3")
-        names = ["manifest.json", "sleep.sqlite3"]
-        if sidecar is not None:
-            os.link(sidecar, staging / "whoop-official-archive.sqlite3")
-            names.append("whoop-official-archive.sqlite3")
+        os.link(sidecar, staging / "whoop-official-archive.sqlite3")
         (staging / "manifest.json").write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
 
         tar = subprocess.Popen(
-            ["tar", "-C", str(staging), "-cf", "-", *names],
+            [
+                "tar",
+                "-C",
+                str(staging),
+                "-cf",
+                "-",
+                "manifest.json",
+                "sleep.sqlite3",
+                "whoop-official-archive.sqlite3",
+            ],
             stdout=subprocess.PIPE,
         )
         zstd = subprocess.Popen(
@@ -199,103 +200,49 @@ def create_archive(database: Path, output: Path) -> dict[str, Any]:
     return manifest
 
 
-def upload_file(upload_url: str, archive: Path) -> str:
-    result = subprocess.run(
-        [
-            "curl",
-            "--fail-with-body",
-            "--silent",
-            "--show-error",
-            "--request",
-            "POST",
-            "--header",
-            "Content-Type: application/octet-stream",
-            "--data-binary",
-            f"@{archive}",
-            upload_url,
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    response = json.loads(result.stdout)
-    return str(response["storageId"])
+def manifest_entry(manifest: dict[str, Any], key: str) -> dict[str, Any]:
+    entry = manifest.get(key)
+    if not isinstance(entry, dict):
+        raise RuntimeError(f"Archive manifest has no {key} entry")
+    if not isinstance(entry.get("path"), str):
+        raise RuntimeError(f"Archive manifest {key} path is invalid")
+    if not isinstance(entry.get("bytes"), int) or not isinstance(entry.get("sha256"), str):
+        raise RuntimeError(f"Archive manifest {key} integrity fields are invalid")
+    return cast(dict[str, Any], entry)
 
 
-def upload(database: Path, site_url: str, token: str) -> None:
-    schema_version, source_bytes = sqlite_metadata(database)
-    source_sha256 = sha256_file(database)
-    try:
-        latest = request_json(site_url, "/v1/archive/latest", token)
-        if latest["archive"]["sourceSha256"] == source_sha256:
-            print(f"Already current: {database} ({source_sha256[:12]})")
-            return
-    except urllib.error.HTTPError as error:
-        if error.code != 404:
-            raise
+def validate_extracted_archive(destination: Path) -> dict[str, Any]:
+    manifest_path = destination / "manifest.json"
+    if not manifest_path.is_file():
+        raise RuntimeError("Encrypted archive has no manifest")
+    manifest = cast(dict[str, Any], json.loads(manifest_path.read_text(encoding="utf-8")))
+    if manifest.get("format") != 1:
+        raise RuntimeError("Unsupported encrypted archive format")
 
-    with tempfile.TemporaryDirectory(prefix="whoop-convex-upload-") as temporary:
-        encrypted = Path(temporary) / "whoop-replica.tar.zst.age"
-        manifest = create_archive(database, encrypted)
-        upload_url = request_json(
-            site_url,
-            "/v1/archive/upload-url",
-            token,
-            method="POST",
-            body={},
-        )["uploadUrl"]
-        storage_id = upload_file(upload_url, encrypted)
-        commit = request_json(
-            site_url,
-            "/v1/archive/commit",
-            token,
-            method="POST",
-            body={
-                "createdAt": manifest["createdAt"],
-                "encryptedBytes": manifest["encryptedBytes"],
-                "encryptedSha256": manifest["encryptedSha256"],
-                "idempotencyKey": source_sha256,
-                "schemaVersion": schema_version,
-                "sourceBytes": source_bytes,
-                "sourceSha256": source_sha256,
-                "storageId": storage_id,
-            },
-        )
-    print(
-        "Uploaded encrypted WHOOP replica "
-        f"{source_sha256[:12]} ({manifest['encryptedBytes'] / 1024 / 1024:.1f} MiB); "
-        f"reused={commit['reused']}"
-    )
+    for key in ("database", "officialArchive"):
+        entry = manifest_entry(manifest, key)
+        source = destination / cast(str, entry["path"])
+        if not source.is_file() or source.stat().st_size != entry["bytes"]:
+            raise RuntimeError(f"Restored {key} byte count does not match its manifest")
+        if sha256_file(source) != entry["sha256"]:
+            raise RuntimeError(f"Restored {key} SHA-256 does not match its manifest")
+        schema, _ = sqlite_metadata(source)
+        expected_schema = entry.get("schemaVersion")
+        if isinstance(expected_schema, int) and schema != expected_schema:
+            raise RuntimeError(f"Restored {key} schema does not match its manifest")
+    return manifest
 
 
-def restore(destination: Path, site_url: str, token: str) -> None:
-    latest = request_json(site_url, "/v1/archive/latest", token)
-    archive = latest["archive"]
+def extract_archive(archive: Path, destination: Path) -> dict[str, Any]:
+    if destination.exists() and any(destination.iterdir()):
+        raise RuntimeError(f"Restore destination must be empty: {destination}")
     destination.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="whoop-convex-restore-") as temporary:
-        temporary_path = Path(temporary)
-        encrypted = temporary_path / "whoop-replica.tar.zst.age"
-        subprocess.run(
-            [
-                "curl",
-                "--fail-with-body",
-                "--silent",
-                "--show-error",
-                "--location",
-                "--output",
-                str(encrypted),
-                latest["downloadUrl"],
-            ],
-            check=True,
-        )
-        if sha256_file(encrypted) != archive["encryptedSha256"]:
-            raise RuntimeError("Encrypted archive SHA-256 does not match Convex metadata")
-
-        identity_path = temporary_path / "age-identity.txt"
+    with tempfile.TemporaryDirectory(prefix="whoop-offsite-identity-") as temporary:
+        identity_path = Path(temporary) / "age-identity.txt"
         identity_path.write_text(age_identity() + "\n", encoding="utf-8")
         identity_path.chmod(0o600)
         age = subprocess.Popen(
-            ["age", "-d", "-i", str(identity_path), str(encrypted)],
+            ["age", "-d", "-i", str(identity_path), str(archive)],
             stdout=subprocess.PIPE,
         )
         zstd = subprocess.Popen(
@@ -318,13 +265,175 @@ def restore(destination: Path, site_url: str, token: str) -> None:
             raise RuntimeError(
                 f"Restore pipeline failed: age={age_status} zstd={zstd_status} tar={tar.returncode}"
             )
+    return validate_extracted_archive(destination)
 
-    manifest = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
-    restored_database = destination / manifest["database"]["path"]
-    sqlite_metadata(restored_database)
-    if sha256_file(restored_database) != manifest["database"]["sha256"]:
-        raise RuntimeError("Restored SQLite SHA-256 does not match its manifest")
-    print(f"Restored and verified {restored_database}")
+
+def verify_archive(archive: Path) -> dict[str, Any]:
+    if not archive.is_file():
+        raise RuntimeError(f"Encrypted archive does not exist: {archive}")
+    with tempfile.TemporaryDirectory(prefix="whoop-offsite-verify-") as temporary:
+        return extract_archive(archive, Path(temporary))
+
+
+def export_archive(database: Path, output: Path) -> dict[str, Any]:
+    if output.exists():
+        raise RuntimeError(f"Refusing to overwrite encrypted archive: {output}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix="whoop-offsite-export-", dir=output.parent
+    ) as temporary:
+        candidate = Path(temporary) / output.name
+        expected = create_archive(database, candidate)
+        actual = verify_archive(candidate)
+        if manifest_entry(expected, "database") != manifest_entry(actual, "database"):
+            raise RuntimeError("Verified archive database manifest changed during export")
+        if manifest_entry(expected, "officialArchive") != manifest_entry(actual, "officialArchive"):
+            raise RuntimeError("Verified archive sidecar manifest changed during export")
+        os.replace(candidate, output)
+    output.chmod(0o600)
+    print(
+        f"Exported and verified {output} ({output.stat().st_size / 1024 / 1024:.1f} MiB); "
+        f"source={manifest_entry(actual, 'database')['sha256'][:12]}"
+    )
+    return actual
+
+
+def verify_offsite_round_trip(
+    archive: Path,
+    downloaded: Path,
+    provider: str,
+    remote_path: str,
+    receipt_path: Path,
+) -> dict[str, Any]:
+    source_hash = sha256_file(archive)
+    if archive.stat().st_size != downloaded.stat().st_size or source_hash != sha256_file(
+        downloaded
+    ):
+        raise RuntimeError("Downloaded offsite archive does not byte-match the uploaded ciphertext")
+    manifest = verify_archive(downloaded)
+    receipt: dict[str, Any] = {
+        "format": 1,
+        "provider": provider,
+        "remotePath": remote_path,
+        "encryptedBytes": archive.stat().st_size,
+        "encryptedSha256": source_hash,
+        "sourceSha256": manifest_entry(manifest, "database")["sha256"],
+        "verifiedAt": datetime.now(UTC).isoformat(),
+    }
+    if receipt_path.exists():
+        raise RuntimeError(f"Refusing to overwrite offsite receipt: {receipt_path}")
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = receipt_path.with_suffix(receipt_path.suffix + ".tmp")
+    temporary.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(temporary, receipt_path)
+    print(f"Verified offsite round trip and wrote {receipt_path}")
+    return receipt
+
+
+def validate_receipt(archive: Path, manifest: dict[str, Any], receipt_path: Path) -> dict[str, Any]:
+    receipt = cast(dict[str, Any], json.loads(receipt_path.read_text(encoding="utf-8")))
+    if receipt.get("format") != 1 or not receipt.get("provider") or not receipt.get("remotePath"):
+        raise RuntimeError("Offsite receipt is incomplete")
+    expected = {
+        "encryptedBytes": archive.stat().st_size,
+        "encryptedSha256": sha256_file(archive),
+        "sourceSha256": manifest_entry(manifest, "database")["sha256"],
+    }
+    for key, value in expected.items():
+        if receipt.get(key) != value:
+            raise RuntimeError(f"Offsite receipt {key} does not match the verified archive")
+    return receipt
+
+
+def restore_convex(destination: Path, site_url: str, token: str) -> None:
+    latest = request_json(site_url, "/v1/archive/latest", token)
+    archive = cast(dict[str, Any], latest["archive"])
+    with tempfile.TemporaryDirectory(prefix="whoop-convex-download-") as temporary:
+        encrypted = Path(temporary) / "whoop-replica.tar.zst.age"
+        subprocess.run(
+            [
+                "curl",
+                "--fail-with-body",
+                "--silent",
+                "--show-error",
+                "--location",
+                "--output",
+                str(encrypted),
+                str(latest["downloadUrl"]),
+            ],
+            check=True,
+        )
+        if sha256_file(encrypted) != archive["encryptedSha256"]:
+            raise RuntimeError("Encrypted archive SHA-256 does not match Convex metadata")
+        extract_archive(encrypted, destination)
+    print(f"Restored and verified {destination / 'sleep.sqlite3'}")
+
+
+def retire_convex(archive: Path, receipt_path: Path, site_url: str, token: str) -> None:
+    manifest = verify_archive(archive)
+    validate_receipt(archive, manifest, receipt_path)
+    latest = request_json(site_url, "/v1/archive/latest", token)
+    remote = cast(dict[str, Any], latest["archive"])
+    database = manifest_entry(manifest, "database")
+    if remote.get("sourceSha256") != database["sha256"]:
+        raise RuntimeError("Offsite archive source does not match the Convex archive")
+
+    phone_status = request_json(site_url, "/v1/phone/status", token)
+    snapshots = phone_status.get("snapshots")
+    if not isinstance(snapshots, list) or len(snapshots) != 1 or not isinstance(snapshots[0], dict):
+        raise RuntimeError("Convex does not have exactly one current phone snapshot")
+    phone = cast(dict[str, Any], snapshots[0])
+    if (
+        not isinstance(phone.get("sourceFingerprint"), str)
+        or phone.get("schemaVersion", -1) < remote.get("schemaVersion", 0)
+        or phone.get("sourceBytes", -1) < remote.get("sourceBytes", 0)
+        or phone.get("createdAt", -1) < remote.get("createdAt", 0)
+    ):
+        raise RuntimeError("Current phone snapshot does not safely supersede the Convex archive")
+
+    result = request_json(
+        site_url,
+        "/v1/archive/retire",
+        token,
+        method="POST",
+        body={
+            "expectedArchiveId": remote["_id"],
+            "expectedEncryptedSha256": remote["encryptedSha256"],
+            "expectedPhoneFingerprint": phone["sourceFingerprint"],
+        },
+    )
+    try:
+        request_json(site_url, "/v1/archive/latest", token)
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+    else:
+        raise RuntimeError("Convex archive still exists after retirement")
+    current_phone = request_json(site_url, "/v1/phone/status", token)
+    current_snapshots = current_phone.get("snapshots")
+    if (
+        not isinstance(current_snapshots, list)
+        or len(current_snapshots) != 1
+        or not isinstance(current_snapshots[0], dict)
+        or current_snapshots[0].get("sourceFingerprint") != phone["sourceFingerprint"]
+    ):
+        raise RuntimeError("Phone replica changed during archive retirement")
+    print(
+        "Retired redundant Convex archive "
+        f"({int(result['deletedEncryptedBytes']) / 1024 / 1024:.1f} MiB); "
+        f"phone={str(phone['sourceFingerprint'])[:12]}"
+    )
+
+
+def status(site_url: str, token: str) -> None:
+    phone = request_json(site_url, "/v1/phone/status", token)
+    try:
+        archive = request_json(site_url, "/v1/archive/latest", token)["archive"]
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+        archive = None
+    print(json.dumps({"archive": archive, "phone": phone}, indent=2, sort_keys=True))
 
 
 def main() -> None:
@@ -333,13 +442,33 @@ def main() -> None:
     parser.add_argument("--site-url")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    upload_parser = subparsers.add_parser("upload")
-    upload_parser.add_argument("database", type=Path, nargs="?")
-    upload_parser.add_argument("--backup-root", type=Path, default=DEFAULT_BACKUP_ROOT)
+    export_parser = subparsers.add_parser("export")
+    export_parser.add_argument("destination", type=Path)
+    export_parser.add_argument("database", type=Path, nargs="?")
+    export_parser.add_argument("--backup-root", type=Path, default=DEFAULT_BACKUP_ROOT)
 
-    restore_parser = subparsers.add_parser("restore")
-    restore_parser.add_argument("destination", type=Path)
+    verify_parser = subparsers.add_parser("verify")
+    verify_parser.add_argument("archive", type=Path)
 
+    offsite_parser = subparsers.add_parser("verify-offsite")
+    offsite_parser.add_argument("archive", type=Path)
+    offsite_parser.add_argument("downloaded", type=Path)
+    offsite_parser.add_argument("--provider", required=True)
+    offsite_parser.add_argument("--remote-path", required=True)
+    offsite_parser.add_argument("--receipt", required=True, type=Path)
+
+    restore_file_parser = subparsers.add_parser("restore-file")
+    restore_file_parser.add_argument("archive", type=Path)
+    restore_file_parser.add_argument("destination", type=Path)
+
+    restore_convex_parser = subparsers.add_parser("restore-convex")
+    restore_convex_parser.add_argument("destination", type=Path)
+
+    retire_parser = subparsers.add_parser("retire-convex")
+    retire_parser.add_argument("archive", type=Path)
+    retire_parser.add_argument("--receipt", required=True, type=Path)
+
+    subparsers.add_parser("status")
     args = parser.parse_args()
     if args.site_url is not None:
         site_url = args.site_url.rstrip("/")
@@ -347,13 +476,31 @@ def main() -> None:
         site_url = load_site_url(args.env_file)
     else:
         site_url = DEFAULT_SITE_URL
-    token = keychain_value("api-token")
 
-    if args.command == "upload":
+    if args.command == "export":
         database = args.database or latest_snapshot(args.backup_root)
-        upload(database.resolve(), site_url, token)
-    elif args.command == "restore":
-        restore(args.destination.resolve(), site_url, token)
+        export_archive(database.resolve(), args.destination.resolve())
+    elif args.command == "verify":
+        manifest = verify_archive(args.archive.resolve())
+        print(json.dumps(manifest, indent=2, sort_keys=True))
+    elif args.command == "verify-offsite":
+        verify_offsite_round_trip(
+            args.archive.resolve(),
+            args.downloaded.resolve(),
+            args.provider,
+            args.remote_path,
+            args.receipt.resolve(),
+        )
+    elif args.command == "restore-file":
+        extract_archive(args.archive.resolve(), args.destination.resolve())
+    else:
+        token = keychain_value("api-token")
+        if args.command == "restore-convex":
+            restore_convex(args.destination.resolve(), site_url, token)
+        elif args.command == "retire-convex":
+            retire_convex(args.archive.resolve(), args.receipt.resolve(), site_url, token)
+        elif args.command == "status":
+            status(site_url, token)
 
 
 if __name__ == "__main__":

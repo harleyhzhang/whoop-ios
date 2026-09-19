@@ -387,18 +387,22 @@ discipline, and the limits of historical recovery.
   history, both fitted models, projection, or raw sidecar is absent; CI rejects
   their filenames if staged. The app contains no API client secret or refresh
   token.
-- A private personal Convex project now stores a bounded encrypted disaster-
-  recovery replica. `Tools/convex_replica.py upload` selects the exact
-  `lastVerifiedBackup` from the private install-state file, validates SQLite,
-  packages the database and official-response sidecar, compresses with zstd,
-  encrypts with age, and uploads only ciphertext. The API token and age identity
-  live in macOS Keychain under `com.clintonst.whoop.convex-replica`; Convex keeps
-  the newest archive. `Tools/convex_replica.py restore <empty-directory>`
-  downloads, decrypts, verifies every recorded hash, and reruns SQLite
-  `quick_check`. Successful physical-phone shipments automatically upload their
-  newly verified snapshot; set `WHOOP_SKIP_CONVEX_REPLICA=1` only for an
-  intentional one-off skip. Backend deployment is manual, never a push/PR CI
-  side effect.
+- Full disaster-recovery archives are client-side age encrypted and stored in
+  independent offsite cold storage rather than beside the phone replica in
+  Convex. `Tools/convex_replica.py export <archive.age>` selects the exact
+  `lastVerifiedBackup`, requires its immutable official-response sidecar,
+  validates both SQLite files, packages and zstd-compresses them, encrypts only
+  to the Keychain-backed age identity, then decrypts and verifies the completed
+  ciphertext before publishing it locally. `verify-offsite` requires a
+  byte-identical downloaded round trip and records a non-secret receipt;
+  `restore-file` authenticates, decrypts, hash-checks, and reruns SQLite
+  `quick_check`. The guarded one-time `retire-convex` command accepts only a
+  verified offsite receipt and an exact archive/source match, and the backend
+  additionally pins the newer surviving phone snapshot before deleting the
+  legacy Convex object. Physical-phone shipment no longer uploads a second full
+  database representation. The API token and age identity remain in macOS
+  Keychain under `com.clintonst.whoop.convex-replica`; no ciphertext, receipt,
+  credential, or private manifest enters Git.
 - The iPhone also maintains a direct encrypted replica without making the
   backend part of collection or scoring. At launch, after a published sleep,
   and while new packets arrive, a throttled coordinator creates a consistent
@@ -414,9 +418,9 @@ discipline, and the limits of historical recovery.
   key are injected only into signed personal device builds from macOS Keychain;
   neither value is committed. The Mac API token alone can list and download
   snapshots. Convex retains the newest manifest and deletes encrypted chunks it
-  no longer references. Together with the newest independent age archive, this
-  keeps two recovery formats while respecting the free deployment's shared
-  1 GB file-storage cap.
+  no longer references. The independently encrypted full archive remains
+  offsite, so Convex's free 1 GB file-storage allowance is reserved for the
+  current phone replica and its safe commit-time overlap.
 - `uv run --frozen python Tools/phone_replica.py status` inspects the bounded
   replica. `... seed [database]` seeds it from a verified Mac snapshot so the
   first phone run uploads only changed chunks. `... restore <empty-directory>`

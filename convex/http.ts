@@ -156,43 +156,6 @@ http.route({
 });
 
 http.route({
-  path: "/v1/archive/upload-url",
-  method: "POST",
-  handler: httpAction(async (ctx, request) => {
-    if (!(await authorized(request))) {
-      return json({ error: "unauthorized" }, 401);
-    }
-    return json({ uploadUrl: await ctx.runMutation(internal.replica.generateUploadUrl, {}) });
-  }),
-});
-
-http.route({
-  path: "/v1/archive/commit",
-  method: "POST",
-  handler: httpAction(async (ctx, request) => {
-    if (!(await authorized(request))) {
-      return json({ error: "unauthorized" }, 401);
-    }
-    const body = (await request.json()) as {
-      createdAt: number;
-      encryptedBytes: number;
-      encryptedSha256: string;
-      idempotencyKey: string;
-      schemaVersion: number;
-      sourceBytes: number;
-      sourceCommit?: string;
-      sourceSha256: string;
-      storageId: string;
-    };
-    const result = await ctx.runMutation(internal.replica.commit, {
-      ...body,
-      storageId: body.storageId as never,
-    });
-    return json(result);
-  }),
-});
-
-http.route({
   path: "/v1/archive/latest",
   method: "GET",
   handler: httpAction(async (ctx, request) => {
@@ -208,6 +171,27 @@ http.route({
       return json({ error: "file_not_found" }, 404);
     }
     return json({ archive, downloadUrl });
+  }),
+});
+
+http.route({
+  path: "/v1/archive/retire",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    if (!(await authorized(request))) {
+      return json({ error: "unauthorized" }, 401);
+    }
+    const body = (await request.json()) as {
+      expectedArchiveId: string;
+      expectedEncryptedSha256: string;
+      expectedPhoneFingerprint: string;
+    };
+    return json(
+      await ctx.runMutation(internal.replica.retire, {
+        ...body,
+        expectedArchiveId: body.expectedArchiveId as never,
+      }),
+    );
   }),
 });
 
