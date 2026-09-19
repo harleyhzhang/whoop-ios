@@ -170,7 +170,7 @@ extension WhoopSleepStateTests {
         )
     }
 
-    func testShortUpStateKeepsSleepProvisional() async throws {
+    func testCurrentUpStateStopsReportingSleepImmediately() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -204,36 +204,28 @@ extension WhoopSleepStateTests {
 
         let snapshot = await sleepSnapshot(store: store, now: now)
 
-        XCTAssertTrue(snapshot.isSleeping)
+        XCTAssertFalse(snapshot.isSleeping)
     }
 
-    func testAutomaticSleepPolicyFinalizesUpAfterTenMinutes() {
-        XCTAssertTrue(
-            WhoopAutomaticSleepPolicy.reportsSleeping(
-                latestState: .up,
-                secondsSinceLastAsleep: 9 * 60,
-                latestSampleIsCurrent: true
-            )
-        )
-        XCTAssertFalse(
-            WhoopAutomaticSleepPolicy.canFinalize(
-                latestState: .up,
-                secondsSinceLastAsleep: 9 * 60,
-                latestSampleIsCurrent: true
-            )
-        )
+    func testAutomaticSleepPolicyFinalizesCurrentUpImmediately() {
         XCTAssertFalse(
             WhoopAutomaticSleepPolicy.reportsSleeping(
                 latestState: .up,
-                secondsSinceLastAsleep: 10 * 60,
                 latestSampleIsCurrent: true
             )
         )
         XCTAssertTrue(
             WhoopAutomaticSleepPolicy.canFinalize(
                 latestState: .up,
-                secondsSinceLastAsleep: 10 * 60,
+                secondsSinceLastAsleep: 0,
                 latestSampleIsCurrent: true
+            )
+        )
+        XCTAssertFalse(
+            WhoopAutomaticSleepPolicy.canFinalize(
+                latestState: .up,
+                secondsSinceLastAsleep: 60,
+                latestSampleIsCurrent: false
             )
         )
     }
@@ -266,8 +258,8 @@ extension WhoopSleepStateTests {
         defer { store.shutdownForTesting() }
         let peripheral = UUID()
         let firstWakeCheck = Date(timeIntervalSince1970: 1_800_000_000)
-        let startedAt = firstWakeCheck.addingTimeInterval(-(4 * 60 * 60 + 10 * 60))
-        let firstLastAsleep = firstWakeCheck.addingTimeInterval(-10 * 60)
+        let startedAt = firstWakeCheck.addingTimeInterval(-(4 * 60 * 60 + 60))
+        let firstLastAsleep = firstWakeCheck.addingTimeInterval(-60)
         let firstSessionID = try await beginOffload(store: store, peripheral: peripheral)
 
         for timestamp in stride(
@@ -315,7 +307,7 @@ extension WhoopSleepStateTests {
 
         let resumedAt = firstLastAsleep.addingTimeInterval(40 * 60)
         let resumedUntil = resumedAt.addingTimeInterval(20 * 60)
-        let correctedWakeCheck = resumedUntil.addingTimeInterval(10 * 60)
+        let correctedWakeCheck = resumedUntil.addingTimeInterval(60)
         let correctionSessionID = try await beginOffload(store: store, peripheral: peripheral)
         for timestamp in stride(
             from: resumedAt.timeIntervalSince1970,

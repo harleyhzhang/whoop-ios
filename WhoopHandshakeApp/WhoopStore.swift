@@ -3029,8 +3029,8 @@ final class WhoopStore: Sendable, WhoopPacketPersisting {
                 && sessionCoverage >= 0.50
         }
 
-        /// Explicit awake is final immediately. The ambiguous `up` state gets
-        /// a short provisional delay, then remains reversible if sleep resumes.
+        /// Explicit awake and a current `up` sample can finalize immediately.
+        /// An `up` result remains provisional and reversible if sleep resumes.
         var meetsAutomaticWakeGate: Bool {
             WhoopAutomaticSleepPolicy.canFinalize(
                 latestState: latest.sleepState,
@@ -3382,11 +3382,8 @@ final class WhoopStore: Sendable, WhoopPacketPersisting {
         guard let latest = rows.last else { return .noData }
         let latestDate = Date(timeIntervalSince1970: latest.timestamp)
         let sampleIsCurrent = abs(now.timeIntervalSince(latestDate)) <= 30 * 60
-        let lastAsleepTimestamp = rows.last { $0.sleepState == .asleep }?.timestamp
-        let secondsSinceLastAsleep = lastAsleepTimestamp.map { latest.timestamp - $0 } ?? .infinity
         let detectorReportsSleeping = WhoopAutomaticSleepPolicy.reportsSleeping(
             latestState: latest.sleepState,
-            secondsSinceLastAsleep: secondsSinceLastAsleep,
             latestSampleIsCurrent: sampleIsCurrent
         )
         let asleepRows = rows.filter { $0.sleepState == .asleep }
@@ -3425,9 +3422,9 @@ final class WhoopStore: Sendable, WhoopPacketPersisting {
         return .awake(latestDate, candidates)
     }
 
-    /// Automatic path. Explicit awake finalizes immediately; ambiguous `up`
-    /// finalizes after ten minutes. Both remain gated on a coherent completed
-    /// offload and can grow silently if sleep resumes within ninety minutes,
+    /// Automatic path. Explicit awake finalizes immediately; current `up`
+    /// finalizes provisionally. Both remain gated on a coherent completed
+    /// offload and can grow if sleep resumes within ninety minutes,
     /// or within two hours after a completed main sleep on the same morning.
     private func analyzeLatestSleep(
         now: Date = .now,

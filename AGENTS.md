@@ -84,6 +84,8 @@
 - Do not add an app-side manual sync control for the hosted replica or for
   memory. Memory reads are initiated from the Mac side. Sleep publication is
   automatic and has no routine Process/loading UI: explicit awake finalizes
-  immediately, while ambiguous `up` finalizes after ten minutes. Every publish
-  still requires a durable HISTORY_COMPLETE marker, and state-2 sleep returning
-  within ninety minutes silently grows the same night instead of losing data.
+  immediately, while a current ambiguous `up` sample finalizes provisionally as
+  soon as a durable HISTORY_COMPLETE covers it. State-2 sleep returning within
+  ninety minutes grows the same night instead of losing data, and the corrected
+  morning summary replaces the earlier notification for that date. Never weaken
+  the evidence or complete-metric gates to make this path faster.

@@ -92,6 +92,7 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
     enum Key {
         static let lastMorningSleepID = "WhoopNotifications.lastMorningSleepID"
         static let lastMorningDateKey = "WhoopNotifications.lastMorningDateKey"
+        static let lastMorningSummaryBody = "WhoopNotifications.lastMorningSummaryBody"
         static let lastBatteryLevel = "WhoopNotifications.lastBatteryLevel"
         static let sentLow20 = "WhoopNotifications.sentLow20"
         static let sentLow10 = "WhoopNotifications.sentLow10"
@@ -129,26 +130,37 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
     func sendMorningSummary(for record: DailyHealthRecord) {
         guard record.source.hasPrefix(WhoopStore.localSourcePrefix),
             Calendar.current.isDate(record.date, inSameDayAs: now()),
-            let sleepID = record.sleepID,
-            defaults.string(forKey: Key.lastMorningDateKey) != record.dateKey,
-            defaults.string(forKey: Key.lastMorningSleepID) != sleepID
+            let sleepID = record.sleepID
         else { return }
 
         let score = record.sleepScore.map { "\(Int($0.rounded()))%" } ?? "—"
         let duration = record.sleepDurationMinutes.map(Self.formatDuration) ?? "—"
         let hrv = record.hrvRMSSDMilliseconds.map { "\(Int($0.rounded())) ms" } ?? "—"
         let rhr = record.restingHeartRateBPM.map { "\(Int($0.rounded())) BPM" } ?? "—"
+        let body = "\(score) · \(duration) · HRV \(hrv) · RHR \(rhr)"
+
+        let previousDateKey = defaults.string(forKey: Key.lastMorningDateKey)
+        let previousSleepID = defaults.string(forKey: Key.lastMorningSleepID)
+        let previousBody = defaults.string(forKey: Key.lastMorningSummaryBody)
+        let isSameSummary =
+            previousDateKey == record.dateKey
+            && previousSleepID == sleepID
+            && (previousBody == nil || previousBody == body)
+        guard !isSameSummary else { return }
 
         let identifier = "whoop.morning.\(record.dateKey)"
         guard !pendingIdentifiers.contains(identifier) else { return }
+        let replacesExistingSummary = previousDateKey == record.dateKey
         deliver(
             identifier: identifier,
             title: "Sleep ready",
-            body: "\(score) · \(duration) · HRV \(hrv) · RHR \(rhr)"
+            body: body,
+            removeDeliveredOnSuccess: replacesExistingSummary
         ) { [weak self] succeeded in
             guard succeeded, let self else { return }
             self.defaults.set(sleepID, forKey: Key.lastMorningSleepID)
             self.defaults.set(record.dateKey, forKey: Key.lastMorningDateKey)
+            self.defaults.set(body, forKey: Key.lastMorningSummaryBody)
         }
     }
 
@@ -270,6 +282,7 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
         title: String,
         body: String,
         after delay: TimeInterval = 1,
+        removeDeliveredOnSuccess: Bool = false,
         completion: @escaping @MainActor (Bool) -> Void = { _ in }
     ) {
         pendingIdentifiers.insert(identifier)
@@ -290,6 +303,9 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
                 succeeded = false
             }
             pendingIdentifiers.remove(identifier)
+            if succeeded, removeDeliveredOnSuccess {
+                scheduler.removeDeliveredNotifications(withIdentifiers: [identifier])
+            }
             completion(succeeded)
         }
     }

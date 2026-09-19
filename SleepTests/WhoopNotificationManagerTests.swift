@@ -16,7 +16,7 @@ final class WhoopNotificationManagerTests: XCTestCase {
         XCTAssertEqual(fixture.scheduler.installCount, 1)
     }
 
-    func testMorningSummaryIsLocalCurrentDayAndDeduplicated() async throws {
+    func testMorningSummaryIsLocalCurrentDayDeduplicatedAndReplacedAfterCorrection() async throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let fixture = try makeFixture(now: now)
         let record = DailyHealthRecord(
@@ -48,16 +48,51 @@ final class WhoopNotificationManagerTests: XCTestCase {
             sourceUpdatedAt: ISO8601DateFormatter().string(from: now.addingTimeInterval(60))
         )
         fixture.manager.sendMorningSummary(for: correctedRecord)
+        await eventually { fixture.scheduler.requests.count == 2 }
+        fixture.manager.sendMorningSummary(for: correctedRecord)
         await Task.yield()
 
-        let request = try XCTUnwrap(fixture.scheduler.requests.first)
+        let request = try XCTUnwrap(fixture.scheduler.requests.last)
         XCTAssertEqual(request.identifier, "whoop.morning.\(record.dateKey)")
         XCTAssertEqual(request.content.title, "Sleep ready")
-        XCTAssertEqual(request.content.body, "91% · 8h 07m · HRV 67 ms · RHR 51 BPM")
-        XCTAssertEqual(fixture.scheduler.requests.count, 1)
+        XCTAssertEqual(request.content.body, "93% · 8h 25m · HRV 70 ms · RHR 50 BPM")
+        XCTAssertEqual(fixture.scheduler.requests.count, 2)
+        XCTAssertTrue(fixture.scheduler.removedPending.isEmpty)
+        XCTAssertEqual(fixture.scheduler.removedDelivered, [[request.identifier]])
         XCTAssertEqual(
             fixture.defaults.string(forKey: WhoopNotificationManager.Key.lastMorningSleepID),
-            record.sleepID
+            correctedRecord.sleepID
+        )
+        XCTAssertEqual(
+            fixture.defaults.string(forKey: WhoopNotificationManager.Key.lastMorningSummaryBody),
+            request.content.body
+        )
+    }
+
+    func testFailedMorningCorrectionKeepsPreviousSummaryState() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let fixture = try makeFixture(now: now)
+        let original = record(
+            date: now,
+            source: "\(WhoopStore.localSourcePrefix)-test",
+            sleepID: "synthetic-original-night"
+        )
+        fixture.manager.sendMorningSummary(for: original)
+        await eventually { fixture.scheduler.requests.count == 1 }
+
+        fixture.scheduler.addError = SyntheticError.deliveryFailed
+        let corrected = record(
+            date: now,
+            source: "\(WhoopStore.localSourcePrefix)-test",
+            sleepID: "synthetic-corrected-night"
+        )
+        fixture.manager.sendMorningSummary(for: corrected)
+        await eventually { fixture.scheduler.addAttemptCount == 2 }
+
+        XCTAssertTrue(fixture.scheduler.removedDelivered.isEmpty)
+        XCTAssertEqual(
+            fixture.defaults.string(forKey: WhoopNotificationManager.Key.lastMorningSleepID),
+            original.sleepID
         )
     }
 
@@ -173,14 +208,16 @@ final class WhoopNotificationManagerTests: XCTestCase {
         return Fixture(manager: manager, scheduler: scheduler, defaults: defaults)
     }
 
-    private func record(date: Date, source: String) -> DailyHealthRecord {
+    private func record(date: Date, source: String, sleepID: String = UUID().uuidString)
+        -> DailyHealthRecord
+    {
         DailyHealthRecord(
             dateKey: Self.dateKey(for: date),
             sleepScore: 80,
             sleepDurationMinutes: 450,
             hrvRMSSDMilliseconds: 60,
             restingHeartRateBPM: 55,
-            sleepID: UUID().uuidString,
+            sleepID: sleepID,
             cycleID: nil,
             source: source,
             sourceArchive: nil,
