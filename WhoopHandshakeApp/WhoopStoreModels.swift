@@ -1,7 +1,6 @@
 import Foundation
 
 enum WhoopAutomaticSleepPolicy {
-    static let provisionalWakeDelay: TimeInterval = 10 * 60
     static let reopenWindow: TimeInterval = 90 * 60
     static let sameMorningReopenWindow: TimeInterval = 2 * 60 * 60
     static let primarySleepMinimum: TimeInterval = 3 * 60 * 60
@@ -33,12 +32,10 @@ enum WhoopAutomaticSleepPolicy {
 
     static func reportsSleeping(
         latestState: SleepState,
-        secondsSinceLastAsleep: TimeInterval,
         latestSampleIsCurrent: Bool
     ) -> Bool {
         latestSampleIsCurrent
-            && (latestState == .asleep
-                || (latestState == .up && secondsSinceLastAsleep < provisionalWakeDelay))
+            && latestState == .asleep
     }
 
     static func canFinalize(
@@ -50,7 +47,7 @@ enum WhoopAutomaticSleepPolicy {
         case .awakePrimary, .awakeAlternate:
             return secondsSinceLastAsleep >= 0
         case .up:
-            return latestSampleIsCurrent && secondsSinceLastAsleep >= provisionalWakeDelay
+            return latestSampleIsCurrent && secondsSinceLastAsleep >= 0
         case .asleep, .unknown:
             return false
         }

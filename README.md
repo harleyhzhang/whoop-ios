@@ -286,15 +286,16 @@ discipline, and the limits of historical recovery.
   The plot clips to its final y-domain and gives its x-domain endpoint padding,
   so range changes cannot stretch outside the card or shear the final dot.
 - Sleep finalization is automatic and card-free. The first coherent
-  finalization still emits the normal one-time morning notification. While a
+  finalization emits the morning notification. While a
   new sleep is unresolved, every current-day metric is masked with an em dash;
   there is no routine Process card or loading state. Explicit
-  awake finalizes immediately, while the ambiguous `up` state becomes a
-  provisional wake after ten minutes.
+  awake finalizes immediately, while a current ambiguous `up` state becomes an
+  immediate provisional wake.
   Publication still requires at least three hours of detected sleep, 50%
   observed-session coverage, all four primary metrics, and a persisted
   HISTORY_COMPLETE marker covering the newest sample. State-2 sleep returning
-  within ninety minutes silently reopens and grows the same night. A completed
+  within ninety minutes reopens and grows the same night. The corrected morning
+  summary replaces the earlier notification for that date. A completed
   main sleep gets a narrow extension to two hours when sleep resumes before
   noon on the same local morning, without folding afternoon naps or clusters of
   short sleeps into the preceding night. Both paths correct the wake-anchored
