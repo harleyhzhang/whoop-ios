@@ -132,6 +132,26 @@ final class WhoopReplicaTests: XCTestCase {
         XCTAssertEqual(manifest.chunkIds, descriptors.map(\.identifier))
     }
 
+    func testSnapshotArtifactCleanupRemovesDatabaseAndSQLiteSidecars() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let snapshotURL = directory.appendingPathComponent("upload.sqlite3")
+        let artifactURLs = ["", "-wal", "-shm", "-journal"].map {
+            URL(fileURLWithPath: snapshotURL.path + $0)
+        }
+        for artifactURL in artifactURLs {
+            try Data("private snapshot bytes".utf8).write(to: artifactURL)
+        }
+
+        try WhoopReplicaSnapshotter.removeArtifacts(at: snapshotURL)
+
+        for artifactURL in artifactURLs {
+            XCTAssertFalse(FileManager.default.fileExists(atPath: artifactURL.path))
+        }
+    }
+
     func testPendingRecoverySwapsOnlyAValidDatabaseAndRetainsRollbackUntilHealth() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

@@ -8,8 +8,10 @@
  * @module
  */
 
+import type * as authorizationPolicy from "../authorizationPolicy.js";
 import type * as http from "../http.js";
 import type * as phoneReplica from "../phoneReplica.js";
+import type * as phoneReplicaPolicy from "../phoneReplicaPolicy.js";
 import type * as replica from "../replica.js";
 
 import type {
@@ -19,8 +21,10 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  authorizationPolicy: typeof authorizationPolicy;
   http: typeof http;
   phoneReplica: typeof phoneReplica;
+  phoneReplicaPolicy: typeof phoneReplicaPolicy;
   replica: typeof replica;
 }>;
 

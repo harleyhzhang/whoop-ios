@@ -18,13 +18,24 @@ enum WhoopReplicaSnapshotError: Error {
 }
 
 enum WhoopReplicaSnapshotter {
+    private static let artifactSuffixes = ["", "-wal", "-shm", "-journal"]
+
+    static func removeArtifacts(at databaseURL: URL, fileManager: FileManager = .default) throws {
+        for suffix in artifactSuffixes {
+            let artifactURL = URL(fileURLWithPath: databaseURL.path + suffix)
+            if fileManager.fileExists(atPath: artifactURL.path) {
+                try fileManager.removeItem(at: artifactURL)
+            }
+        }
+    }
+
     static func create(sourceURL: URL, destinationURL: URL) throws -> WhoopReplicaSnapshot {
         let fileManager = FileManager.default
         try fileManager.createDirectory(
             at: destinationURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        try? fileManager.removeItem(at: destinationURL)
+        try removeArtifacts(at: destinationURL, fileManager: fileManager)
         var source: OpaquePointer?
         let sourceResult = sqlite3_open_v2(
             sourceURL.path,
