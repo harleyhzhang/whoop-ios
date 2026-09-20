@@ -3,7 +3,8 @@
   "private": true,
   "scripts": {
     "convex:check": "convex dev --once --typecheck enable",
-    "convex:deploy": "convex deploy --typecheck enable"
+    "convex:deploy": "convex deploy --typecheck enable",
+    "test:convex-policy": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test ToolsNodeTests/*.test.ts"
   },
   "dependencies": {
     "convex": "1.45.0"

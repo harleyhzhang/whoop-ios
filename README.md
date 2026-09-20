@@ -414,11 +414,16 @@ discipline, and the limits of historical recovery.
   at once per six hours; a newly published sleep can advance it after one hour,
   and failures back off for fifteen minutes. The app remains fully useful when
   every network operation fails.
-- The phone uses a separate write-only bearer token. Its token and encryption
+- The phone and the explicit Mac seeding tool use a separate write-only bearer
+  token. The Mac seeder is initial/bootstrap-only once a distinct phone replica
+  exists. Its token and encryption
   key are injected only into signed personal device builds from macOS Keychain;
   neither value is committed. The Mac API token alone can list and download
-  snapshots. Convex retains the newest manifest and deletes encrypted chunks it
-  no longer references. The independently encrypted full archive remains
+  snapshots and cannot call phone-upload endpoints. Convex retains the newest
+  manifest, deletes encrypted chunks it no longer references, and reclaims
+  interrupted uploads after a 24-hour grace period. A 950 MB fail-closed budget
+  preserves headroom below the free storage ceiling. The independently
+  encrypted full archive remains
   offsite, so Convex's free 1 GB file-storage allowance is reserved for the
   current phone replica and its safe commit-time overlap.
 - `uv run --frozen python Tools/phone_replica.py status` inspects the bounded

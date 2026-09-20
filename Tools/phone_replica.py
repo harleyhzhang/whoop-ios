@@ -146,7 +146,7 @@ def decrypt_chunk(key: bytes, identifier: str, encrypted: bytes) -> bytes:
 
 def seed(database: Path, site_url: str, chunk_size: int) -> None:
     key = encryption_key()
-    token = keychain_value("api-token")
+    token = keychain_value("phone-upload-token")
     manifest = describe(database, key, chunk_size)
     missing_response = request_json(
         site_url,
@@ -189,7 +189,7 @@ def seed(database: Path, site_url: str, chunk_size: int) -> None:
         "/v1/phone/commit-snapshot",
         token,
         method="POST",
-        body=manifest,
+        body={**manifest, "seedOnly": True},
     )
     print(
         f"Committed phone replica {manifest['sourceFingerprint'][:12]} with "
@@ -208,33 +208,37 @@ def restore(destination: Path, site_url: str) -> None:
     partial = destination / "sleep.sqlite3.partial"
     restored = destination / "sleep.sqlite3"
     source_mac = hmac.new(key, digestmod=hashlib.sha256)
-    with partial.open("wb") as output:
-        chunk_ids = cast(list[str], snapshot["chunkIds"])
-        sizes = cast(list[int], snapshot["chunkPlainBytes"])
-        for index, (identifier, expected_size) in enumerate(zip(chunk_ids, sizes, strict=True)):
-            response = request_json(
-                site_url,
-                "/v1/phone/chunk-url",
-                token,
-                method="POST",
-                body={"chunkId": identifier},
-            )
-            with urllib.request.urlopen(str(response["downloadUrl"]), timeout=180) as download:
-                encrypted = download.read()
-            plaintext = decrypt_chunk(key, identifier, encrypted)
-            if len(plaintext) != expected_size or chunk_id(key, index, plaintext) != identifier:
-                raise RuntimeError(f"Chunk integrity check failed at index {index}")
-            source_mac.update(plaintext)
-            output.write(plaintext)
-            print(f"Restored chunk {index + 1}/{len(chunk_ids)}")
-    if partial.stat().st_size != int(snapshot["sourceBytes"]):
-        raise RuntimeError("Restored database size does not match the snapshot manifest")
-    if not hmac.compare_digest(source_mac.hexdigest(), str(snapshot["sourceFingerprint"])):
-        raise RuntimeError("Restored database fingerprint does not match the snapshot manifest")
-    os.replace(partial, restored)
-    schema, source_bytes = database_metadata(restored)
-    if schema != int(snapshot["schemaVersion"]):
-        raise RuntimeError("Restored database schema does not match the snapshot manifest")
+    try:
+        with partial.open("wb") as output:
+            chunk_ids = cast(list[str], snapshot["chunkIds"])
+            sizes = cast(list[int], snapshot["chunkPlainBytes"])
+            for index, (identifier, expected_size) in enumerate(zip(chunk_ids, sizes, strict=True)):
+                response = request_json(
+                    site_url,
+                    "/v1/phone/chunk-url",
+                    token,
+                    method="POST",
+                    body={"chunkId": identifier},
+                )
+                with urllib.request.urlopen(str(response["downloadUrl"]), timeout=180) as download:
+                    encrypted = download.read()
+                plaintext = decrypt_chunk(key, identifier, encrypted)
+                if len(plaintext) != expected_size or chunk_id(key, index, plaintext) != identifier:
+                    raise RuntimeError(f"Chunk integrity check failed at index {index}")
+                source_mac.update(plaintext)
+                output.write(plaintext)
+                print(f"Restored chunk {index + 1}/{len(chunk_ids)}")
+        if partial.stat().st_size != int(snapshot["sourceBytes"]):
+            raise RuntimeError("Restored database size does not match the snapshot manifest")
+        if not hmac.compare_digest(source_mac.hexdigest(), str(snapshot["sourceFingerprint"])):
+            raise RuntimeError("Restored database fingerprint does not match the snapshot manifest")
+        schema, source_bytes = database_metadata(partial)
+        if schema != int(snapshot["schemaVersion"]):
+            raise RuntimeError("Restored database schema does not match the snapshot manifest")
+        os.replace(partial, restored)
+    except Exception:
+        partial.unlink(missing_ok=True)
+        raise
     print(f"Restored and verified {restored} ({source_bytes} bytes, schema {schema})")
 
 
@@ -247,6 +251,8 @@ def status(site_url: str) -> None:
             {
                 "chunkCount": response["chunkCount"],
                 "encryptedBytes": response["encryptedBytes"],
+                "orphanedStorageBytes": response.get("orphanedStorageBytes"),
+                "orphanedStorageCount": response.get("orphanedStorageCount"),
                 "snapshots": [
                     {
                         "chunkCount": len(snapshot["chunkIds"]),
@@ -257,6 +263,11 @@ def status(site_url: str) -> None:
                     }
                     for snapshot in snapshots
                 ],
+                "stagedChunkBytes": response.get("stagedChunkBytes"),
+                "stagedChunkCount": response.get("stagedChunkCount"),
+                "storageBytes": response.get("storageBytes"),
+                "storageInventoryTruncated": response.get("storageInventoryTruncated"),
+                "storageObjectCount": response.get("storageObjectCount"),
             },
             indent=2,
             sort_keys=True,

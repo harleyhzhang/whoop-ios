@@ -63,7 +63,15 @@ final class WhoopReplicaCoordinator: WhoopReplicaScheduling {
         let directory = sourceURL.deletingLastPathComponent()
             .appendingPathComponent("replica", isDirectory: true)
         let snapshotURL = directory.appendingPathComponent("upload.sqlite3")
-        defer { try? FileManager.default.removeItem(at: snapshotURL) }
+        defer {
+            do {
+                try WhoopReplicaSnapshotter.removeArtifacts(at: snapshotURL)
+            } catch {
+                Self.logger.error(
+                    "Replica plaintext cleanup failed: \(error.localizedDescription, privacy: .public)"
+                )
+            }
+        }
         do {
             let snapshot = try await Task.detached(priority: .utility) {
                 try WhoopReplicaSnapshotter.create(
@@ -99,6 +107,7 @@ final class WhoopReplicaCoordinator: WhoopReplicaScheduling {
                 )
             }
             try await client.commit(manifest: manifest)
+            try WhoopReplicaSnapshotter.removeArtifacts(at: snapshotURL)
             defaults.set(now(), forKey: DefaultsKey.lastSuccess)
             Self.logger.info(
                 "Encrypted phone replica committed: \(manifest.sourceFingerprint.prefix(12), privacy: .public)"

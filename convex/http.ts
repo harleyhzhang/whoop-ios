@@ -2,6 +2,10 @@ import { httpRouter } from "convex/server";
 
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
+import {
+  phoneWriteAuthorizationEnvironments,
+  replicaReadAuthorizationEnvironments,
+} from "./authorizationPolicy";
 
 const http = httpRouter();
 
@@ -13,21 +17,23 @@ function json(body: unknown, status = 200): Response {
 }
 
 function bytesToHex(bytes: ArrayBuffer): string {
-  return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return Array.from(new Uint8Array(bytes), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
 }
 
 async function authorized(request: Request): Promise<boolean> {
-  return await authorizedFor(request, ["WHOOP_REPLICA_TOKEN_SHA256"]);
+  return await authorizedFor(request, replicaReadAuthorizationEnvironments);
 }
 
 async function phoneWriteAuthorized(request: Request): Promise<boolean> {
-  return await authorizedFor(request, [
-    "WHOOP_PHONE_UPLOAD_TOKEN_SHA256",
-    "WHOOP_REPLICA_TOKEN_SHA256",
-  ]);
+  return await authorizedFor(request, phoneWriteAuthorizationEnvironments);
 }
 
-async function authorizedFor(request: Request, environmentNames: string[]): Promise<boolean> {
+async function authorizedFor(
+  request: Request,
+  environmentNames: readonly string[],
+): Promise<boolean> {
   const header = request.headers.get("authorization") ?? "";
   if (!header.startsWith("Bearer ")) {
     return false;
@@ -53,10 +59,13 @@ http.route({
       return json({ error: "unauthorized" }, 401);
     }
     const body = (await request.json()) as { chunkIds?: unknown };
-    if (!Array.isArray(body.chunkIds) || !body.chunkIds.every((value) => typeof value === "string")) {
+    if (
+      !Array.isArray(body.chunkIds) ||
+      !body.chunkIds.every((value) => typeof value === "string")
+    ) {
       return json({ error: "invalid_chunk_ids" }, 400);
     }
-    const missing = await ctx.runQuery(internal.phoneReplica.missingChunks, {
+    const missing = await ctx.runMutation(internal.phoneReplica.missingChunks, {
       chunkIds: body.chunkIds,
     });
     return json({ missing });
@@ -70,7 +79,12 @@ http.route({
     if (!(await phoneWriteAuthorized(request))) {
       return json({ error: "unauthorized" }, 401);
     }
-    return json({ uploadUrl: await ctx.runMutation(internal.phoneReplica.generateUploadUrl, {}) });
+    return json({
+      uploadUrl: await ctx.runMutation(
+        internal.phoneReplica.generateUploadUrl,
+        {},
+      ),
+    });
   }),
 });
 
@@ -108,10 +122,13 @@ http.route({
       chunkSize: number;
       createdAt: number;
       schemaVersion: number;
+      seedOnly?: boolean;
       sourceBytes: number;
       sourceFingerprint: string;
     };
-    return json(await ctx.runMutation(internal.phoneReplica.commitSnapshot, body));
+    return json(
+      await ctx.runMutation(internal.phoneReplica.commitSnapshot, body),
+    );
   }),
 });
 
@@ -122,8 +139,13 @@ http.route({
     if (!(await authorized(request))) {
       return json({ error: "unauthorized" }, 401);
     }
-    const snapshot = await ctx.runQuery(internal.phoneReplica.latestSnapshot, {});
-    return snapshot === null ? json({ error: "not_found" }, 404) : json({ snapshot });
+    const snapshot = await ctx.runQuery(
+      internal.phoneReplica.latestSnapshot,
+      {},
+    );
+    return snapshot === null
+      ? json({ error: "not_found" }, 404)
+      : json({ snapshot });
   }),
 });
 
@@ -140,7 +162,9 @@ http.route({
       return json({ error: "not_found" }, 404);
     }
     const downloadUrl = await ctx.storage.getUrl(chunk.storageId);
-    return downloadUrl === null ? json({ error: "file_not_found" }, 404) : json({ downloadUrl });
+    return downloadUrl === null
+      ? json({ error: "file_not_found" }, 404)
+      : json({ downloadUrl });
   }),
 });
 

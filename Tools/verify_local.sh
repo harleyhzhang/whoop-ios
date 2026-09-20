@@ -58,6 +58,7 @@ Tools/check_python.sh
 echo "Checking Convex backend types without deploying..."
 npm ci --ignore-scripts --no-audit --no-fund >/dev/null
 npx tsc -p convex/tsconfig.json --noEmit
+npm run test:convex-policy
 
 echo "Checking generated model feature contract..."
 uv run --frozen python Tools/generate_model_features.py --check
