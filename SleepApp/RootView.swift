@@ -19,6 +19,7 @@ struct RootView: View {
     @State private var chartState = DashboardChartState()
     @State private var history = HealthHistoryModel()
     var whoopCollector: WhoopHandshakeProbe
+    var powerPackMonitor: WhoopPowerPackMonitor
     let replicaCoordinator: WhoopReplicaCoordinator
 
     private var publishedDay: PublishedDashboardDay {
@@ -49,6 +50,10 @@ struct RootView: View {
         WhoopLaunchOverrides.isConnected || whoopCollector.isConnected
     }
 
+    private var powerPackBatteryLevel: Int? {
+        WhoopLaunchOverrides.powerPackBatteryLevel ?? powerPackMonitor.batteryLevel
+    }
+
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
             dashboard(currentDate: context.date)
@@ -70,6 +75,7 @@ struct RootView: View {
             }
             history.reload()
             whoopCollector.refreshHistoricalData()
+            powerPackMonitor.refresh()
             WhoopStore.shared.writeSleepDiagnostics()
             replicaCoordinator.requestSync(reason: .foreground)
         }
@@ -101,7 +107,7 @@ struct RootView: View {
                         batteryLevel: batteryLevel,
                         isCharging: isCharging,
                         isConnected: isConnected,
-                        powerPackBatteryLevel: WhoopLaunchOverrides.powerPackBatteryLevel
+                        powerPackBatteryLevel: powerPackBatteryLevel
                     )
                     SummaryGrid(day: publishedDay)
 
@@ -143,6 +149,7 @@ struct RootView: View {
     let coordinator = WhoopReplicaCoordinator(configuration: nil, sourceURL: nil)
     RootView(
         whoopCollector: WhoopHandshakeProbe(replicaScheduler: coordinator),
+        powerPackMonitor: WhoopPowerPackMonitor(),
         replicaCoordinator: coordinator
     )
 }

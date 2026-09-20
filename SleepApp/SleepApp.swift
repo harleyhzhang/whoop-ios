@@ -47,6 +47,7 @@ final class SystemWhoopNotificationScheduler: WhoopNotificationScheduling {
 @main
 struct SleepApp: App {
     @State private var whoopCollector: WhoopHandshakeProbe
+    @State private var powerPackMonitor: WhoopPowerPackMonitor
     private let replicaCoordinator: WhoopReplicaCoordinator
 
     init() {
@@ -56,6 +57,7 @@ struct SleepApp: App {
         _whoopCollector = State(
             initialValue: WhoopHandshakeProbe(replicaScheduler: replicaCoordinator)
         )
+        _powerPackMonitor = State(initialValue: WhoopPowerPackMonitor())
         WhoopNotificationManager.shared.configure()
         WhoopRuntimeDiagnostics.shared.start()
         WhoopDeploymentHealthReporter.start()
@@ -66,6 +68,7 @@ struct SleepApp: App {
         WindowGroup {
             RootView(
                 whoopCollector: whoopCollector,
+                powerPackMonitor: powerPackMonitor,
                 replicaCoordinator: replicaCoordinator
             )
         }
