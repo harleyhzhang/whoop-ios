@@ -81,7 +81,7 @@ struct WhoopBatteryPercentIcon: View {
     private static let shellRadius: CGFloat = 4.6
 
     private var statusLabel: some View {
-        HStack(spacing: chargingContentExpansion) {
+        HStack(spacing: chargingContentExpansion * 0.25) {
             HStack(spacing: -0.5) {
                 ForEach(Array(percentageText.enumerated()), id: \.offset) { _, digit in
                     Text(String(digit))

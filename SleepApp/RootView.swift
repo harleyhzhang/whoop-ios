@@ -100,7 +100,8 @@ struct RootView: View {
                         errorMessage: history.errorMessage,
                         batteryLevel: batteryLevel,
                         isCharging: isCharging,
-                        isConnected: isConnected
+                        isConnected: isConnected,
+                        powerPackBatteryLevel: WhoopLaunchOverrides.powerPackBatteryLevel
                     )
                     SummaryGrid(day: publishedDay)
 

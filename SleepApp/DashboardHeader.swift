@@ -1,12 +1,29 @@
 import SwiftUI
 import UIKit
 
+enum PowerPackLEDPresentation {
+    enum Tone: Equatable {
+        case neutral
+        case green
+        case yellow
+        case red
+    }
+
+    static func tone(level: Int?) -> Tone {
+        guard let level else { return .neutral }
+        if level >= 90 { return .green }
+        if level >= 25 { return .yellow }
+        return .red
+    }
+}
+
 struct DashboardHeader: View {
     let referenceDate: Date
     let errorMessage: String?
     let batteryLevel: Int?
     let isCharging: Bool
     let isConnected: Bool
+    let powerPackBatteryLevel: Int?
 
     var body: some View {
         HStack {
@@ -24,36 +41,78 @@ struct DashboardHeader: View {
 
             Spacer()
 
-            HStack(spacing: 7) {
-                ZStack(alignment: .bottomTrailing) {
-                    Image("WhoopBand")
-                        .resizable()
-                        .scaledToFit()
-                        .brightness(0.07)
-                        .contrast(1.03)
-                        .frame(width: 24, height: 24)
+            HStack(spacing: 8) {
+                HStack(spacing: 3) {
+                    ZStack(alignment: .bottomTrailing) {
+                        Image("WhoopBand")
+                            .resizable()
+                            .scaledToFit()
+                            .brightness(0.07)
+                            .contrast(1.03)
+                            .frame(width: 24, height: 24)
 
-                    Circle()
-                        .fill(isConnected ? Color.green : Color.secondary)
-                        .frame(width: 5, height: 5)
-                        .overlay {
-                            Circle()
-                                .stroke(
-                                    Color(uiColor: .systemGroupedBackground),
-                                    lineWidth: 1
-                                )
-                        }
+                        Circle()
+                            .fill(isConnected ? Color.green : Color.secondary)
+                            .frame(width: 5, height: 5)
+                            .overlay {
+                                Circle()
+                                    .stroke(
+                                        Color(uiColor: .systemGroupedBackground),
+                                        lineWidth: 1
+                                    )
+                            }
+                    }
+                    .offset(x: -1)
+
+                    WhoopBatteryPercentIcon(level: batteryLevel, isCharging: isCharging)
+                        .opacity(isConnected ? 1 : 0.45)
                 }
 
-                WhoopBatteryPercentIcon(level: batteryLevel, isCharging: isCharging)
-                    .opacity(isConnected ? 1 : 0.45)
+                HStack(spacing: 3) {
+                    PowerPackStatusImage(batteryLevel: powerPackBatteryLevel)
+                        .offset(x: 2)
+
+                    WhoopBatteryPercentIcon(level: powerPackBatteryLevel, isCharging: false)
+                }
             }
             .frame(minHeight: 36)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(
-                "WHOOP \(isConnected ? "connected" : "disconnected"), battery \(batteryLevel.map { "\($0) percent" } ?? "unavailable")\(isCharging ? ", charging" : "")"
+                "WHOOP \(isConnected ? "connected" : "disconnected"), battery \(batteryLevel.map { "\($0) percent" } ?? "unavailable")\(isCharging ? ", charging" : ""); PowerPack battery \(powerPackBatteryLevel.map { "\($0) percent" } ?? "unavailable")"
             )
-            .accessibilityIdentifier("whoop.connection.status")
+            .accessibilityIdentifier("whoop.batteries")
         }
+    }
+}
+
+private struct PowerPackStatusImage: View {
+    let batteryLevel: Int?
+
+    private var indicatorColor: Color {
+        switch PowerPackLEDPresentation.tone(level: batteryLevel) {
+        case .neutral: Color.secondary
+        case .green: Color.green
+        case .yellow: Color.yellow
+        case .red: Color.red
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            Image("WhoopPowerPack")
+                .resizable()
+                .scaledToFit()
+
+            Capsule()
+                .fill(indicatorColor)
+                .frame(width: 3.5, height: 1.3)
+                .shadow(
+                    color: indicatorColor.opacity(batteryLevel == nil ? 0 : 0.9),
+                    radius: 1.2
+                )
+                .offset(x: 0.5, y: -7.4)
+        }
+        .frame(width: 28, height: 28)
+        .accessibilityHidden(true)
     }
 }

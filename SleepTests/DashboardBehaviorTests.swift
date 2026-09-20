@@ -492,6 +492,16 @@ extension WhoopSleepStateTests {
         )
     }
 
+    func testPowerPackLEDUsesDocumentedBatteryBands() {
+        XCTAssertEqual(PowerPackLEDPresentation.tone(level: nil), .neutral)
+        XCTAssertEqual(PowerPackLEDPresentation.tone(level: 0), .red)
+        XCTAssertEqual(PowerPackLEDPresentation.tone(level: 24), .red)
+        XCTAssertEqual(PowerPackLEDPresentation.tone(level: 25), .yellow)
+        XCTAssertEqual(PowerPackLEDPresentation.tone(level: 89), .yellow)
+        XCTAssertEqual(PowerPackLEDPresentation.tone(level: 90), .green)
+        XCTAssertEqual(PowerPackLEDPresentation.tone(level: 100), .green)
+    }
+
     func testLegacyBatteryPowerStateReportsCharging() {
         XCTAssertEqual(WhoopBluetoothPolicy.legacyBatteryStatus(Data([0x30])), .charging)
         XCTAssertEqual(WhoopBluetoothPolicy.legacyBatteryStatus(Data([0x20])), .notCharging)
