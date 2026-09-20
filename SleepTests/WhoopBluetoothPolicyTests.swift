@@ -103,6 +103,54 @@ final class WhoopBluetoothPolicyTests: XCTestCase {
         )
     }
 
+    func testPowerPackAdvertisementMatchingUsesItsServiceOrSerialName() {
+        XCTAssertTrue(
+            WhoopPowerPackPolicy.matchesAdvertisement(
+                serviceUUIDs: [WhoopPowerPackPolicy.serviceUUID.lowercased()],
+                advertisedName: nil,
+                peripheralName: nil
+            )
+        )
+        XCTAssertTrue(
+            WhoopPowerPackPolicy.matchesAdvertisement(
+                serviceUUIDs: [],
+                advertisedName: "WBB5BP0229191",
+                peripheralName: nil
+            )
+        )
+        XCTAssertFalse(
+            WhoopPowerPackPolicy.matchesAdvertisement(
+                serviceUUIDs: ["180F"],
+                advertisedName: "Battery",
+                peripheralName: nil
+            )
+        )
+    }
+
+    func testPowerPackBatteryLevelUsesStandardGattPercentage() {
+        XCTAssertEqual(WhoopPowerPackPolicy.batteryLevel(Data([0])), 0)
+        XCTAssertEqual(WhoopPowerPackPolicy.batteryLevel(Data([97])), 97)
+        XCTAssertEqual(WhoopPowerPackPolicy.batteryLevel(Data([100])), 100)
+        XCTAssertNil(WhoopPowerPackPolicy.batteryLevel(Data()))
+        XCTAssertNil(WhoopPowerPackPolicy.batteryLevel(Data([101])))
+    }
+
+    func testPowerPackCachedLevelExpiresAfterThirtyDays() {
+        let observedAt = Date(timeIntervalSince1970: 1_000)
+        XCTAssertTrue(
+            WhoopPowerPackPolicy.cachedLevelIsFresh(
+                observedAt: observedAt,
+                now: observedAt.addingTimeInterval(30 * 24 * 60 * 60)
+            )
+        )
+        XCTAssertFalse(
+            WhoopPowerPackPolicy.cachedLevelIsFresh(
+                observedAt: observedAt,
+                now: observedAt.addingTimeInterval(30 * 24 * 60 * 60 + 1)
+            )
+        )
+    }
+
     func testBatteryTrendInferenceNeverOverridesExplicitChargingState() {
         XCTAssertEqual(
             WhoopBluetoothPolicy.inferredBatteryStatus(

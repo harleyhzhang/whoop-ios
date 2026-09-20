@@ -74,6 +74,7 @@
 		ED4B0593B4B893B4414DDEDE /* WhoopDeploymentHealthReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFE526F33EEDC43EE573643D /* WhoopDeploymentHealthReporter.swift */; };
 		EDFCA80D066F0EC111DD028C /* WhoopReplicaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4F743C5C57B6B4700E30C29 /* WhoopReplicaClient.swift */; };
 		F49F154C6990AF121ED7AC04 /* AppHaptics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07BAD69D5BCC8621860A0297 /* AppHaptics.swift */; };
+		F7C2775BDF7ED586CCC62887 /* WhoopPowerPackMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7932959CC96DD16B2AD925D /* WhoopPowerPackMonitor.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -164,6 +165,7 @@
 		BDB8AA26CCBFED085E8C1079 /* DashboardBehaviorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardBehaviorTests.swift; sourceTree = "<group>"; };
 		C08B65E67D08A01C62A13C9E /* WhoopReliabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopReliabilityTests.swift; sourceTree = "<group>"; };
 		C64559828E79DB6EC5514DB2 /* ModelFeatureGoldenVectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelFeatureGoldenVectorTests.swift; sourceTree = "<group>"; };
+		C7932959CC96DD16B2AD925D /* WhoopPowerPackMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopPowerPackMonitor.swift; sourceTree = "<group>"; };
 		CCA3A18B9DA557D605FBC178 /* WhoopStorageTelemetryCensus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopStorageTelemetryCensus.swift; sourceTree = "<group>"; };
 		CD38AB35480B8A5A3AEAC0EF /* WhoopSleepSessionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopSleepSessionPolicy.swift; sourceTree = "<group>"; };
 		D0EBA7B3CE7453E056495763 /* WhoopHistoricalSyncState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopHistoricalSyncState.swift; sourceTree = "<group>"; };
@@ -282,6 +284,7 @@
 				ACA50ED0CA372D20A4C7FCC2 /* WhoopHandshakeProbe.swift */,
 				D0EBA7B3CE7453E056495763 /* WhoopHistoricalSyncState.swift */,
 				A915438470BA7CA309A59AB2 /* WhoopPacketEnvelope.swift */,
+				C7932959CC96DD16B2AD925D /* WhoopPowerPackMonitor.swift */,
 				0CB469B3852FB6D3294099DF /* WhoopProtocol.swift */,
 				A4F743C5C57B6B4700E30C29 /* WhoopReplicaClient.swift */,
 				8868AE127BDE348A1C0C9AAF /* WhoopReplicaCoordinator.swift */,
@@ -509,6 +512,7 @@
 				9C81114036D776D1224473ED /* WhoopHistoricalSyncState.swift in Sources */,
 				8FF94A6FB80D20447C95889D /* WhoopLaunchOverrides.swift in Sources */,
 				BDFAFF674B60CF9A6C7F5583 /* WhoopPacketEnvelope.swift in Sources */,
+				F7C2775BDF7ED586CCC62887 /* WhoopPowerPackMonitor.swift in Sources */,
 				9072C8D530E6F2332C373F82 /* WhoopProtocol.swift in Sources */,
 				EDFCA80D066F0EC111DD028C /* WhoopReplicaClient.swift in Sources */,
 				9D764CB8FF0D4AB14C8ED719 /* WhoopReplicaCoordinator.swift in Sources */,
