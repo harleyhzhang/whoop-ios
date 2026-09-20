@@ -18,11 +18,12 @@ final class SleepUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["RHR"].firstMatch.exists)
         XCTAssertTrue(app.staticTexts["HRV"].firstMatch.exists)
 
-        let connection = app.otherElements["whoop.connection.status"]
-        XCTAssertTrue(connection.exists)
-        XCTAssertEqual(connection.label, "WHOOP connected, battery 73 percent, charging")
-        XCTAssertFalse(app.buttons["whoop.connection.details"].exists)
-        XCTAssertFalse(app.staticTexts["WHOOP 5.0"].exists)
+        let batteries = app.otherElements["whoop.batteries"]
+        XCTAssertTrue(batteries.exists)
+        XCTAssertEqual(
+            batteries.label,
+            "WHOOP connected, battery 73 percent, charging; PowerPack battery 58 percent"
+        )
     }
 
     func testDashboardHasNoManualSleepProcessingControls() {
@@ -68,6 +69,7 @@ final class SleepUITests: XCTestCase {
         app.launchEnvironment["WHOOP_MOCK_CONNECTED"] = "1"
         app.launchEnvironment["WHOOP_MOCK_BATTERY"] = "73"
         app.launchEnvironment["WHOOP_MOCK_CHARGING"] = "1"
+        app.launchEnvironment["WHOOP_MOCK_POWER_PACK_BATTERY"] = "58"
         return app
     }
 }
