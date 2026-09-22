@@ -21,8 +21,11 @@ struct MetricTrendCard: View {
         }
     }
 
+    var displayedValue: Double? {
+        cardSelection == nil ? currentValue : selectedMetricPoint?.value
+    }
+
     var body: some View {
-        let displayedValue = cardSelection == nil ? currentValue : selectedMetricPoint?.value
         let value = displayedValue.map(metric.formattedValue) ?? "—"
         let valueDateLabel =
             cardSelection == nil
@@ -49,8 +52,8 @@ struct MetricTrendCard: View {
                     HStack(alignment: .firstTextBaseline, spacing: 2) {
                         AnimatedMetricValue(
                             value: value,
-                            fontSize: 24,
-                            animateChanges: cardSelection == nil
+                            numericValue: displayedValue,
+                            fontSize: 24
                         )
 
                         if value != "—", !metric.unit.isEmpty {

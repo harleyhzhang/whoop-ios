@@ -4,6 +4,52 @@ import XCTest
 @testable import Sleep
 
 extension WhoopSleepStateTests {
+    @MainActor
+    func testTrendNumberTracksScrubbingAndReturnsToCurrentOnRelease() {
+        let start = Date(timeIntervalSinceReferenceDate: 0)
+        let points = [
+            MetricPoint(date: start, value: 52),
+            MetricPoint(date: start.addingTimeInterval(86_400), value: 81),
+        ]
+        let state = DashboardChartState()
+        let card = MetricTrendCard(
+            metric: .sleep,
+            series: MetricSeries(daily: points, plotted: points),
+            publishedDate: nil,
+            currentValue: 94,
+            chartState: state
+        )
+
+        XCTAssertEqual(card.displayedValue, 94)
+        for point in points + points.reversed() {
+            state.beginSelection(metric: .sleep, date: point.date, reduceMotion: false)
+            XCTAssertEqual(card.displayedValue, point.value)
+        }
+        state.endSelection(metric: .sleep, reduceMotion: false)
+        XCTAssertEqual(card.displayedValue, 94)
+        state.beginSelection(metric: .recovery, date: start, reduceMotion: false)
+        XCTAssertEqual(card.displayedValue, 94)
+    }
+
+    @MainActor
+    func testTrendNumberPreservesMissingCurrentValueWhenHistoricalSelectionEnds() {
+        let point = MetricPoint(date: Date(timeIntervalSinceReferenceDate: 0), value: 73)
+        let state = DashboardChartState()
+        let card = MetricTrendCard(
+            metric: .sleep,
+            series: MetricSeries(daily: [point], plotted: [point]),
+            publishedDate: nil,
+            currentValue: nil,
+            chartState: state
+        )
+
+        XCTAssertNil(card.displayedValue)
+        state.beginSelection(metric: .sleep, date: point.date, reduceMotion: true)
+        XCTAssertEqual(card.displayedValue, 73)
+        state.endSelection(metric: .sleep, reduceMotion: true)
+        XCTAssertNil(card.displayedValue)
+    }
+
     func testSparseChartUsesAContinuousShapePreservingCurve() {
         let start = Date(timeIntervalSinceReferenceDate: 0)
         let day: TimeInterval = 86_400
