@@ -30,20 +30,23 @@ struct SummaryGrid: View {
             HStack(alignment: .top, spacing: 20) {
                 metric(
                     kind: .sleep,
-                    value: sleepScore
+                    value: sleepScore,
+                    numericValue: day.health?.sleepScore
                 )
                 metric(
                     kind: .duration,
-                    value: sleepDuration
+                    value: sleepDuration,
+                    numericValue: day.health?.sleepDurationMinutes.map { $0 / 60 }
                 )
             }
 
             HStack(alignment: .top, spacing: 12) {
-                metric(kind: .steps, value: steps)
-                metric(kind: .recovery, value: recovery)
+                metric(kind: .steps, value: steps, numericValue: day.steps.map { Double($0.stepCount) })
+                metric(kind: .recovery, value: recovery, numericValue: day.recovery?.score)
                 metric(
                     kind: .rhr,
                     value: restingHeartRate,
+                    numericValue: day.health?.restingHeartRateBPM,
                     unit: restingHeartRate == "—" ? "" : "BPM"
                 )
             }
@@ -58,6 +61,7 @@ struct SummaryGrid: View {
     private func metric(
         kind: MetricKind,
         value: String,
+        numericValue: Double?,
         unit: String = ""
     ) -> some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -72,7 +76,7 @@ struct SummaryGrid: View {
             }
 
             HStack(alignment: .firstTextBaseline, spacing: 2) {
-                AnimatedMetricValue(value: value)
+                AnimatedMetricValue(value: value, numericValue: numericValue)
                 if !unit.isEmpty {
                     Text(unit)
                         .font(.system(size: 18, weight: .semibold, design: .rounded))

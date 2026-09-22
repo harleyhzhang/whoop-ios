@@ -162,124 +162,19 @@ struct WhoopBatteryPercentIcon: View {
 }
 
 struct AnimatedMetricValue: View {
-    private static let duration = 0.24
-    private static let stagger = 0.014
-    private static let maximumStagger = 0.042
-
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let value: String
-    let fontSize: CGFloat
-    let animateChanges: Bool
-
-    @State private var previousValue: String
-    @State private var displayedValue: String
-    @State private var animationProgress: CGFloat = 1
-    @State private var animationGeneration = 0
-
-    init(value: String, fontSize: CGFloat = 30, animateChanges: Bool = true) {
-        self.value = value
-        self.fontSize = fontSize
-        self.animateChanges = animateChanges
-        _previousValue = State(initialValue: value)
-        _displayedValue = State(initialValue: value)
-    }
+    let numericValue: Double?
+    var fontSize: CGFloat = 30
 
     var body: some View {
-        ZStack(alignment: .leading) {
-            Text(previousValue)
-                .modifier(PreviousMetricValueFade(progress: animationProgress))
-
-            HStack(spacing: 0) {
-                ForEach(Array(displayedValue.enumerated()), id: \.offset) { index, character in
-                    Text(String(character))
-                        .modifier(
-                            MetricDigitPop(
-                                progress: animationProgress,
-                                delay: min(Double(index) * Self.stagger, Self.maximumStagger),
-                                duration: Self.duration,
-                                totalDuration: Self.duration + Self.maximumStagger
-                            )
-                        )
-                }
-            }
-        }
-        .font(.system(size: fontSize, weight: .semibold, design: .rounded))
-        .monospacedDigit()
-        .foregroundStyle(.primary)
-        .fixedSize()
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(displayedValue)
-        .onChange(of: value) { _, newValue in
-            guard newValue != displayedValue else { return }
-
-            var transaction = Transaction(animation: nil)
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                previousValue = reduceMotion || !animateChanges ? newValue : displayedValue
-                displayedValue = newValue
-                animationProgress = reduceMotion || !animateChanges ? 1 : 0
-                animationGeneration &+= 1
-            }
-        }
-        .task(id: animationGeneration) {
-            guard !reduceMotion, animationProgress == 0 else { return }
-            await Task.yield()
-            guard !Task.isCancelled else { return }
-            withAnimation(.linear(duration: Self.duration + Self.maximumStagger)) {
-                animationProgress = 1
-            }
-            try? await Task.sleep(for: .seconds(Self.duration + Self.maximumStagger))
-            guard !Task.isCancelled else { return }
-            previousValue = displayedValue
-        }
-    }
-}
-
-private struct MetricDigitPop: AnimatableModifier {
-    var progress: CGFloat
-    let delay: Double
-    let duration: Double
-    let totalDuration: Double
-
-    nonisolated var animatableData: CGFloat {
-        get { progress }
-        set { progress = newValue }
-    }
-
-    func body(content: Content) -> some View {
-        let elapsed = progress * CGFloat(totalDuration)
-        let localProgress = min(
-            max((elapsed - CGFloat(delay)) / CGFloat(duration), 0),
-            1
-        )
-        let easedProgress = easeOutBack(localProgress)
-
-        content
-            .opacity(localProgress)
-            .blur(radius: (1 - localProgress) * 1.2)
-            .scaleEffect(0.97 + (0.03 * easedProgress))
-            .offset(y: (1 - easedProgress) * 5)
-    }
-
-    private func easeOutBack(_ progress: CGFloat) -> CGFloat {
-        let overshoot: CGFloat = 0.72
-        let shifted = progress - 1
-        return 1 + ((overshoot + 1) * shifted * shifted * shifted)
-            + (overshoot * shifted * shifted)
-    }
-}
-
-private struct PreviousMetricValueFade: AnimatableModifier {
-    var progress: CGFloat
-
-    nonisolated var animatableData: CGFloat {
-        get { progress }
-        set { progress = newValue }
-    }
-
-    func body(content: Content) -> some View {
-        let remaining = CGFloat(1) - min(progress, CGFloat(1))
-        content.opacity(Double(remaining))
+        Text(value)
+            .font(.system(size: fontSize, weight: .semibold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(.primary)
+            .fixedSize()
+            .contentTransition(.numericText(value: numericValue ?? 0))
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: numericValue)
     }
 }

@@ -207,10 +207,11 @@ discipline, and the limits of historical recovery.
   frame-driven phase morphs the curve and advances the dot; every frame samples
   the dot's vertical coordinate from that exact current monotone curve so it
   stays glued to the line all the way to the latest endpoint. The selection
-  overlay fades during the same 340 ms settle. The headline and current-card
-  numbers use a brief restrained digit pop while retaining the previous value
-  underneath; Reduce Motion makes the detail transition immediate and direct
-  chart scrubbing does not replay the number animation.
+  overlay fades during the same 272 ms settle. Headline, summary, and chart-card
+  numbers match Finance: native SwiftUI numeric transitions with 0.2-second
+  ease-in-out, driven by the displayed numeric value. Scrubbing in either
+  direction, releasing a selection, and publishing new values all animate.
+  Reduce Motion disables the numeric animation.
 - Haptics are limited to selection ticks when the exact selected night changes.
   Passive collection and background Bluetooth events stay silent.
 - The dashboard keeps connection state passive and compact: a small decorative
