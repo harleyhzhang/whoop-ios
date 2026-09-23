@@ -189,31 +189,23 @@ discipline, and the limits of historical recovery.
   history is divided backward from the latest day into adaptive equal-time
   windows, with at most five levels. Each unconnected
   horizontal segment shows its formatted mean above the line. The underlying
-  colored trend remains visible at reduced opacity; pressing or scrubbing
-  quickly eases every retained daily point into the line while the average
-  levels fade away, then reverses the morph on release. The endpoint is one
+  colored trend remains visible at reduced opacity. The endpoint is one
   same-color dot, with no card-colored knockout, border, or halo separating it
   from the line.
+- Charts are static by design: there is no press, hold, or scrub interaction,
+  selection marker, daily-detail morph, or chart haptic, so each card always
+  shows the published day's value. Dashboard scrolling is unaffected.
 - Aggregated trends keep their historical median buckets but anchor the final
   bucket to the exact latest observation, so the endpoint, dot, and current
-  card value agree. Chart selection snaps to rendered points, and a fixed
-  normalized x-domain with slight endpoint padding prevents the plot width from
-  changing while scrubbing or clipping the final dot.
+  card value agree. A fixed normalized x-domain with slight endpoint padding
+  keeps the final dot from being clipped.
 - Trend lines and area fills use a shape-preserving cubic sampler followed by
-  restrained monotone rendering. The summary and daily line share one stable
-  topology during the hold morph, and the complete-detail state lands on every
-  retained daily value. Selection overlays a translucent future region after
-  the selected point, then adds the rule and dot. On release, one shared
-  frame-driven phase morphs the curve and advances the dot; every frame samples
-  the dot's vertical coordinate from that exact current monotone curve so it
-  stays glued to the line all the way to the latest endpoint. The selection
-  overlay fades during the same 272 ms settle. Headline, summary, and chart-card
-  numbers match Finance: native SwiftUI numeric transitions with 0.2-second
-  ease-in-out, driven by the displayed numeric value. Scrubbing in either
-  direction, releasing a selection, and publishing new values all animate.
-  Reduce Motion disables the numeric animation.
-- Haptics are limited to selection ticks when the exact selected night changes.
-  Passive collection and background Bluetooth events stay silent.
+  restrained monotone rendering. Headline, summary, and chart-card numbers match
+  Finance: native SwiftUI numeric transitions with 0.2-second ease-in-out,
+  driven by the displayed numeric value, whenever new values publish. Reduce
+  Motion disables the numeric animation.
+- The app has no haptics. Passive collection and background Bluetooth events
+  stay silent.
 - The dashboard keeps connection state passive and compact: a small decorative
   WHOOP-band image carries a plain status dot, green only while the encrypted
   strap link is active and gray otherwise, followed by the battery indicator.
@@ -281,11 +273,9 @@ discipline, and the limits of historical recovery.
 - Derived rows carry a versioned source. A change to any derivation re-derives
   the nights the previous version wrote instead of leaving stale values in the
   history; archived WHOOP rows are authoritative and are never overwritten.
-- The chart selection dot remains a solid continuation of the trend, and the
-  translucent future region extends past the visible data extent so the round
-  line cap overhanging the final point is dimmed with the rest of the line.
-  The plot clips to its final y-domain and gives its x-domain endpoint padding,
-  so range changes cannot stretch outside the card or shear the final dot.
+- The chart endpoint dot remains a solid continuation of the trend. The plot
+  clips to its final y-domain and gives its x-domain endpoint padding, so data
+  changes cannot stretch outside the card or shear the final dot.
 - Sleep finalization is automatic and card-free. The first coherent
   finalization emits the morning notification. While a
   new sleep is unresolved, every current-day metric is masked with an em dash;

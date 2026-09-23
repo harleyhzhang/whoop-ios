@@ -13,10 +13,10 @@
 
 `SleepApp` is the composition and presentation layer. `SleepApp.swift` owns app
 lifecycle and notification orchestration; `RootView.swift` is a small dashboard
-coordinator. `DashboardHeader.swift`, `SummaryGrid.swift`, `RangePicker.swift`,
-and `MetricTrendCard.swift` own their corresponding sections, while
-`DashboardChartGeometry.swift` and `DashboardChartState.swift` separate pure
-chart calculations from interaction state. `HealthHistoryModel.swift` uses
+coordinator. `DashboardHeader.swift`, `SummaryGrid.swift`, and
+`MetricTrendCard.swift` own their corresponding sections, while
+`DashboardChartGeometry.swift` holds the pure calculations behind the static
+charts. `HealthHistoryModel.swift` uses
 Observation and publishes one atomic `DashboardHistorySnapshot` per database
 generation instead of exposing independently changing history families. Data
 contracts remain in `SleepModels.swift`, while scoring features and model
@@ -24,8 +24,8 @@ bundles live in `ScoreModels.swift`.
 
 SwiftUI owns presentation-time invalidation: the dashboard's current-day
 reference comes from a periodic `TimelineView`, and diagnostic connection age
-uses `Text(date, style: .relative)`. `HealthHistoryModel`,
-`DashboardChartState`, and the probe's six view-facing state values use iOS 17
+uses `Text(date, style: .relative)`. `HealthHistoryModel` and the probe's six
+view-facing state values use iOS 17
 Observation; Bluetooth, persistence, and task internals are explicitly excluded
 from observation tracking.
 
