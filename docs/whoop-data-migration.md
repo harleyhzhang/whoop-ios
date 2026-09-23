@@ -888,8 +888,7 @@ Then verify behavior, not only row counts:
 - the trend cards read Sleep, Duration, Steps, Recovery, RHR, and HRV in that
   order, while hidden summary metrics remain collected and stored;
 - every chart shows all history without range chrome, its line and endpoint stay
-  inside the plot, and holding it smoothly expands the adaptive summary into
-  every retained daily point before reversing on release;
+  inside the plot, and it stays static under touch (no hold or scrub);
 - the installed sidecar hash matches `sourceDatabaseSHA256` in the official
   projection;
 - a pre-migration SQLite snapshot exists and passes `PRAGMA quick_check`;

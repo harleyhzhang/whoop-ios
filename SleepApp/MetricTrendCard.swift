@@ -3,34 +3,19 @@ import SwiftUI
 import UIKit
 
 struct MetricTrendCard: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private static let lineWidth: CGFloat = 2.1
+    private static let lineOpacity = 0.3
+    private static let areaOpacity = 0.07
+    private static let markerSymbolArea: CGFloat = 48
 
     let metric: MetricKind
     let series: MetricSeries
     let publishedDate: Date?
     let currentValue: Double?
-    @Bindable var chartState: DashboardChartState
-
-    private var cardSelection: Date? {
-        chartState.activeMetric == metric ? chartState.selectedDate : nil
-    }
-
-    private var selectedMetricPoint: MetricPoint? {
-        cardSelection.flatMap {
-            DashboardChartGeometry.selectedPoint(in: series.daily, near: $0)
-        }
-    }
-
-    var displayedValue: Double? {
-        cardSelection == nil ? currentValue : selectedMetricPoint?.value
-    }
 
     var body: some View {
-        let value = displayedValue.map(metric.formattedValue) ?? "—"
-        let valueDateLabel =
-            cardSelection == nil
-            ? publishedDate.map(Self.selectionLabel) ?? "Today"
-            : selectedMetricPoint.map { Self.selectionLabel(for: $0.date) } ?? "No real data"
+        let value = currentValue.map(metric.formattedValue) ?? "—"
+        let valueDateLabel = publishedDate.map(Self.dateLabel) ?? "Today"
 
         VStack(alignment: .leading, spacing: 7) {
             Label {
@@ -52,7 +37,7 @@ struct MetricTrendCard: View {
                     HStack(alignment: .firstTextBaseline, spacing: 2) {
                         AnimatedMetricValue(
                             value: value,
-                            numericValue: displayedValue,
+                            numericValue: currentValue,
                             fontSize: 24
                         )
 
@@ -98,51 +83,12 @@ struct MetricTrendCard: View {
     }
 
     private var populatedMetricChart: some View {
-        let detailProgress =
-            chartState.detailedMetric == metric ? Double(chartState.detailProgress) : 0
-        let chartPoints = DashboardChartGeometry.detailMorphingPoints(
-            in: series,
-            progress: detailProgress
-        )
+        let chartPoints = DashboardChartGeometry.summaryCurvePoints(in: series)
         let domain = metric.chartDomain(for: series.daily)
-        let chartSelection = cardSelection
-        let isReleasing = chartState.releasingMetric == metric
-        let releaseProgress = isReleasing ? Double(chartState.releaseProgress) : 0
-        let visualSelection = chartSelection ?? (isReleasing ? chartState.selectedDate : nil)
-        let selectionOverlayOpacity =
-            chartSelection != nil
-            ? 1
-            : isReleasing
-                ? DashboardChartGeometry.selectionOverlayOpacity(releaseProgress: releaseProgress)
-                : 0
-        let averageOpacity = 1 - DashboardChartGeometry.smoothStep(detailProgress)
-        let contentOpacity = ChartContentOpacity.resolve(detailProgress: detailProgress)
-        let lineWidth = DashboardChartGeometry.lineWidth(detailProgress: detailProgress)
-        let highlightedPoint =
-            DashboardChartGeometry.selectedPoint(in: series.daily, near: visualSelection)
-            ?? series.daily.last
-            ?? MetricPoint(date: .now, value: 0)
-        let requestedHighlightPosition = DashboardChartGeometry.returningPosition(
-            from: DashboardChartGeometry.normalizedPosition(
-                of: highlightedPoint.date,
-                in: series.daily
-            ),
-            progress: releaseProgress
-        )
-        let highlightedCurvePoint =
-            chartSelection != nil || isReleasing
-            ? ChartPointAlignment.pointOnCurve(
-                at: requestedHighlightPosition,
-                in: chartPoints
-            )
-            : chartPoints.last.map {
-                ChartCurvePoint(position: $0.position, value: $0.value)
-            }
-        let highlightedPosition = highlightedCurvePoint?.position ?? requestedHighlightPosition
-        let highlightedValue = highlightedCurvePoint?.value ?? highlightedPoint.value
+        let latestPosition = chartPoints.last?.position ?? 1
+        let latestValue = chartPoints.last?.value ?? series.daily.last?.value ?? 0
         let monthTicks = DashboardChartGeometry.monthlyAxisDates(in: series.daily)
         let averageLevels = DashboardChartGeometry.averageLevels(from: series.daily)
-        let markerSymbolArea: CGFloat = 48
 
         return VStack(spacing: 0) {
             Chart {
@@ -163,7 +109,7 @@ struct MetricTrendCard: View {
                             endPoint: .bottom
                         )
                     )
-                    .opacity(contentOpacity.area)
+                    .opacity(Self.areaOpacity)
 
                     LineMark(
                         x: .value("Position", point.position),
@@ -171,87 +117,62 @@ struct MetricTrendCard: View {
                     )
                     .interpolationMethod(.monotone)
                     .lineStyle(
-                        StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
+                        StrokeStyle(lineWidth: Self.lineWidth, lineCap: .round, lineJoin: .round)
                     )
                     .foregroundStyle(metric.color)
-                    .opacity(contentOpacity.line)
+                    .opacity(Self.lineOpacity)
                 }
 
-                if averageOpacity > 0.001 {
-                    ForEach(averageLevels) { level in
-                        RuleMark(
-                            xStart: .value(
-                                "Average window start",
-                                DashboardChartGeometry.normalizedPosition(
-                                    of: level.startDate,
-                                    in: series.daily
-                                )
-                            ),
-                            xEnd: .value(
-                                "Average window end",
-                                DashboardChartGeometry.normalizedPosition(
-                                    of: level.endDate,
-                                    in: series.daily
-                                )
-                            ),
-                            y: .value("Window average", level.value)
-                        )
-                        .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .butt))
-                        .foregroundStyle(Color.white)
-                        .opacity(averageOpacity)
-                        .annotation(position: .top, spacing: 5) {
-                            Text(metric.formattedAverage(level.value))
-                                .font(.system(size: 10, weight: .semibold, design: .rounded))
-                                .monospacedDigit()
-                                .tracking(-0.35)
-                                .foregroundStyle(Color.white.opacity(averageOpacity))
-                        }
-                        .zIndex(3)
-                    }
-                }
-
-                if selectionOverlayOpacity > 0.001 {
-                    RectangleMark(
+                ForEach(averageLevels) { level in
+                    RuleMark(
                         xStart: .value(
-                            "Dimmed future start",
-                            min(highlightedPosition + 0.002, 1)
+                            "Average window start",
+                            DashboardChartGeometry.normalizedPosition(
+                                of: level.startDate,
+                                in: series.daily
+                            )
                         ),
-                        xEnd: .value("Dimmed future end", 1.02),
-                        yStart: .value("Dimmed future minimum", domain.lowerBound),
-                        yEnd: .value("Dimmed future maximum", domain.upperBound)
+                        xEnd: .value(
+                            "Average window end",
+                            DashboardChartGeometry.normalizedPosition(
+                                of: level.endDate,
+                                in: series.daily
+                            )
+                        ),
+                        y: .value("Window average", level.value)
                     )
-                    .foregroundStyle(
-                        Color(uiColor: .secondarySystemGroupedBackground).opacity(0.58)
-                    )
-                    .opacity(selectionOverlayOpacity)
-
-                    RuleMark(x: .value("Selected position", highlightedPosition))
-                        .lineStyle(StrokeStyle(lineWidth: 1))
-                        .foregroundStyle(Color.secondary.opacity(0.5))
-                        .opacity(selectionOverlayOpacity)
+                    .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .butt))
+                    .foregroundStyle(Color.white)
+                    .annotation(position: .top, spacing: 5) {
+                        Text(metric.formattedAverage(level.value))
+                            .font(.system(size: 10, weight: .semibold, design: .rounded))
+                            .monospacedDigit()
+                            .tracking(-0.35)
+                            .foregroundStyle(Color.white)
+                    }
+                    .zIndex(3)
                 }
 
                 PointMark(
-                    x: .value("Position", highlightedPosition),
-                    y: .value(metric.trendTitle, highlightedValue)
+                    x: .value("Position", latestPosition),
+                    y: .value(metric.trendTitle, latestValue)
                 )
-                .symbolSize(markerSymbolArea)
+                .symbolSize(Self.markerSymbolArea)
                 .foregroundStyle(Color(uiColor: .secondarySystemGroupedBackground))
                 .zIndex(1)
 
                 PointMark(
-                    x: .value("Position", highlightedPosition),
-                    y: .value(metric.trendTitle, highlightedValue)
+                    x: .value("Position", latestPosition),
+                    y: .value(metric.trendTitle, latestValue)
                 )
-                .symbolSize(markerSymbolArea)
+                .symbolSize(Self.markerSymbolArea)
                 .foregroundStyle(metric.color)
-                .opacity(contentOpacity.line)
+                .opacity(Self.lineOpacity)
                 .zIndex(2)
             }
             .chartYScale(domain: domain)
             .chartPlotStyle { $0.clipped() }
             .chartXScale(domain: -0.02...1.02)
-            .chartXSelection(value: normalizedSelectionBinding(selectableSeries: series.daily))
             .chartYAxis {
                 AxisMarks(
                     position: .trailing,
@@ -275,11 +196,7 @@ struct MetricTrendCard: View {
             .frame(height: 126)
             .accessibilityIdentifier("whoop.chart.\(metric.accessibilityID)")
             .accessibilityLabel("\(metric.trendTitle), all history")
-            .accessibilityValue(
-                chartSelection != nil
-                    ? "Daily detail line"
-                    : isReleasing ? "Returning to latest" : "Summary line"
-            )
+            .accessibilityValue("Summary line")
 
             rangeAxisFooter(monthDates: monthTicks)
         }
@@ -305,49 +222,7 @@ struct MetricTrendCard: View {
         .frame(height: 19, alignment: .top)
     }
 
-    private func normalizedSelectionBinding(
-        selectableSeries: [MetricPoint]
-    ) -> Binding<Double?> {
-        Binding(
-            get: {
-                guard chartState.activeMetric == metric, let selectedDate = chartState.selectedDate
-                else { return nil }
-                return DashboardChartGeometry.normalizedPosition(
-                    of: selectedDate,
-                    in: selectableSeries
-                )
-            },
-            set: { position in
-                if let position,
-                    let firstDate = selectableSeries.first?.date,
-                    let lastDate = selectableSeries.last?.date
-                {
-                    let clampedPosition = min(max(position, 0), 1)
-                    let date = firstDate.addingTimeInterval(
-                        lastDate.timeIntervalSince(firstDate) * clampedPosition
-                    )
-                    guard
-                        let point = DashboardChartGeometry.selectedPoint(
-                            in: selectableSeries,
-                            near: date
-                        )
-                    else { return }
-                    if chartState.activeMetric != metric || chartState.selectedDate != point.date {
-                        AppHaptics.selection()
-                    }
-                    chartState.beginSelection(
-                        metric: metric,
-                        date: point.date,
-                        reduceMotion: reduceMotion
-                    )
-                } else if chartState.activeMetric == metric {
-                    chartState.endSelection(metric: metric, reduceMotion: reduceMotion)
-                }
-            }
-        )
-    }
-
-    private static func selectionLabel(for date: Date) -> String {
+    private static func dateLabel(for date: Date) -> String {
         if Calendar.current.isDateInToday(date) { return "Today" }
         return date.formatted(.dateTime.month(.abbreviated).day())
     }

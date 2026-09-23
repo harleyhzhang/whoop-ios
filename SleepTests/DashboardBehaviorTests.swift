@@ -4,52 +4,6 @@ import XCTest
 @testable import Sleep
 
 extension WhoopSleepStateTests {
-    @MainActor
-    func testTrendNumberTracksScrubbingAndReturnsToCurrentOnRelease() {
-        let start = Date(timeIntervalSinceReferenceDate: 0)
-        let points = [
-            MetricPoint(date: start, value: 52),
-            MetricPoint(date: start.addingTimeInterval(86_400), value: 81),
-        ]
-        let state = DashboardChartState()
-        let card = MetricTrendCard(
-            metric: .sleep,
-            series: MetricSeries(daily: points, plotted: points),
-            publishedDate: nil,
-            currentValue: 94,
-            chartState: state
-        )
-
-        XCTAssertEqual(card.displayedValue, 94)
-        for point in points + points.reversed() {
-            state.beginSelection(metric: .sleep, date: point.date, reduceMotion: false)
-            XCTAssertEqual(card.displayedValue, point.value)
-        }
-        state.endSelection(metric: .sleep, reduceMotion: false)
-        XCTAssertEqual(card.displayedValue, 94)
-        state.beginSelection(metric: .recovery, date: start, reduceMotion: false)
-        XCTAssertEqual(card.displayedValue, 94)
-    }
-
-    @MainActor
-    func testTrendNumberPreservesMissingCurrentValueWhenHistoricalSelectionEnds() {
-        let point = MetricPoint(date: Date(timeIntervalSinceReferenceDate: 0), value: 73)
-        let state = DashboardChartState()
-        let card = MetricTrendCard(
-            metric: .sleep,
-            series: MetricSeries(daily: [point], plotted: [point]),
-            publishedDate: nil,
-            currentValue: nil,
-            chartState: state
-        )
-
-        XCTAssertNil(card.displayedValue)
-        state.beginSelection(metric: .sleep, date: point.date, reduceMotion: true)
-        XCTAssertEqual(card.displayedValue, 73)
-        state.endSelection(metric: .sleep, reduceMotion: true)
-        XCTAssertNil(card.displayedValue)
-    }
-
     func testSparseChartUsesAContinuousShapePreservingCurve() {
         let start = Date(timeIntervalSinceReferenceDate: 0)
         let day: TimeInterval = 86_400
@@ -87,7 +41,7 @@ extension WhoopSleepStateTests {
         XCTAssertEqual(values.max(), 30)
     }
 
-    func testChartCurveKeepsMorphTopologyStable() {
+    func testChartCurveResamplesToRequestedPointCount() {
         let start = Date(timeIntervalSinceReferenceDate: 0)
         let day: TimeInterval = 86_400
         let week = (0..<7).map {
@@ -101,217 +55,34 @@ extension WhoopSleepStateTests {
         XCTAssertEqual(ChartCurveSampler.resampledValues(from: year, count: 48).count, 48)
     }
 
-    func testChartMarkerSamplesSmoothedCurveBetweenAnchors() throws {
-        let curve = [
-            MorphingMetricPoint(id: 0, position: 0, value: 40),
-            MorphingMetricPoint(id: 1, position: 0.25, value: 60),
-            MorphingMetricPoint(id: 2, position: 0.5, value: 45),
-            MorphingMetricPoint(id: 3, position: 0.75, value: 80),
-            MorphingMetricPoint(id: 4, position: 1, value: 70),
-        ]
-
-        let aligned = try XCTUnwrap(
-            ChartPointAlignment.pointOnCurve(at: 0.625, in: curve)
-        )
-
-        XCTAssertEqual(aligned.position, 0.625)
-        XCTAssertEqual(aligned.value, 62.5, accuracy: 0.000_001)
-    }
-
-    func testChartMarkerAlignmentPreservesCurveEndpoints() throws {
-        let curve = [
-            MorphingMetricPoint(id: 0, position: 0, value: 40),
-            MorphingMetricPoint(id: 1, position: 0.5, value: 60),
-            MorphingMetricPoint(id: 2, position: 1, value: 50),
-        ]
-
-        XCTAssertEqual(
-            try XCTUnwrap(ChartPointAlignment.pointOnCurve(at: 0, in: curve)).value,
-            40
-        )
-        XCTAssertEqual(
-            try XCTUnwrap(ChartPointAlignment.pointOnCurve(at: 1, in: curve)).value,
-            50
-        )
-    }
-
-    func testReleasedMarkerFollowsSimultaneouslyMorphingCurveInsteadOfStraightChord() throws {
-        let start = Date(timeIntervalSinceReferenceDate: 0)
-        let day: TimeInterval = 86_400
-        let daily = [0.0, 100.0, 0.0].enumerated().map { index, value in
-            MetricPoint(date: start.addingTimeInterval(Double(index) * day), value: value)
-        }
-        let summary = [
-            MetricPoint(date: daily[0].date, value: 20),
-            MetricPoint(date: daily[2].date, value: 20),
-        ]
-        let currentCurve = DashboardChartGeometry.detailMorphingPoints(
-            in: MetricSeries(daily: daily, plotted: summary),
-            progress: 0.5
-        )
-        let currentPosition = DashboardChartGeometry.returningPosition(
-            from: 0,
-            progress: 0.5
-        )
-
-        let marker = try XCTUnwrap(
-            ChartPointAlignment.pointOnCurve(at: currentPosition, in: currentCurve)
-        )
-
-        XCTAssertEqual(marker.position, 0.5, accuracy: 0.000_001)
-        XCTAssertEqual(marker.value, 60, accuracy: 0.000_001)
-        XCTAssertNotEqual(marker.value, 10, "A straight endpoint chord would put the marker here")
-    }
-
-    func testHoldingChartRestoresOpaqueDailyHistory() {
-        let opacity = ChartContentOpacity.resolve(detailProgress: 1)
-
-        XCTAssertEqual(opacity.line, 1)
-        XCTAssertEqual(opacity.area, 0.26)
-    }
-
-    func testPassiveAllHistoryChartRemainsTranslucent() {
-        let opacity = ChartContentOpacity.resolve(detailProgress: 0)
-
-        XCTAssertEqual(opacity.line, 0.3, accuracy: 0.000_001)
-        XCTAssertEqual(opacity.area, 0.07, accuracy: 0.000_001)
-    }
-
-    func testHeldDailyLineIsThinnerThanSummaryLine() {
-        let summaryWidth = DashboardChartGeometry.lineWidth(detailProgress: 0)
-        let halfwayWidth = DashboardChartGeometry.lineWidth(detailProgress: 0.5)
-        let detailWidth = DashboardChartGeometry.lineWidth(detailProgress: 1)
-
-        XCTAssertEqual(summaryWidth, 2.1, accuracy: 0.000_001)
-        XCTAssertEqual(detailWidth, 1.25, accuracy: 0.000_001)
-        XCTAssertGreaterThan(summaryWidth, halfwayWidth)
-        XCTAssertGreaterThan(halfwayWidth, detailWidth)
-    }
-
-    func testReleasedSelectionEasesTowardLatestAndFadesItsOverlay() {
-        XCTAssertEqual(
-            DashboardChartGeometry.returningPosition(from: 0.2, progress: 0),
-            0.2,
-            accuracy: 0.000_001
-        )
-        XCTAssertEqual(
-            DashboardChartGeometry.returningPosition(from: 0.2, progress: 0.5),
-            0.6,
-            accuracy: 0.000_001
-        )
-        XCTAssertEqual(
-            DashboardChartGeometry.returningPosition(from: 0.2, progress: 1),
-            1,
-            accuracy: 0.000_001
-        )
-        XCTAssertEqual(
-            DashboardChartGeometry.selectionOverlayOpacity(releaseProgress: 0),
-            1,
-            accuracy: 0.000_001
-        )
-        XCTAssertEqual(
-            DashboardChartGeometry.selectionOverlayOpacity(releaseProgress: 1),
-            0,
-            accuracy: 0.000_001
-        )
-    }
-
-    func testHoldingChartMorphsEveryDailyPointIntoLine() {
+    func testStaticChartPlacesSummaryCurveOnEveryDailyPosition() {
         let start = Date(timeIntervalSinceReferenceDate: 0)
         let day: TimeInterval = 86_400
         let daily = [12.0, 41.0, 23.0, 76.0, 54.0].enumerated().map { index, value in
             MetricPoint(date: start.addingTimeInterval(Double(index) * day), value: value)
         }
-        let summary = [daily[1], daily[4]]
-        let series = MetricSeries(daily: daily, plotted: summary)
+        let summary = [
+            MetricPoint(date: daily[0].date, value: 20),
+            MetricPoint(date: daily[4].date, value: 54),
+        ]
 
-        let detailed = DashboardChartGeometry.detailMorphingPoints(in: series, progress: 1)
+        let points = DashboardChartGeometry.summaryCurvePoints(
+            in: MetricSeries(daily: daily, plotted: summary)
+        )
 
-        XCTAssertEqual(detailed.count, daily.count)
-        XCTAssertEqual(detailed.map(\.value), daily.map(\.value))
-        XCTAssertEqual(detailed.map(\.position), [0, 0.25, 0.5, 0.75, 1])
+        XCTAssertEqual(points.map(\.id), [0, 1, 2, 3, 4])
+        XCTAssertEqual(points.map(\.position), [0, 0.25, 0.5, 0.75, 1])
+        XCTAssertEqual(points.first?.value, 20)
+        XCTAssertEqual(points.last?.value, 54)
+        XCTAssertEqual(points[2].value, 37, accuracy: 0.000_001)
     }
 
-    func testChartDetailMorphUsesSmoothIntermediateGeometry() {
-        let start = Date(timeIntervalSinceReferenceDate: 0)
-        let day: TimeInterval = 86_400
-        let daily = [0.0, 100.0, 0.0].enumerated().map { index, value in
-            MetricPoint(date: start.addingTimeInterval(Double(index) * day), value: value)
-        }
-        let summary = [MetricPoint(date: daily[0].date, value: 20), MetricPoint(date: daily[2].date, value: 20)]
-        let series = MetricSeries(daily: daily, plotted: summary)
-
-        let halfway = DashboardChartGeometry.detailMorphingPoints(in: series, progress: 0.5)
-
-        XCTAssertEqual(halfway.map(\.value), [10, 60, 10])
-    }
-
-    @MainActor
-    func testChartSelectionEntersAndLeavesDailyDetailMode() {
-        let state = DashboardChartState()
-        let date = Date(timeIntervalSinceReferenceDate: 123)
-
-        state.beginSelection(metric: .sleep, date: date, reduceMotion: true)
-
-        XCTAssertEqual(state.activeMetric, .sleep)
-        XCTAssertEqual(state.detailedMetric, .sleep)
-        XCTAssertEqual(state.selectedDate, date)
-        XCTAssertEqual(state.detailProgress, 1)
-
-        state.endSelection(metric: .sleep, reduceMotion: true)
-
-        XCTAssertNil(state.activeMetric)
-        XCTAssertNil(state.selectedDate)
-        XCTAssertEqual(state.detailProgress, 0)
-    }
-
-    @MainActor
-    func testFirstChartSelectionStagesSummaryBeforeDetailTransition() async {
-        let state = DashboardChartState()
-        let date = Date(timeIntervalSinceReferenceDate: 123)
-
-        state.beginSelection(metric: .sleep, date: date, reduceMotion: false)
-
-        XCTAssertEqual(state.detailProgress, 0)
-        XCTAssertEqual(state.detailTargetProgress, 1)
-        let generation = state.detailGeneration
-
-        await state.runDetailTransition(generation: generation, reduceMotion: false)
-
-        XCTAssertEqual(state.detailProgress, 1)
-    }
-
-    @MainActor
-    func testChartTransitionsUseQuickerHighCadenceTiming() {
-        let revealDuration = DashboardChartState.revealDuration
-        let releaseFrameCount = DashboardChartState.releaseFrameCount
-        let releaseFrameDuration = DashboardChartState.releaseFrameDuration
-
-        XCTAssertEqual(revealDuration, 0.22, accuracy: 0.001)
-        XCTAssertEqual(releaseFrameCount, 34)
-        XCTAssertEqual(releaseFrameDuration, .milliseconds(8))
-    }
-
-    @MainActor
-    func testReleaseKeepsVisualSelectionUntilEndpointAnimationFinishes() async {
-        let state = DashboardChartState()
-        let date = Date(timeIntervalSinceReferenceDate: 123)
-        state.beginSelection(metric: .sleep, date: date, reduceMotion: true)
-
-        state.endSelection(metric: .sleep, reduceMotion: false)
-
-        XCTAssertNil(state.activeMetric)
-        XCTAssertEqual(state.releasingMetric, .sleep)
-        XCTAssertEqual(state.selectedDate, date)
-        XCTAssertEqual(state.releaseProgress, 0)
-        let generation = state.detailGeneration
-
-        await state.runDetailTransition(generation: generation, reduceMotion: false)
-
-        XCTAssertNil(state.releasingMetric)
-        XCTAssertNil(state.selectedDate)
-        XCTAssertEqual(state.releaseProgress, 1)
-        XCTAssertEqual(state.detailProgress, 0)
+    func testStaticChartIsEmptyWithoutDailyHistory() {
+        XCTAssertTrue(
+            DashboardChartGeometry.summaryCurvePoints(
+                in: MetricSeries(daily: [], plotted: [])
+            ).isEmpty
+        )
     }
 
     func testPublishedDashboardMetricsShareOneDayKey() throws {

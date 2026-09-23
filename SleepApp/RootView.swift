@@ -15,8 +15,6 @@ enum DashboardCurrentDayPolicy {
 
 struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var chartState = DashboardChartState()
     @State private var history = HealthHistoryModel()
     var whoopCollector: WhoopHandshakeProbe
     var powerPackMonitor: WhoopPowerPackMonitor
@@ -59,12 +57,6 @@ struct RootView: View {
             dashboard(currentDate: context.date)
         }
         .preferredColorScheme(.dark)
-        .task(id: chartState.detailGeneration) {
-            await chartState.runDetailTransition(
-                generation: chartState.detailGeneration,
-                reduceMotion: reduceMotion
-            )
-        }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else {
                 WhoopStore.shared.flushStorageTelemetry()
@@ -116,8 +108,7 @@ struct RootView: View {
                             metric: metric,
                             series: metricSeries(for: metric),
                             publishedDate: publishedDay.date,
-                            currentValue: metricValue(for: metric),
-                            chartState: chartState
+                            currentValue: metricValue(for: metric)
                         )
                     }
                 }
