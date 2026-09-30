@@ -485,6 +485,7 @@ def build_app(
             "WHOOP_PRIVATE_SEED_ROOT": str(private_root),
             "WHOOP_HISTORY_SEED_PATH": str(private_root / "whoop-history.json"),
             "WHOOP_SCORE_MODEL_PATH": str(private_root / "whoop-score-model.json"),
+            "WHOOP_STRAIN_MODEL_PATH": str(private_root / "whoop-strain-model.json"),
             "WHOOP_RECOVERY_MODEL_PATH": str(private_root / "whoop-recovery-model.json"),
             "WHOOP_OFFICIAL_METRICS_PATH": str(private_root / "whoop-official-metrics.json"),
             "WHOOP_OFFICIAL_ARCHIVE_PATH": str(private_root / "whoop-official-archive.sqlite3"),

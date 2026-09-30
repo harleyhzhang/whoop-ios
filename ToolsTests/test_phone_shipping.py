@@ -67,6 +67,18 @@ def create_database(path: Path, schema: int, counts: dict[str, int] | None = Non
 def create_private_assets(root: Path) -> None:
     root.mkdir()
     write_json(
+        root / "whoop-strain-model.json",
+        {
+            "calibration": {
+                "version": "synthetic-v1",
+                "exponent": 2.0,
+                "loadScale": 1.0,
+                "scoreScale": 4.0,
+            },
+            "maximumHeartRate": 190.0,
+        },
+    )
+    write_json(
         root / "whoop-history.json",
         [{"dateKey": "2026-01-01", "sleepDurationMinutes": 480, "source": "synthetic"}],
     )

@@ -15,6 +15,7 @@ enum DashboardCurrentDayPolicy {
 
 struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var history = HealthHistoryModel()
     var whoopCollector: WhoopHandshakeProbe
     var powerPackMonitor: WhoopPowerPackMonitor
@@ -57,6 +58,13 @@ struct RootView: View {
             dashboard(currentDate: context.date)
         }
         .preferredColorScheme(.dark)
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(60))
+                guard !Task.isCancelled else { return }
+                history.reload()
+            }
+        }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else {
                 WhoopStore.shared.flushStorageTelemetry()
@@ -88,11 +96,14 @@ struct RootView: View {
 
     private func dashboard(currentDate: Date) -> some View {
         let referenceDate = publishedDay.date ?? currentDate
+        let projection = DashboardCardProjection(
+            snapshot: history.snapshot, published: publishedDay, referenceDate: referenceDate
+        )
         return ZStack {
             Color(uiColor: .systemGroupedBackground).ignoresSafeArea()
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 24) {
                     DashboardHeader(
                         referenceDate: referenceDate,
                         errorMessage: history.errorMessage,
@@ -101,15 +112,22 @@ struct RootView: View {
                         isConnected: isConnected,
                         powerPackBatteryLevel: powerPackBatteryLevel
                     )
-                    SummaryGrid(day: publishedDay)
+                    HStack(spacing: 18) {
+                        SummaryRing(metric: .sleep, value: projection.selected?.sleep)
+                        SummaryRing(metric: .recovery, value: projection.selected?.recovery)
+                        SummaryRing(metric: .strain, value: projection.selected?.strain)
+                    }
+                    .padding(.vertical, 2)
 
-                    ForEach(MetricKind.trendOrder, id: \.self) { metric in
-                        MetricTrendCard(
-                            metric: metric,
-                            series: metricSeries(for: metric),
-                            publishedDate: publishedDay.date,
-                            currentValue: metricValue(for: metric)
-                        )
+                    LazyVGrid(
+                        columns: Array(
+                            repeating: GridItem(.flexible(), spacing: 12),
+                            count: typeSize.isAccessibilitySize ? 1 : 2), spacing: 12
+                    ) {
+                        ForEach([HealthMetric.steps, .duration, .hrv, .rhr, .sleep, .recovery, .strain]) { metric in
+                            MetricCard(metric: metric, selected: projection.selected, days: projection.days)
+                                .accessibilityIdentifier("card.\(metric.rawValue)")
+                        }
                     }
                 }
                 .padding(.horizontal, 16)
@@ -120,20 +138,6 @@ struct RootView: View {
         }
     }
 
-    private func metricSeries(for metric: MetricKind) -> MetricSeries {
-        history.metricSeries(for: metric)
-    }
-
-    private func metricValue(for metric: MetricKind) -> Double? {
-        switch metric {
-        case .steps: publishedDay.steps.map { Double($0.stepCount) }
-        case .recovery: publishedDay.recovery?.score
-        case .sleep: publishedDay.health?.sleepScore
-        case .duration: publishedDay.health?.sleepDurationMinutes.map { $0 / 60 }
-        case .hrv: publishedDay.health?.hrvRMSSDMilliseconds
-        case .rhr: publishedDay.health?.restingHeartRateBPM
-        }
-    }
 }
 
 #Preview {

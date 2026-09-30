@@ -296,10 +296,20 @@ final class WhoopStore: Sendable, WhoopPacketPersisting {
     func loadDashboardHistory(
         completion: @escaping @Sendable (Result<DashboardHistorySnapshot, Error>) -> Void
     ) {
-        readiness.whenResolved { [dashboardReader] result in
+        readiness.whenResolved { [self] result in
             switch result {
             case .success(let url):
-                dashboardReader.loadSnapshot(at: url, completion: completion)
+                dashboardReader.loadSnapshot(at: url) { [self] result in
+                    if case .success(let snapshot) = result, !snapshot.strainDerivations.isEmpty {
+                        queue.async { [self] in
+                            guard let database else { return }
+                            for (key, value) in snapshot.strainDerivations {
+                                _ = setMetadataValue(database: database, key: key, value: value)
+                            }
+                        }
+                    }
+                    completion(result)
+                }
             case .failure(let failure):
                 completion(.failure(failure))
             }
@@ -2814,23 +2824,8 @@ final class WhoopStore: Sendable, WhoopPacketPersisting {
         return textColumn(statement, 0)
     }
 
-    private func setMetadataValue(
-        database: OpaquePointer,
-        key: String,
-        value: String
-    ) -> Bool {
-        let sql = """
-            INSERT INTO whoop_store_metadata(key, value) VALUES (?, ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value
-            """
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-            let statement
-        else { return false }
-        defer { sqlite3_finalize(statement) }
-        bind(key, to: 1, in: statement)
-        bind(value, to: 2, in: statement)
-        return sqlite3_step(statement) == SQLITE_DONE
+    private func setMetadataValue(database: OpaquePointer, key: String, value: String) -> Bool {
+        StoreMetadataRepository().set(database: database, key: key, value: value)
     }
 
     private func insertRealtime(

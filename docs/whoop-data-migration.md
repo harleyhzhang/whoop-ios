@@ -175,7 +175,7 @@ python3 "$WORKSPACE/Tools/make_history_seed.py" \
 
 The generator reduces scored, non-nap sleeps to one primary sleep per local
 date. It keeps the full sleep and Recovery source objects alongside indexed
-numeric/Boolean leaves in the phone database; the five-number dashboard is only
+numeric/Boolean leaves in the phone database; the dashboard is only
 a view over that richer store.
 
 ## 3. Optionally archive official-iOS/private API responses
@@ -579,7 +579,7 @@ Tools/ship_phone.sh --commit "$(git rev-parse HEAD)"
    `origin/main`;
 2. runs the install classifier and a `Tools/doctor.sh` preflight for Xcode,
    iPhoneOS SDK, CoreDevice, pairing, Developer Mode, free space, signing
-   identity/profile, the existing app container, and all five private assets;
+   identity/profile, the existing app container, and all six private assets;
 3. validates model feature versions and dimensions, archive/projection hashes,
    and SQLite integrity before building;
 4. builds and signs the exact commit, embeds that SHA in `WHOOPSourceCommit`,
@@ -877,18 +877,17 @@ SQL
 Then verify behavior, not only row counts:
 
 - the app launches without a sample-data fallback;
-- the compact summary reads Sleep, Duration, Steps, Recovery, and RHR;
-- an unresolved sleep leaves the latest coherent published day visible until
-  the completed history is automatically finalized; there is no manual Process
-  control or loading state;
-- Steps appears as `Steps`, with no `Beta` label, and spans the official/local
-  boundary without duplicate days;
-- Recovery follows Steps, historical dates show exact official targets, and
-  locally derived dates show versioned predictions;
-- the trend cards read Sleep, Duration, Steps, Recovery, RHR, and HRV in that
-  order, while hidden summary metrics remain collected and stored;
-- every chart shows all history without range chrome, its line and endpoint stay
-  inside the plot, and it stays static under touch (no hold or scrub);
+- the three rings read Sleep, Recovery, and Strain;
+- an unresolved sleep shows empty headlines until automatic publication; there
+  is no manual Process control or loading state;
+- the seven cards read Step Count, Sleep duration, HRV, RHR, Sleep, Recovery,
+  and Strain, in two columns (one for accessibility sizes);
+- Steps and Recovery keep official/local precedence and independent versions;
+- Strain keeps historical official targets and computes later days from direct
+  HR plus the rough muscular policy. Its versioned components, input revision,
+  calibration and coverage remain in metadata, while its UI label is just Strain;
+- every chart shows one month with evenly centered vertical metric strokes and
+  four average ladders; missing dates stay empty and there is no range/caret UI;
 - the installed sidecar hash matches `sourceDatabaseSHA256` in the official
   projection;
 - a pre-migration SQLite snapshot exists and passes `PRAGMA quick_check`;

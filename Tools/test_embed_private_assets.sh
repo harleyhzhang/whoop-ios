@@ -18,6 +18,7 @@ assets=(
   whoop-history.json
   whoop-score-model.json
   whoop-recovery-model.json
+  whoop-strain-model.json
   whoop-official-metrics.json
   whoop-official-archive.sqlite3
 )
@@ -33,6 +34,7 @@ run_embed() {
     UNLOCALIZED_RESOURCES_FOLDER_PATH="$resource_folder" \
     WHOOP_HISTORY_SEED_PATH="$source_root/whoop-history.json" \
     WHOOP_SCORE_MODEL_PATH="$source_root/whoop-score-model.json" \
+    WHOOP_STRAIN_MODEL_PATH="$source_root/whoop-strain-model.json" \
     WHOOP_RECOVERY_MODEL_PATH="$source_root/whoop-recovery-model.json" \
     WHOOP_OFFICIAL_METRICS_PATH="$source_root/whoop-official-metrics.json" \
     WHOOP_OFFICIAL_ARCHIVE_PATH="$source_root/whoop-official-archive.sqlite3" \

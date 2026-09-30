@@ -31,6 +31,7 @@ Tools/doctor.sh --toolchain-only
 
 export WHOOP_HISTORY_SEED_PATH="$derived_data_path/missing-whoop-history.json"
 export WHOOP_SCORE_MODEL_PATH="$derived_data_path/missing-whoop-score-model.json"
+export WHOOP_STRAIN_MODEL_PATH="$derived_data_path/missing-whoop-strain-model.json"
 export WHOOP_RECOVERY_MODEL_PATH="$derived_data_path/missing-whoop-recovery-model.json"
 export WHOOP_OFFICIAL_METRICS_PATH="$derived_data_path/missing-whoop-official-metrics.json"
 export WHOOP_OFFICIAL_ARCHIVE_PATH="$derived_data_path/missing-whoop-official-archive.sqlite3"

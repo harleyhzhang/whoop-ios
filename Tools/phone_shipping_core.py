@@ -34,6 +34,7 @@ PRIVATE_ASSET_NAMES = (
     "whoop-history.json",
     "whoop-score-model.json",
     "whoop-recovery-model.json",
+    "whoop-strain-model.json",
     "whoop-official-metrics.json",
     "whoop-official-archive.sqlite3",
 )
@@ -639,6 +640,30 @@ def sqlite_checks(path: Path) -> tuple[int, str, int, dict[str, int]]:
     return schema_version, quick_check, foreign_key_violations, table_counts
 
 
+def validate_strain_model(path: Path) -> None:
+    model = object_dict(load_json(path, "Strain model"), "Strain model")
+    calibration = object_dict(model.get("calibration"), "Strain calibration")
+    required_string(calibration, "version", "Strain calibration")
+    bounds = {"exponent": (0.1, 10.0), "loadScale": (0.000001, 1e9), "scoreScale": (2.0, 15.0)}
+    for key, (lower, upper) in bounds.items():
+        value = calibration.get(key)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or not lower <= value <= upper
+        ):
+            raise ShippingError(f"Invalid Strain calibration.{key}")
+    maximum = model.get("maximumHeartRate")
+    if (
+        isinstance(maximum, bool)
+        or not isinstance(maximum, (int, float))
+        or not math.isfinite(maximum)
+        or not 90 <= maximum <= 230
+    ):
+        raise ShippingError("Invalid Strain maximumHeartRate")
+
+
 def validate_private_assets(private_root: Path) -> AssetManifest:
     missing = [name for name in PRIVATE_ASSET_NAMES if not (private_root / name).is_file()]
     if missing:
@@ -679,6 +704,7 @@ def validate_private_assets(private_root: Path) -> AssetManifest:
             f"Official archive failed SQLite checks (quick={quick_check}, foreignKeys={foreign_keys})."
         )
 
+    validate_strain_model(private_root / "whoop-strain-model.json")
     sleep_version = validate_sleep_model(private_root / "whoop-score-model.json")
     recovery_version = validate_recovery_model(private_root / "whoop-recovery-model.json")
     return AssetManifest(

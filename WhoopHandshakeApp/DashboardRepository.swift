@@ -6,10 +6,16 @@ import SQLite3
 /// surrounding transaction.
 struct DashboardRepository: Sendable {
     func loadSnapshot(database: OpaquePointer) throws -> DashboardHistorySnapshot {
-        DashboardHistorySnapshot(
-            healthRecords: try loadDailyHealthRecords(database: database),
+        let health = try loadDailyHealthRecords(database: database)
+        let strain = try LocalStrainRepository().load(
+            database: database, health: health,
+            model: WhoopStrainModel.load())
+        return DashboardHistorySnapshot(
+            healthRecords: health,
             stepRecords: try loadDailyStepRecords(database: database),
-            recoveryRecords: try loadDailyRecoveryRecords(database: database)
+            recoveryRecords: try loadDailyRecoveryRecords(database: database),
+            strainRecords: strain.records,
+            strainDerivations: strain.derivations
         )
     }
 

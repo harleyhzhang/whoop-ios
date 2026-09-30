@@ -10,6 +10,7 @@ asset_specs=(
   "WHOOP_HISTORY_SEED_PATH:whoop-history.json"
   "WHOOP_SCORE_MODEL_PATH:whoop-score-model.json"
   "WHOOP_RECOVERY_MODEL_PATH:whoop-recovery-model.json"
+  "WHOOP_STRAIN_MODEL_PATH:whoop-strain-model.json"
   "WHOOP_OFFICIAL_METRICS_PATH:whoop-official-metrics.json"
   "WHOOP_OFFICIAL_ARCHIVE_PATH:whoop-official-archive.sqlite3"
 )

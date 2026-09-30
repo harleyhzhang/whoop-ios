@@ -28,3 +28,4 @@ whoop-official-archive.sqlite3
 *.sqlite
 *.sqlite3
 *.sqlite3-*
+whoop-strain-model.json

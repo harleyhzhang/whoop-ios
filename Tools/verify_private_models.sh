@@ -21,6 +21,7 @@ required_files=(
     whoop-history.json
     whoop-score-model.json
     whoop-recovery-model.json
+    whoop-strain-model.json
     whoop-official-metrics.json
     whoop-official-archive.sqlite3
 )
@@ -33,6 +34,7 @@ done
 
 export WHOOP_HISTORY_SEED_PATH="$private_root/whoop-history.json"
 export WHOOP_SCORE_MODEL_PATH="$private_root/whoop-score-model.json"
+export WHOOP_STRAIN_MODEL_PATH="$private_root/whoop-strain-model.json"
 export WHOOP_RECOVERY_MODEL_PATH="$private_root/whoop-recovery-model.json"
 export WHOOP_OFFICIAL_METRICS_PATH="$private_root/whoop-official-metrics.json"
 export WHOOP_OFFICIAL_ARCHIVE_PATH="$private_root/whoop-official-archive.sqlite3"
