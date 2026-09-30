@@ -150,60 +150,42 @@ discipline, and the limits of historical recovery.
   so a future model can query metrics this version does not yet understand. The
   dashboard shows missing data instead of extrapolating and keeps archive
   provenance out of the daily-use header.
-- The top summary uses an untitled, borderless layout inspired by Apple
-  Fitness: Sleep and Duration share the first row, while Steps, Recovery, and
-  RHR share a compact three-column second row. It has no divider lines, uses
-  compact metric icons, and gives all values stable semibold white typography
-  under gray metric titles. Icons retain fixed metric colors; no phone-motion
-  metrics or Motion & Fitness permission are part of this surface.
-- `Steps` is the first trend card after the two sleep cards. It joins 317 exact
-  official-app daily totals from 2025-10-16
-  through 2026-08-31 to local WHOOP 5 cumulative-counter totals from Sep 1
-  onward, preferring the official value on any overlapping day. Ongoing local
-  collection does not enable the battery-heavy raw IMU stream or request phone
-  motion access. The store retains the counter, cadence-like byte, motion-class
-  byte, civil-date offset, source packet, sample/span coverage, missing seconds,
-  wrap count, rejected deltas, source, and algorithm version. The UI title is
-  simply `Steps`. Local days are wake-anchored rather than midnight-anchored:
-  movement after midnight and before the next completed sleep remains part of
-  the preceding day. Publishing the wake atomically opens the next day and
-  re-buckets already-collected post-wake samples from retained counters.
-- A `Recovery` trend card follows Steps. Historical points use 316 exact
-  official scores. Future points use
-  a versioned 70% gradient-boosting / 30% ridge model over independently
-  available sleep, HRV, RHR, Steps, and past-only rolling history. Four forward
-  chronological folds covering 126 unseen nights measure 4.79-point MAE,
-  6.70-point RMSE, and R² 0.875. The store keeps WHOOP targets separate from
-  local predictions and retains each prediction's 169 inputs, confidence,
-  component counterfactuals, baselines, model version, and derivation time.
-- RHR follows Recovery in the trend stack, and HRV appears last. Removing HRV
-  and live Heart Rate from the compact summary does not stop their collection,
-  storage, or use in local Recovery modeling.
-- Every chart shows all stored history. At rest, adaptive median buckets widen
-  from weekly toward monthly to keep the summary near 40–60 plotted points
-  without altering the stored daily history or exact current value. The
-  dashboard has no range selector or separate `Trends` heading. Charts show at
-  most four evenly distributed abbreviated month-and-year labels without
-  vertical month gridlines or wasted footer space.
-- Charts overlay independent contrasting average levels. The
-  history is divided backward from the latest day into adaptive equal-time
-  windows, with at most five levels. Each unconnected
-  horizontal segment shows its formatted mean above the line. The underlying
-  colored trend remains visible at reduced opacity. The endpoint is one
-  same-color dot, with no card-colored knockout, border, or halo separating it
-  from the line.
-- Charts are static by design: there is no press, hold, or scrub interaction,
-  selection marker, daily-detail morph, or chart haptic, so each card always
-  shows the published day's value. Dashboard scrolling is unaffected.
-- Aggregated trends keep their historical median buckets but anchor the final
-  bucket to the exact latest observation, so the endpoint, dot, and current
-  card value agree. A fixed normalized x-domain with slight endpoint padding
-  keeps the final dot from being clipped.
-- Trend lines and area fills use a shape-preserving cubic sampler followed by
-  restrained monotone rendering. Headline, summary, and chart-card numbers match
-  Finance: native SwiftUI numeric transitions with 0.2-second ease-in-out,
-  driven by the displayed numeric value, whenever new values publish. Reduce
-  Motion disables the numeric animation.
+- Three rings show Sleep, Recovery, and Strain above a two-column grid of
+  Step Count, Sleep duration, HRV, RHR, Sleep, Recovery, and Strain cards.
+  Accessibility sizes use one column. Titles are 17 pt semibold; values use
+  32 pt rounded semibold digits and 20 pt units (lowercase h/m, uppercase MS/BPM).
+  Neutral cards have a subtle diagonal gradient and no carets, date subtitle,
+  detail sheet, range picker, or provenance/coverage row.
+- Charts show 31 calendar slots ending on the published day, using separate
+  thin colored vertical strokes centered between the grey grid lines. Missing
+  dates remain empty. Four equal-time white average ladders exclude missing
+  values; duration averages use hours and minutes. The rich all-history store
+  remains intact even though this dashboard projects one month.
+- Existing Sleep, Recovery, and Steps source precedence and wake publication
+  rules remain in force. Every headline belongs to one coherent published day;
+  an unresolved sleep suppresses current headlines, and a later missed-sleep
+  step day shows movement without carrying old sleep/recovery forward.
+- Strain prefers retained positive official scores on historical dates. Later
+  dates integrate direct HR with the experimental local cardiovascular curve
+  plus the user-selected rough muscular heuristic. The private calibration is
+  `whoop-strain-model.json`; Release phone builds require it and validate its
+  parameters and embedded hash alongside the existing five private assets.
+  Cardio and muscular loads combine before nonlinear scoring. The heuristic
+  uses low-step, awake set/rest-like HR patterns; it can miss lifting or confuse
+  it with other activity and does not infer reps or weights.
+- Local Strain requires 90% observed coverage (full day when complete, elapsed
+  time for today's score) and at least an hour observed. Long outages are capped
+  instead of extrapolated. Civil days use recorded timestamp/UTC-offset evidence,
+  independently of wake-anchored Steps keys; conflicting travel/DST offsets stay
+  missing. Official targets and raw samples are never overwritten.
+- Scoring runs on the independent dashboard reader queue. Versioned derivations,
+  component scores, coverage, input revision, and calibration persist through
+  the single writer in the existing metadata table, with no schema change.
+  Cached days invalidate for backfill and input changes. Foreground refreshes
+  and publication events update the rings/cards automatically; background BLE
+  collection and encrypted replication retain their existing lifecycle.
+- The visible label is simply **Strain** on the ring and card. Model provenance
+  stays in the data. Values are local derivations, not an exact WHOOP formula.
 - The app has no haptics. Passive collection and background Bluetooth events
   stay silent.
 - The dashboard keeps connection state passive and compact: a small decorative

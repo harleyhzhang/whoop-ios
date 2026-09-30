@@ -160,21 +160,3 @@ struct WhoopBatteryPercentIcon: View {
         }
     }
 }
-
-struct AnimatedMetricValue: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    let value: String
-    let numericValue: Double?
-    var fontSize: CGFloat = 30
-
-    var body: some View {
-        Text(value)
-            .font(.system(size: fontSize, weight: .semibold, design: .rounded))
-            .monospacedDigit()
-            .foregroundStyle(.primary)
-            .fixedSize()
-            .contentTransition(.numericText(value: numericValue ?? 0))
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: numericValue)
-    }
-}

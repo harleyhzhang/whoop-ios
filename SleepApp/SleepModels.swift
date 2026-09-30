@@ -170,9 +170,6 @@ struct DailyRecoveryRecord: Hashable, Identifiable, Sendable {
 
     var id: String { dateKey }
 
-    var date: Date {
-        DayKey.date(from: dateKey, timeZone: .current) ?? .distantPast
-    }
 }
 
 /// One coherent, wake-published dashboard day. A later step-only day represents
@@ -231,6 +228,20 @@ struct DashboardHistorySnapshot: Sendable {
     let healthRecords: [DailyHealthRecord]
     let stepRecords: [DailyStepRecord]
     let recoveryRecords: [DailyRecoveryRecord]
+    let strainRecords: [DailyStrainRecord]
+    let strainDerivations: [String: String]
+
+    init(
+        healthRecords: [DailyHealthRecord], stepRecords: [DailyStepRecord],
+        recoveryRecords: [DailyRecoveryRecord], strainRecords: [DailyStrainRecord] = [],
+        strainDerivations: [String: String] = [:]
+    ) {
+        self.healthRecords = healthRecords
+        self.stepRecords = stepRecords
+        self.recoveryRecords = recoveryRecords
+        self.strainRecords = strainRecords
+        self.strainDerivations = strainDerivations
+    }
 
     static let empty = DashboardHistorySnapshot(
         healthRecords: [],

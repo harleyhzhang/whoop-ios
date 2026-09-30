@@ -5,7 +5,7 @@ set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_dir"
 
-private_name_pattern='(^|/)(sleep\.sqlite3([.-].*)?|whoop-history\.json|whoop-score-model\.json|whoop-recovery-model\.json|whoop-official-metrics\.json|whoop-official-archive\.sqlite3|.*\.(ipa|mobileprovision|p12|cer|pem|key)|\.env(\..*)?)$'
+private_name_pattern='(^|/)(sleep\.sqlite3([.-].*)?|whoop-history\.json|whoop-score-model\.json|whoop-recovery-model\.json|whoop-strain-model\.json|whoop-official-metrics\.json|whoop-official-archive\.sqlite3|.*\.(ipa|mobileprovision|p12|cer|pem|key)|\.env(\..*)?)$'
 
 if git ls-files | grep -Eiq "$private_name_pattern"; then
     echo "Private WHOOP runtime, signing, or environment data must not be committed." >&2

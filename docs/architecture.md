@@ -13,10 +13,11 @@
 
 `SleepApp` is the composition and presentation layer. `SleepApp.swift` owns app
 lifecycle and notification orchestration; `RootView.swift` is a small dashboard
-coordinator. `DashboardHeader.swift`, `SummaryGrid.swift`, and
-`MetricTrendCard.swift` own their corresponding sections, while
-`DashboardChartGeometry.swift` holds the pure calculations behind the static
-charts. `HealthHistoryModel.swift` uses
+coordinator. `DashboardHeader.swift`, `SummaryRing.swift`, and `MetricCard.swift`
+own the corresponding sections. `DashboardCardProjection.swift` joins the
+coherent stored histories into 31 calendar slots; `ChartAverageSteps.swift`
+calculates four averages without filling missing data. The old summary/trend
+views have been retired. `HealthHistoryModel.swift` uses
 Observation and publishes one atomic `DashboardHistorySnapshot` per database
 generation instead of exposing independently changing history families. Data
 contracts remain in `SleepModels.swift`, while scoring features and model
@@ -62,6 +63,13 @@ runtime decoding ahead of the external private-file replacement boundary.
   pointers are explicitly non-Sendable; runtime queue preconditions guard every
   access.
 - `DashboardRepository.swift` owns read-only dashboard SQL and result mapping.
+- `LocalStrainRepository.swift` integrates `StrainEngine.swift` on the read queue,
+  prefers official historical targets, and returns versioned cache derivations.
+  `WhoopStore` persists those through `StoreMetadataRepository.swift` on its
+  single writer, using existing metadata rather than a schema migration.
+  Civil timestamps/offsets define Strain days independently of wake-based Steps.
+  Missing/conflicting evidence stays missing; current-day coverage is elapsed-time
+  coverage. Private calibration remains an embedded, hash-checked asset.
 - `WhoopStorageReliability.swift` owns typed SQLite failures, lifecycle states,
   initialization retry policy, readiness fan-out, and the injectable packet
   persistence boundary.

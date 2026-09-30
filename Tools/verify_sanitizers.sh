@@ -17,6 +17,7 @@ trap cleanup EXIT
 cd "$repo_dir"
 export WHOOP_HISTORY_SEED_PATH="$derived_root/missing-whoop-history.json"
 export WHOOP_SCORE_MODEL_PATH="$derived_root/missing-whoop-score-model.json"
+export WHOOP_STRAIN_MODEL_PATH="$derived_root/missing-whoop-strain-model.json"
 export WHOOP_RECOVERY_MODEL_PATH="$derived_root/missing-whoop-recovery-model.json"
 export WHOOP_OFFICIAL_METRICS_PATH="$derived_root/missing-whoop-official-metrics.json"
 export WHOOP_OFFICIAL_ARCHIVE_PATH="$derived_root/missing-whoop-official-archive.sqlite3"

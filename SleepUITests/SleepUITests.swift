@@ -13,7 +13,8 @@ final class SleepUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Sleep"].firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Sleep"].firstMatch.exists)
         XCTAssertTrue(app.staticTexts["Sleep duration"].exists)
-        XCTAssertTrue(app.staticTexts["Steps"].firstMatch.exists)
+        XCTAssertTrue(app.staticTexts["Step Count"].firstMatch.exists)
+        app.swipeUp()
         XCTAssertTrue(app.staticTexts["Recovery"].firstMatch.exists)
         XCTAssertTrue(app.staticTexts["RHR"].firstMatch.exists)
         XCTAssertTrue(app.staticTexts["HRV"].firstMatch.exists)
@@ -43,19 +44,25 @@ final class SleepUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(app.staticTexts["Sleep"].firstMatch.waitForExistence(timeout: 5))
-        XCTAssertTrue(
-            app.descendants(matching: .any)[
-                "Sleep —, duration —, steps —, recovery —, resting heart rate — beats per minute"
-            ].exists
-        )
+        XCTAssertTrue(app.descendants(matching: .any)["Sleep, —"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["Recovery, —"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["Strain, —"].exists)
         XCTAssertFalse(app.buttons["Process"].exists)
     }
 
-    func testDashboardUsesOnlyAllHistoryCharts() {
+    func testDashboardUsesCardsWithoutRangeControlsOrEstimateLabels() {
         let app = configuredApplication()
         app.launch()
 
         XCTAssertTrue(app.staticTexts["Sleep"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Your trends"].exists)
+        XCTAssertFalse(app.staticTexts["Strain estimate"].exists)
+        XCTAssertTrue(app.staticTexts["Step Count"].exists)
+        app.swipeUp()
+        app.swipeUp()
+        XCTAssertTrue(app.staticTexts["Strain"].firstMatch.exists)
+        XCTAssertFalse(app.staticTexts["Strain estimate"].exists)
+        XCTAssertFalse(app.buttons["Open"].exists)
         XCTAssertFalse(app.staticTexts["Trends"].exists)
         XCTAssertFalse(app.segmentedControls["Trend range"].exists)
         XCTAssertFalse(app.buttons["Week"].exists)
