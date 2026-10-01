@@ -40,7 +40,7 @@ struct SummaryRings: View {
             ForEach([HealthMetric.sleep, .recovery, .strain]) { metric in
                 VStack(alignment: .leading, spacing: 0) {
                     Text(metric.title)
-                        .font(.system(size: 16, weight: .medium))
+                        .font(.system(size: 18, weight: .regular))
                         .foregroundStyle(.white)
                     MetricValue(
                         metric: metric, value: selected?.value(for: metric),
