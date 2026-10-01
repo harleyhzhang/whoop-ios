@@ -39,9 +39,7 @@ struct SummaryRings: View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach([HealthMetric.sleep, .recovery, .strain]) { metric in
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(metric.title)
-                        .font(.system(size: 18, weight: .regular))
-                        .foregroundStyle(.white)
+                    MetricHeader(metric: metric, fontSize: 18)
                     MetricValue(
                         metric: metric, value: selected?.value(for: metric),
                         numberFontSize: typeSize.isAccessibilitySize ? 36 : 30,
@@ -65,15 +63,6 @@ private struct SummaryRing: View {
         min(max((value ?? 0) / (metric == .strain ? 21 : 100), 0), 1)
     }
 
-    private var symbol: String {
-        switch metric {
-        case .sleep: "moon.fill"
-        case .recovery: "heart.fill"
-        case .strain: "figure.run"
-        default: "circle.fill"
-        }
-    }
-
     var body: some View {
         ZStack {
             Circle().stroke(metric.color(for: value).opacity(0.16), lineWidth: 18)
@@ -82,7 +71,7 @@ private struct SummaryRing: View {
                 .rotationEffect(.degrees(-90))
         }
         .overlay(alignment: .top) {
-            Image(systemName: symbol)
+            Image(systemName: metric.symbol)
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(fraction > 0 ? Color.black.opacity(0.85) : Color.white.opacity(0.5))
                 .frame(width: 18, height: 18)

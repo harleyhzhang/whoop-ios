@@ -16,6 +16,24 @@ enum DashboardCardStyle {
     }
 }
 
+struct MetricHeader: View {
+    let metric: HealthMetric
+    let fontSize: CGFloat
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: metric.symbol)
+                .font(.system(size: 12, weight: .regular))
+                .frame(width: 14)
+                .accessibilityHidden(true)
+            Text(metric.title)
+                .font(.system(size: fontSize, weight: .regular))
+                .lineLimit(1)
+        }
+        .foregroundStyle(.white)
+    }
+}
+
 struct MetricCard: View {
     let metric: HealthMetric
     let selected: HealthDay?
@@ -23,10 +41,7 @@ struct MetricCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(metric.title)
-                .font(.system(size: 16, weight: .regular))
-                .foregroundStyle(.white)
-                .lineLimit(1).minimumScaleFactor(0.85)
+            MetricHeader(metric: metric, fontSize: 16)
             MetricValue(metric: metric, value: selected?.value(for: metric))
                 .foregroundStyle(metric.color(for: selected?.value(for: metric)))
                 .padding(.top, 2)

@@ -41,6 +41,16 @@ enum HealthMetric: String, CaseIterable, Identifiable {
         case .strain: "Strain"
         }
     }
+    var symbol: String {
+        switch self {
+        case .steps: "figure.walk"
+        case .duration: "bed.double.fill"
+        case .hrv: "waveform.path.ecg"
+        case .rhr, .recovery: "heart.fill"
+        case .sleep: "moon.fill"
+        case .strain: "figure.run"
+        }
+    }
     var color: Color {
         switch self {
         case .steps: Color(red: 0.64, green: 0.56, blue: 0.86)
