@@ -7,9 +7,10 @@ struct SummaryRings: View {
     var body: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 24) {
-                rings.frame(width: 174, height: 174).offset(x: -24)
+                rings.frame(width: 174, height: 174)
                 values
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             VStack(spacing: 20) {
                 rings.frame(width: 174, height: 174)
                 values
