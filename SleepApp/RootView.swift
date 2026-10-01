@@ -22,7 +22,14 @@ struct RootView: View {
     let replicaCoordinator: WhoopReplicaCoordinator
 
     private var publishedDay: PublishedDashboardDay {
-        DashboardCurrentDayPolicy.displayedDay(
+        if let previewDay = WhoopLaunchOverrides.previewDay, !sleepMetricsArePending {
+            return PublishedDashboardDay(
+                healthRecords: history.snapshot.healthRecords.filter { $0.dateKey == previewDay },
+                stepRecords: history.snapshot.stepRecords.filter { $0.dateKey == previewDay },
+                recoveryRecords: history.snapshot.recoveryRecords.filter { $0.dateKey == previewDay }
+            )
+        }
+        return DashboardCurrentDayPolicy.displayedDay(
             snapshot: history.snapshot,
             metricsArePending: sleepMetricsArePending
         )
@@ -112,21 +119,18 @@ struct RootView: View {
                         isConnected: isConnected,
                         powerPackBatteryLevel: powerPackBatteryLevel
                     )
-                    HStack(spacing: 18) {
-                        SummaryRing(metric: .sleep, value: projection.selected?.sleep)
-                        SummaryRing(metric: .recovery, value: projection.selected?.recovery)
-                        SummaryRing(metric: .strain, value: projection.selected?.strain)
-                    }
-                    .padding(.vertical, 2)
+                    VStack(spacing: DashboardCardStyle.spacing) {
+                        SummaryRings(selected: projection.selected)
 
-                    LazyVGrid(
-                        columns: Array(
-                            repeating: GridItem(.flexible(), spacing: 12),
-                            count: typeSize.isAccessibilitySize ? 1 : 2), spacing: 12
-                    ) {
-                        ForEach([HealthMetric.steps, .duration, .hrv, .rhr, .sleep, .recovery, .strain]) { metric in
-                            MetricCard(metric: metric, selected: projection.selected, days: projection.days)
-                                .accessibilityIdentifier("card.\(metric.rawValue)")
+                        LazyVGrid(
+                            columns: Array(
+                                repeating: GridItem(.flexible(), spacing: DashboardCardStyle.spacing),
+                                count: typeSize.isAccessibilitySize ? 1 : 2), spacing: DashboardCardStyle.spacing
+                        ) {
+                            ForEach([HealthMetric.steps, .duration, .hrv, .rhr, .sleep, .recovery, .strain]) { metric in
+                                MetricCard(metric: metric, selected: projection.selected, days: projection.days)
+                                    .accessibilityIdentifier("card.\(metric.rawValue)")
+                            }
                         }
                     }
                 }

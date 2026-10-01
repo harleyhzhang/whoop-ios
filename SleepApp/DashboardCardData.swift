@@ -41,6 +41,16 @@ enum HealthMetric: String, CaseIterable, Identifiable {
         case .strain: "Strain"
         }
     }
+    var symbol: String {
+        switch self {
+        case .steps: "figure.walk"
+        case .duration: "bed.double.fill"
+        case .hrv: "waveform.path.ecg"
+        case .rhr, .recovery: "heart.fill"
+        case .sleep: "moon.fill"
+        case .strain: "figure.run"
+        }
+    }
     var color: Color {
         switch self {
         case .steps: Color(red: 0.64, green: 0.56, blue: 0.86)
@@ -48,16 +58,13 @@ enum HealthMetric: String, CaseIterable, Identifiable {
         case .hrv: .pink
         case .rhr: .red
         case .sleep: Color(red: 0.39, green: 0.69, blue: 1.0)
-        case .recovery: .mint
+        case .recovery: Color(uiColor: .systemGray)
         case .strain: .blue
         }
     }
-    var ringColor: Color {
-        switch self {
-        case .sleep: Color(red: 0.49, green: 0.69, blue: 0.80)
-        case .recovery: .green
-        default: color
-        }
+    func color(for value: Double?) -> Color {
+        guard self == .recovery else { return color }
+        return RecoveryBand(score: value)?.color ?? color
     }
     var unit: String {
         switch self {
@@ -76,6 +83,28 @@ enum HealthMetric: String, CaseIterable, Identifiable {
             let minutes = Int(value.rounded())
             return "\(minutes / 60)h \(minutes % 60)m"
         case .hrv, .rhr: return "\(Int(value.rounded()))"
+        }
+    }
+}
+
+/// WHOOP's displayed whole-percent bands and published recovery palette.
+enum RecoveryBand {
+    case low, moderate, high
+
+    init?(score: Double?) {
+        guard let score, score.isFinite, (0...100).contains(score) else { return nil }
+        switch score.rounded() {
+        case ..<34: self = .low
+        case ..<67: self = .moderate
+        default: self = .high
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .low: Color(red: 1, green: 0, blue: 38 / 255)
+        case .moderate: Color(red: 1, green: 222 / 255, blue: 0)
+        case .high: Color(red: 22 / 255, green: 236 / 255, blue: 6 / 255)
         }
     }
 }

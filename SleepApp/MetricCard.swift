@@ -1,27 +1,50 @@
 import SwiftUI
 
+enum DashboardCardStyle {
+    static let spacing: CGFloat = 12
+
+    static var gradient: LinearGradient {
+        LinearGradient(
+            stops: [
+                .init(color: Color(red: 28 / 255, green: 28 / 255, blue: 30 / 255), location: 0),
+                .init(color: Color(red: 29 / 255, green: 29 / 255, blue: 31 / 255), location: 0.65),
+                .init(color: Color(white: 36 / 255), location: 1),
+            ],
+            startPoint: .bottomLeading,
+            endPoint: .topTrailing
+        )
+    }
+}
+
+struct MetricHeader: View {
+    let metric: HealthMetric
+    let fontSize: CGFloat
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: metric.symbol)
+                .font(.system(size: 12, weight: .regular))
+                .frame(width: 14)
+                .accessibilityHidden(true)
+            Text(metric.title)
+                .font(.system(size: fontSize, weight: .regular))
+                .lineLimit(1)
+        }
+        .foregroundStyle(.white)
+    }
+}
+
 struct MetricCard: View {
     let metric: HealthMetric
     let selected: HealthDay?
     let days: [HealthDay]
 
-    private var title: String {
-        switch metric {
-        case .steps: "Step Count"
-        case .rhr: "RHR"
-        default: metric.title
-        }
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(title)
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.white)
-                .lineLimit(1).minimumScaleFactor(0.85)
+            MetricHeader(metric: metric, fontSize: 16)
             MetricValue(metric: metric, value: selected?.value(for: metric))
-                .foregroundStyle(metric.color)
-                .padding(.top, 8)
+                .foregroundStyle(metric.color(for: selected?.value(for: metric)))
+                .padding(.top, 2)
             Spacer(minLength: 6)
             MetricChart(metric: metric, days: days)
                 .frame(height: 82)
@@ -30,15 +53,7 @@ struct MetricCard: View {
         .frame(height: 196)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            LinearGradient(
-                stops: [
-                    .init(color: Color(red: 28 / 255, green: 28 / 255, blue: 30 / 255), location: 0),
-                    .init(color: Color(red: 29 / 255, green: 29 / 255, blue: 31 / 255), location: 0.65),
-                    .init(color: Color(white: 36 / 255), location: 1),
-                ],
-                startPoint: .bottomLeading,
-                endPoint: .topTrailing
-            ),
+            DashboardCardStyle.gradient,
             in: RoundedRectangle(cornerRadius: 22, style: .continuous)
         )
     }
@@ -48,8 +63,10 @@ struct MetricCard: View {
 /// The long major grid lines
 /// bracket four label bays; finer vertical lines stop at the plot baseline.
 struct MetricChart: View {
+    @Environment(\.displayScale) private var displayScale
     let metric: HealthMetric
     let days: [HealthDay]
+    private let guideColor = Color(white: 0.32)
 
     private var averageSteps: [ChartAverageStep] {
         ChartAverageSteps.levels(days: days, metric: metric)
@@ -94,14 +111,15 @@ struct MetricChart: View {
             }
             for index in 0...buckets.count {
                 let major = majorBoundaries.contains(index)
-                let x = boundaryX(index)
+                // Uniform pixel-aligned strokes keep every guide the same visible grey.
+                let x = (boundaryX(index) * displayScale).rounded() / displayScale
                 var grid = Path()
                 grid.move(to: CGPoint(x: x, y: 0))
                 grid.addLine(to: CGPoint(x: x, y: plotHeight + (major ? 18 : 0)))
                 context.stroke(
                     grid,
-                    with: .color(Color(white: major ? 0.32 : 0.28)),
-                    lineWidth: major ? 0.7 : 0.5
+                    with: .color(guideColor),
+                    lineWidth: 2 / displayScale
                 )
             }
 
@@ -115,19 +133,19 @@ struct MetricChart: View {
             func height(_ value: Double) -> Double {
                 plotTop + (1 - (value - chartDomain.lowerBound) / valueSpan) * (plotHeight - plotTop - 1)
             }
-            var trace = Path()
             for (index, bucket) in buckets.enumerated() {
                 guard let value = bucket.value else { continue }
                 let x = 0.5 + plotWidth * (Double(index) + 0.5) / slotCount
                 let y = height(value)
+                var trace = Path()
                 trace.move(to: CGPoint(x: x, y: plotHeight - 1))
                 trace.addLine(to: CGPoint(x: x, y: y))
+                context.stroke(
+                    trace,
+                    with: .color(metric.color(for: value).opacity(levels.isEmpty ? 1 : 0.75)),
+                    style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round)
+                )
             }
-            context.stroke(
-                trace,
-                with: .color(metric.color.opacity(levels.isEmpty ? 1 : 0.3)),
-                style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round)
-            )
 
             for step in levels {
                 let startX = 0.5 + position(step.startDate) * plotWidth
@@ -140,8 +158,8 @@ struct MetricChart: View {
                     level, with: .color(.white), style: StrokeStyle(lineWidth: 2, lineCap: .butt))
                 context.draw(
                     Text(averageLabel(step.value))
-                        .font(.system(size: 9, weight: .semibold, design: .rounded))
-                        .monospacedDigit().foregroundStyle(.white),
+                        .font(.system(size: 9, weight: .medium))
+                        .tracking(-0.15).foregroundStyle(.white),
                     at: CGPoint(x: min(max((startX + endX) / 2, 11), size.width - 11), y: max(6, y - 9)),
                     anchor: .center
                 )
@@ -158,7 +176,7 @@ struct MetricChart: View {
                     : labelDate.formatted(.dateTime.month(.abbreviated).day())
                 context.draw(
                     Text(label).font(.system(size: 10, weight: .regular))
-                        .foregroundStyle(Color(white: 0.42)),
+                        .foregroundStyle(guideColor),
                     at: CGPoint(x: (boundaryX(start) + boundaryX(end)) / 2, y: plotHeight + 12),
                     anchor: .center
                 )

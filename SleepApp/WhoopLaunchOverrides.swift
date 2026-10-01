@@ -1,6 +1,16 @@
 import Foundation
 
 enum WhoopLaunchOverrides {
+    /// Simulator design review reads a real retained day without changing storage.
+    static var previewDay: String? {
+        #if DEBUG && targetEnvironment(simulator)
+            guard let key = value(for: "WHOOP_PREVIEW_DAY"), DayKey(rawValue: key) != nil else { return nil }
+            return key
+        #else
+            return nil
+        #endif
+    }
+
     static var isConnected: Bool {
         value(for: "WHOOP_MOCK_CONNECTED") == "1"
     }
