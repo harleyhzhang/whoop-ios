@@ -5,23 +5,15 @@ struct MetricCard: View {
     let selected: HealthDay?
     let days: [HealthDay]
 
-    private var title: String {
-        switch metric {
-        case .steps: "Step Count"
-        case .rhr: "RHR"
-        default: metric.title
-        }
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(title)
-                .font(.system(size: 17, weight: .semibold))
+            Text(metric.title)
+                .font(.system(size: 16, weight: .regular))
                 .foregroundStyle(.white)
                 .lineLimit(1).minimumScaleFactor(0.85)
             MetricValue(metric: metric, value: selected?.value(for: metric))
                 .foregroundStyle(metric.color)
-                .padding(.top, 8)
+                .padding(.top, 2)
             Spacer(minLength: 6)
             MetricChart(metric: metric, days: days)
                 .frame(height: 82)

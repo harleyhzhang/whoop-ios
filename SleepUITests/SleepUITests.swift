@@ -17,7 +17,7 @@ final class SleepUITests: XCTestCase {
             XCTAssertTrue(app.descendants(matching: .any)["summary.\(metric)"].exists)
         }
         XCTAssertTrue(app.staticTexts["Sleep duration"].exists)
-        XCTAssertTrue(app.staticTexts["Step Count"].firstMatch.exists)
+        XCTAssertTrue(app.staticTexts["Steps"].firstMatch.exists)
         app.swipeUp()
         XCTAssertTrue(app.staticTexts["Recovery"].firstMatch.exists)
         XCTAssertTrue(app.staticTexts["RHR"].firstMatch.exists)
@@ -61,7 +61,8 @@ final class SleepUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Sleep"].firstMatch.waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Your trends"].exists)
         XCTAssertFalse(app.staticTexts["Strain estimate"].exists)
-        XCTAssertTrue(app.staticTexts["Step Count"].exists)
+        XCTAssertTrue(app.staticTexts["Steps"].exists)
+        XCTAssertFalse(app.staticTexts["Step Count"].exists)
         app.swipeUp()
         app.swipeUp()
         XCTAssertTrue(app.staticTexts["Strain"].firstMatch.exists)
