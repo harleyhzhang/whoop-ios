@@ -18,10 +18,7 @@ struct SummaryRings: View {
         .frame(maxWidth: .infinity, alignment: .center)
         .padding(22)
         .background(
-            LinearGradient(
-                colors: [Color(red: 28 / 255, green: 28 / 255, blue: 30 / 255), Color(white: 36 / 255)],
-                startPoint: .bottomLeading, endPoint: .topTrailing
-            ),
+            DashboardCardStyle.gradient,
             in: RoundedRectangle(cornerRadius: 22, style: .continuous)
         )
         .accessibilityElement(children: .contain)
@@ -67,12 +64,28 @@ private struct SummaryRing: View {
         min(max((value ?? 0) / (metric == .strain ? 21 : 100), 0), 1)
     }
 
+    private var symbol: String {
+        switch metric {
+        case .sleep: "moon.fill"
+        case .recovery: "heart.fill"
+        case .strain: "figure.run"
+        default: "circle.fill"
+        }
+    }
+
     var body: some View {
         ZStack {
             Circle().stroke(metric.color(for: value).opacity(0.16), lineWidth: 18)
             Circle().trim(from: 0, to: fraction)
                 .stroke(metric.color(for: value), style: StrokeStyle(lineWidth: 18, lineCap: .round))
                 .rotationEffect(.degrees(-90))
+        }
+        .overlay(alignment: .top) {
+            Image(systemName: symbol)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(fraction > 0 ? Color.black.opacity(0.85) : Color.white.opacity(0.5))
+                .frame(width: 18, height: 18)
+                .offset(y: -9)
         }
         .padding(9)
     }

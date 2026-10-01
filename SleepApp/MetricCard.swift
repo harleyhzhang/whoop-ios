@@ -1,5 +1,19 @@
 import SwiftUI
 
+enum DashboardCardStyle {
+    static var gradient: LinearGradient {
+        LinearGradient(
+            stops: [
+                .init(color: Color(red: 28 / 255, green: 28 / 255, blue: 30 / 255), location: 0),
+                .init(color: Color(red: 29 / 255, green: 29 / 255, blue: 31 / 255), location: 0.65),
+                .init(color: Color(white: 36 / 255), location: 1),
+            ],
+            startPoint: .bottomLeading,
+            endPoint: .topTrailing
+        )
+    }
+}
+
 struct MetricCard: View {
     let metric: HealthMetric
     let selected: HealthDay?
@@ -22,15 +36,7 @@ struct MetricCard: View {
         .frame(height: 196)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            LinearGradient(
-                stops: [
-                    .init(color: Color(red: 28 / 255, green: 28 / 255, blue: 30 / 255), location: 0),
-                    .init(color: Color(red: 29 / 255, green: 29 / 255, blue: 31 / 255), location: 0.65),
-                    .init(color: Color(white: 36 / 255), location: 1),
-                ],
-                startPoint: .bottomLeading,
-                endPoint: .topTrailing
-            ),
+            DashboardCardStyle.gradient,
             in: RoundedRectangle(cornerRadius: 22, style: .continuous)
         )
     }
