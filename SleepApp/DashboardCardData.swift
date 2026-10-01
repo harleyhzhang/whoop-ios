@@ -52,13 +52,6 @@ enum HealthMetric: String, CaseIterable, Identifiable {
         case .strain: .blue
         }
     }
-    var ringColor: Color {
-        switch self {
-        case .sleep: Color(red: 0.49, green: 0.69, blue: 0.80)
-        case .recovery: .green
-        default: color
-        }
-    }
     var unit: String {
         switch self {
         case .hrv: "ms"

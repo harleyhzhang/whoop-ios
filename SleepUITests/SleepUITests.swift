@@ -12,6 +12,10 @@ final class SleepUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["Sleep"].firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Sleep"].firstMatch.exists)
+        XCTAssertTrue(app.otherElements["summary.rings"].exists)
+        for metric in ["sleep", "recovery", "strain"] {
+            XCTAssertTrue(app.descendants(matching: .any)["summary.\(metric)"].exists)
+        }
         XCTAssertTrue(app.staticTexts["Sleep duration"].exists)
         XCTAssertTrue(app.staticTexts["Step Count"].firstMatch.exists)
         app.swipeUp()
