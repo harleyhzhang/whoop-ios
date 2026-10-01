@@ -143,8 +143,8 @@ struct MetricChart: View {
                     level, with: .color(.white), style: StrokeStyle(lineWidth: 2, lineCap: .butt))
                 context.draw(
                     Text(averageLabel(step.value))
-                        .font(.system(size: 9, weight: .semibold, design: .rounded))
-                        .monospacedDigit().foregroundStyle(.white),
+                        .font(.system(size: 9, weight: .medium))
+                        .tracking(-0.15).foregroundStyle(.white),
                     at: CGPoint(x: min(max((startX + endX) / 2, 11), size.width - 11), y: max(6, y - 9)),
                     anchor: .center
                 )
