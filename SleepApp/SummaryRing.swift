@@ -49,7 +49,7 @@ struct SummaryRings: View {
                         numberFontSize: typeSize.isAccessibilitySize ? 36 : 30,
                         unitFontSize: 20
                     )
-                    .foregroundStyle(metric.color)
+                    .foregroundStyle(metric.color(for: selected?.value(for: metric)))
                 }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("\(metric.title), \(metric.formatted(selected?.value(for: metric)))")
@@ -69,9 +69,9 @@ private struct SummaryRing: View {
 
     var body: some View {
         ZStack {
-            Circle().stroke(metric.color.opacity(0.16), lineWidth: 18)
+            Circle().stroke(metric.color(for: value).opacity(0.16), lineWidth: 18)
             Circle().trim(from: 0, to: fraction)
-                .stroke(metric.color, style: StrokeStyle(lineWidth: 18, lineCap: .round))
+                .stroke(metric.color(for: value), style: StrokeStyle(lineWidth: 18, lineCap: .round))
                 .rotationEffect(.degrees(-90))
         }
         .padding(9)

@@ -3,6 +3,36 @@ import XCTest
 @testable import Sleep
 
 extension WhoopSleepStateTests {
+    func testRecoveryBandsMatchDisplayedScoreBoundaries() {
+        for score in [0.0, 1, 33, 33.49] {
+            XCTAssertEqual(RecoveryBand(score: score), .low)
+        }
+        for score in [33.5, 34, 50, 66, 66.49] {
+            XCTAssertEqual(RecoveryBand(score: score), .moderate)
+        }
+        for score in [66.5, 67, 93, 100] {
+            XCTAssertEqual(RecoveryBand(score: score), .high)
+        }
+    }
+
+    func testMissingOrInvalidRecoveryHasNoScoreBand() {
+        for score: Double? in [nil, .nan, .infinity, -.infinity, -1, 101] {
+            XCTAssertNil(RecoveryBand(score: score))
+            XCTAssertEqual(HealthMetric.recovery.color(for: score), HealthMetric.recovery.color)
+        }
+    }
+
+    func testRecoveryPaletteIsSharedAndOtherMetricsKeepTheirColors() {
+        XCTAssertEqual(HealthMetric.recovery.color(for: 20), RecoveryBand.low.color)
+        XCTAssertEqual(HealthMetric.recovery.color(for: 50), RecoveryBand.moderate.color)
+        XCTAssertEqual(HealthMetric.recovery.color(for: 93), RecoveryBand.high.color)
+        for metric in HealthMetric.allCases where metric != .recovery {
+            XCTAssertEqual(metric.color(for: 20), metric.color)
+            XCTAssertEqual(metric.color(for: 93), metric.color)
+            XCTAssertEqual(metric.color(for: nil), metric.color)
+        }
+    }
+
     func testAllHistoryProjectionPreservesMissingDaysAndOneHeadlineDate() throws {
         let record = dailyHealthRecord(dateKey: "2026-01-31")
         let snapshot = DashboardHistorySnapshot(

@@ -12,7 +12,7 @@ struct MetricCard: View {
                 .foregroundStyle(.white)
                 .lineLimit(1).minimumScaleFactor(0.85)
             MetricValue(metric: metric, value: selected?.value(for: metric))
-                .foregroundStyle(metric.color)
+                .foregroundStyle(metric.color(for: selected?.value(for: metric)))
                 .padding(.top, 2)
             Spacer(minLength: 6)
             MetricChart(metric: metric, days: days)
@@ -110,19 +110,19 @@ struct MetricChart: View {
             func height(_ value: Double) -> Double {
                 plotTop + (1 - (value - chartDomain.lowerBound) / valueSpan) * (plotHeight - plotTop - 1)
             }
-            var trace = Path()
             for (index, bucket) in buckets.enumerated() {
                 guard let value = bucket.value else { continue }
                 let x = 0.5 + plotWidth * (Double(index) + 0.5) / slotCount
                 let y = height(value)
+                var trace = Path()
                 trace.move(to: CGPoint(x: x, y: plotHeight - 1))
                 trace.addLine(to: CGPoint(x: x, y: y))
+                context.stroke(
+                    trace,
+                    with: .color(metric.color(for: value).opacity(levels.isEmpty ? 1 : 0.75)),
+                    style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round)
+                )
             }
-            context.stroke(
-                trace,
-                with: .color(metric.color.opacity(levels.isEmpty ? 1 : 0.75)),
-                style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round)
-            )
 
             for step in levels {
                 let startX = 0.5 + position(step.startDate) * plotWidth
