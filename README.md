@@ -156,11 +156,12 @@ discipline, and the limits of historical recovery.
   32 pt rounded semibold digits and 20 pt units (lowercase h/m, uppercase MS/BPM).
   Neutral cards have a subtle diagonal gradient and no carets, date subtitle,
   detail sheet, range picker, or provenance/coverage row.
-- Charts show 31 calendar slots ending on the published day, using separate
-  thin colored vertical strokes centered between the grey grid lines. Missing
-  dates remain empty. Four equal-time white average ladders exclude missing
-  values; duration averages use hours and minutes. The rich all-history store
-  remains intact even though this dashboard projects one month.
+- Charts default to all history, from the earliest stored metric through the
+  published day. Full history is averaged into 31 equal-time buckets, retaining
+  the same thin colored strokes centered between grey grid lines. Missing
+  values are excluded from averages and empty buckets remain empty. Four
+  equal-time white ladders average the original daily observations; duration
+  annotations use hours and minutes. Long-range axes use month/year labels.
 - Existing Sleep, Recovery, and Steps source precedence and wake publication
   rules remain in force. Every headline belongs to one coherent published day;
   an unresolved sleep suppresses current headlines, and a later missed-sleep

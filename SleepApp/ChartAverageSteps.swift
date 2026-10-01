@@ -1,5 +1,35 @@
 import Foundation
 
+struct ChartBucket {
+    let startDate: Date
+    let endDate: Date
+    let value: Double?
+}
+
+enum ChartBuckets {
+    /// Keep the chart's 31 slots while averaging the entire visible history.
+    /// Empty buckets stay empty; no value is carried into another interval.
+    static func values(days: [HealthDay], metric: HealthMetric) -> [ChartBucket] {
+        guard let first = days.first?.date, let last = days.last?.date else { return [] }
+        let count = min(31, days.count)
+        let span = last.timeIntervalSince(first)
+        let points = days.compactMap { day -> (date: Date, value: Double)? in
+            guard let value = day.value(for: metric) else { return nil }
+            return (day.date, value)
+        }
+        return (0..<count).map { index in
+            let start = first.addingTimeInterval(span * Double(index) / Double(count))
+            let end = first.addingTimeInterval(span * Double(index + 1) / Double(count))
+            let values = points.filter {
+                $0.date >= start && ($0.date < end || (index == count - 1 && $0.date == end))
+            }.map(\.value)
+            return ChartBucket(
+                startDate: start, endDate: end,
+                value: values.isEmpty ? nil : values.reduce(0, +) / Double(values.count))
+        }
+    }
+}
+
 struct ChartAverageStep {
     let startDate: Date
     let endDate: Date
