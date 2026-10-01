@@ -119,16 +119,18 @@ struct RootView: View {
                         isConnected: isConnected,
                         powerPackBatteryLevel: powerPackBatteryLevel
                     )
-                    SummaryRings(selected: projection.selected)
+                    VStack(spacing: DashboardCardStyle.spacing) {
+                        SummaryRings(selected: projection.selected)
 
-                    LazyVGrid(
-                        columns: Array(
-                            repeating: GridItem(.flexible(), spacing: 12),
-                            count: typeSize.isAccessibilitySize ? 1 : 2), spacing: 12
-                    ) {
-                        ForEach([HealthMetric.steps, .duration, .hrv, .rhr, .sleep, .recovery, .strain]) { metric in
-                            MetricCard(metric: metric, selected: projection.selected, days: projection.days)
-                                .accessibilityIdentifier("card.\(metric.rawValue)")
+                        LazyVGrid(
+                            columns: Array(
+                                repeating: GridItem(.flexible(), spacing: DashboardCardStyle.spacing),
+                                count: typeSize.isAccessibilitySize ? 1 : 2), spacing: DashboardCardStyle.spacing
+                        ) {
+                            ForEach([HealthMetric.steps, .duration, .hrv, .rhr, .sleep, .recovery, .strain]) { metric in
+                                MetricCard(metric: metric, selected: projection.selected, days: projection.days)
+                                    .accessibilityIdentifier("card.\(metric.rawValue)")
+                            }
                         }
                     }
                 }

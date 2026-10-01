@@ -1,6 +1,8 @@
 import SwiftUI
 
 enum DashboardCardStyle {
+    static let spacing: CGFloat = 12
+
     static var gradient: LinearGradient {
         LinearGradient(
             stops: [
