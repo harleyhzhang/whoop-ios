@@ -40,9 +40,10 @@ struct MetricCard: View {
 /// The long major grid lines
 /// bracket four label bays; finer vertical lines stop at the plot baseline.
 struct MetricChart: View {
+    @Environment(\.displayScale) private var displayScale
     let metric: HealthMetric
     let days: [HealthDay]
-    private let guideColor = Color(white: 0.42)
+    private let guideColor = Color(white: 0.32)
 
     private var averageSteps: [ChartAverageStep] {
         ChartAverageSteps.levels(days: days, metric: metric)
@@ -87,14 +88,15 @@ struct MetricChart: View {
             }
             for index in 0...buckets.count {
                 let major = majorBoundaries.contains(index)
-                let x = boundaryX(index)
+                // Uniform pixel-aligned strokes keep every guide the same visible grey.
+                let x = (boundaryX(index) * displayScale).rounded() / displayScale
                 var grid = Path()
                 grid.move(to: CGPoint(x: x, y: 0))
                 grid.addLine(to: CGPoint(x: x, y: plotHeight + (major ? 18 : 0)))
                 context.stroke(
                     grid,
                     with: .color(guideColor),
-                    lineWidth: major ? 0.7 : 0.5
+                    lineWidth: 2 / displayScale
                 )
             }
 
@@ -118,7 +120,7 @@ struct MetricChart: View {
             }
             context.stroke(
                 trace,
-                with: .color(metric.color.opacity(levels.isEmpty ? 1 : 0.55)),
+                with: .color(metric.color.opacity(levels.isEmpty ? 1 : 0.75)),
                 style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round)
             )
 
