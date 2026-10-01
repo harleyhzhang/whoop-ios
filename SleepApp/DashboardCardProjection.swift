@@ -1,6 +1,6 @@
 import Foundation
 
-/// Disposable month projection over the coherent local store snapshot.
+/// Disposable all-history projection over the coherent local store snapshot.
 /// Empty dates stay empty, retaining an evenly spaced calendar axis.
 struct DashboardCardProjection {
     let days: [HealthDay]
@@ -14,8 +14,13 @@ struct DashboardCardProjection {
         let recovery = Dictionary(
             snapshot.recoveryRecords.map { ($0.dateKey, $0) }, uniquingKeysWith: { _, last in last })
         let strain = Dictionary(snapshot.strainRecords.map { ($0.dateKey, $0) }, uniquingKeysWith: { _, last in last })
-        days = (-30...0).compactMap { offset in
-            guard let date = calendar.date(byAdding: .day, value: offset, to: end) else { return nil }
+        let keys = Set(health.keys).union(steps.keys).union(recovery.keys).union(strain.keys)
+        let first =
+            keys.compactMap { DayKey.date(from: $0, timeZone: calendar.timeZone) }
+            .map { calendar.startOfDay(for: $0) }.filter { $0 <= end }.min() ?? end
+        let dayCount = calendar.dateComponents([.day], from: first, to: end).day ?? 0
+        days = (0...dayCount).compactMap { offset in
+            guard let date = calendar.date(byAdding: .day, value: offset, to: first) else { return nil }
             let key = DayKey(date: date, timeZone: calendar.timeZone).rawValue
             let record = health[key]
             return HealthDay(

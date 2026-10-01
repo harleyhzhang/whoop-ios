@@ -68,10 +68,10 @@ struct MetricChart: View {
         }
     }
 
-    private var domain: ClosedRange<Double> {
+    private func domain(buckets: [ChartBucket], levels: [ChartAverageStep]) -> ClosedRange<Double> {
         if metric == .sleep || metric == .recovery { return 0...100 }
         if metric == .strain { return 0...21 }
-        let values = days.compactMap { $0.value(for: metric) }
+        let values = buckets.compactMap(\.value) + levels.map(\.value)
         let high = values.max() ?? 1
         return 0...max(high * 1.1, 1)
     }
@@ -79,18 +79,20 @@ struct MetricChart: View {
     var body: some View {
         Canvas { context, size in
             let levels = averageSteps
-            let chartDomain = domain
+            let buckets = ChartBuckets.values(days: days, metric: metric)
+            let chartDomain = domain(buckets: buckets, levels: levels)
             let plotHeight = max(size.height - 20, 1)
             let plotWidth = max(size.width - 1, 1)
-            guard !days.isEmpty else { return }
-            // Each day owns one grid interval, with its stroke at the midpoint.
-            // Keep empty intervals for missing values so the remaining strokes don't shift.
-            let slotCount = Double(days.count)
-            let majorBoundaries = (0...4).map { Int((slotCount * Double($0) / 4).rounded()) }
+            guard !buckets.isEmpty else { return }
+            // Each full-history bucket owns a grid interval and one centered stroke.
+            // Keep empty buckets in place so the remaining strokes don't shift.
+            let slotCount = Double(buckets.count)
+            let bayCount = min(4, buckets.count)
+            let majorBoundaries = (0...bayCount).map { Int((slotCount * Double($0) / Double(bayCount)).rounded()) }
             func boundaryX(_ index: Int) -> Double {
                 0.5 + plotWidth * Double(index) / slotCount
             }
-            for index in 0...days.count {
+            for index in 0...buckets.count {
                 let major = majorBoundaries.contains(index)
                 let x = boundaryX(index)
                 var grid = Path()
@@ -114,8 +116,8 @@ struct MetricChart: View {
                 plotTop + (1 - (value - chartDomain.lowerBound) / valueSpan) * (plotHeight - plotTop - 1)
             }
             var trace = Path()
-            for (index, day) in days.enumerated() {
-                guard let value = day.value(for: metric) else { continue }
+            for (index, bucket) in buckets.enumerated() {
+                guard let value = bucket.value else { continue }
                 let x = 0.5 + plotWidth * (Double(index) + 0.5) / slotCount
                 let y = height(value)
                 trace.move(to: CGPoint(x: x, y: plotHeight - 1))
@@ -145,11 +147,15 @@ struct MetricChart: View {
                 )
             }
 
-            for index in 0..<4 {
+            for index in 0..<bayCount {
                 let start = majorBoundaries[index]
                 let end = majorBoundaries[index + 1]
-                let labelIndex = min((start + end) / 2, days.count - 1)
-                let label = days[labelIndex].date.formatted(.dateTime.month(.abbreviated).day())
+                let fraction = Double(start + end) / (2 * slotCount)
+                let labelDate = first.date.addingTimeInterval(timeSpan * fraction)
+                let label =
+                    days.count > 90
+                    ? labelDate.formatted(.dateTime.month(.abbreviated).year(.twoDigits))
+                    : labelDate.formatted(.dateTime.month(.abbreviated).day())
                 context.draw(
                     Text(label).font(.system(size: 10, weight: .regular))
                         .foregroundStyle(Color(white: 0.42)),

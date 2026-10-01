@@ -15,8 +15,9 @@
 lifecycle and notification orchestration; `RootView.swift` is a small dashboard
 coordinator. `DashboardHeader.swift`, `SummaryRing.swift`, and `MetricCard.swift`
 own the corresponding sections. `DashboardCardProjection.swift` joins the
-coherent stored histories into 31 calendar slots; `ChartAverageSteps.swift`
-calculates four averages without filling missing data. The old summary/trend
+coherent stored histories into all available calendar slots; `ChartAverageSteps.swift`
+averages them into 31 chart buckets and four separate ladders without filling
+missing data or averaging bucket means. The old summary/trend
 views have been retired. `HealthHistoryModel.swift` uses
 Observation and publishes one atomic `DashboardHistorySnapshot` per database
 generation instead of exposing independently changing history families. Data
