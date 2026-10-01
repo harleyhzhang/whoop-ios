@@ -25,6 +25,7 @@ struct MetricHeader: View {
             Image(systemName: metric.symbol)
                 .font(.system(size: 12, weight: .regular))
                 .frame(width: 14)
+                .foregroundStyle(Color(uiColor: .systemGray))
                 .accessibilityHidden(true)
             Text(metric.title)
                 .font(.system(size: fontSize, weight: .regular))
