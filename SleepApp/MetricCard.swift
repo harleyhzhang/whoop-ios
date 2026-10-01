@@ -50,6 +50,7 @@ struct MetricCard: View {
 struct MetricChart: View {
     let metric: HealthMetric
     let days: [HealthDay]
+    private let guideColor = Color(white: 0.42)
 
     private var averageSteps: [ChartAverageStep] {
         ChartAverageSteps.levels(days: days, metric: metric)
@@ -100,7 +101,7 @@ struct MetricChart: View {
                 grid.addLine(to: CGPoint(x: x, y: plotHeight + (major ? 18 : 0)))
                 context.stroke(
                     grid,
-                    with: .color(Color(white: major ? 0.32 : 0.28)),
+                    with: .color(guideColor),
                     lineWidth: major ? 0.7 : 0.5
                 )
             }
@@ -125,7 +126,7 @@ struct MetricChart: View {
             }
             context.stroke(
                 trace,
-                with: .color(metric.color.opacity(levels.isEmpty ? 1 : 0.3)),
+                with: .color(metric.color.opacity(levels.isEmpty ? 1 : 0.55)),
                 style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round)
             )
 
@@ -158,7 +159,7 @@ struct MetricChart: View {
                     : labelDate.formatted(.dateTime.month(.abbreviated).day())
                 context.draw(
                     Text(label).font(.system(size: 10, weight: .regular))
-                        .foregroundStyle(Color(white: 0.42)),
+                        .foregroundStyle(guideColor),
                     at: CGPoint(x: (boundaryX(start) + boundaryX(end)) / 2, y: plotHeight + 12),
                     anchor: .center
                 )
