@@ -29,13 +29,13 @@ struct DashboardHeader: View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(referenceDate, format: .dateTime.weekday(.wide).month(.abbreviated).day())
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.primary)
+                    .font(Theme.Typography.title)
+                    .foregroundStyle(Theme.Palette.text)
 
                 if let errorMessage {
                     Text(errorMessage)
-                        .font(.caption2)
-                        .foregroundStyle(.red)
+                        .font(Theme.Typography.small)
+                        .foregroundStyle(Theme.Palette.negative)
                 }
             }
 
@@ -52,14 +52,11 @@ struct DashboardHeader: View {
                             .frame(width: 24, height: 24)
 
                         Circle()
-                            .fill(isConnected ? Color.green : Color.secondary)
+                            .fill(isConnected ? Theme.Palette.positive : Theme.Palette.muted)
                             .frame(width: 5, height: 5)
                             .overlay {
                                 Circle()
-                                    .stroke(
-                                        Color(uiColor: .systemGroupedBackground),
-                                        lineWidth: 1
-                                    )
+                                    .stroke(Theme.Palette.canvas, lineWidth: 1)
                             }
                     }
                     .offset(x: -1)
@@ -90,10 +87,10 @@ private struct PowerPackStatusImage: View {
 
     private var indicatorColor: Color {
         switch PowerPackLEDPresentation.tone(level: batteryLevel) {
-        case .neutral: Color.secondary
-        case .green: Color.green
-        case .yellow: Color.yellow
-        case .red: Color.red
+        case .neutral: Theme.Palette.muted
+        case .green: Theme.Palette.positive
+        case .yellow: Theme.Palette.caution
+        case .red: Theme.Palette.negative
         }
     }
 

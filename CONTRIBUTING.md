@@ -22,7 +22,7 @@ Tools/install_git_hooks.sh
 ## Definition of done
 
 - Add or update deterministic tests for behavior changes and bug fixes.
-- Keep the ordinary suite independent of Harley's private exports and models.
+- Keep the ordinary suite independent of the maintainer's private exports and models.
 - Do not use force unwraps, force tries, implicitly unwrapped optionals, skipped
   tests, warning suppressions, or broad secret-scan exclusions as shortcuts.
 - Format Swift with `swift-format`; format and type-check Python through
@@ -34,7 +34,7 @@ Tools/install_git_hooks.sh
 - For storage, concurrency, or unsafe-memory work, also run
   `Tools/verify_sanitizers.sh`.
 - Use `Tools/ship_phone.sh --commit <exact-merged-sha>` for every physical
-  install; follow the data-preservation and resume policy in `AGENTS.md`.
+  install; follow the data-preservation and resume policy in `docs/operator.md`.
 
 ## Pull requests
 

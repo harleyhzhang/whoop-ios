@@ -1,17 +1,16 @@
 import SwiftUI
 
+/// A metric's value in its own color, with the unit set smaller beside it.
 struct MetricValue: View {
     let metric: HealthMetric
     let value: Double?
-    var numberFontSize: CGFloat = 32
-    var unitFontSize: CGFloat = 20
 
     private func number(_ text: String) -> Text {
-        Text(text).font(.system(size: numberFontSize, weight: .semibold, design: .rounded))
+        Text(text).font(Theme.Typography.value)
     }
 
     private func unit(_ text: String) -> Text {
-        Text(text).font(.system(size: unitFontSize, weight: .semibold, design: .rounded))
+        Text(text).font(Theme.Typography.unit)
     }
 
     private var label: Text {
@@ -32,5 +31,6 @@ struct MetricValue: View {
 
     var body: some View {
         label.monospacedDigit().lineLimit(1).minimumScaleFactor(0.75)
+            .foregroundStyle(metric.color(for: value))
     }
 }

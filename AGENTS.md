@@ -1,91 +1,48 @@
-# Sleep iOS app
+# WHOOP iOS
 
-- Product north star: replace the official WHOOP app for Harley's personally
-  owned WHOOP 5. The finished app directly manages the strap, preserves live
-  and historical data locally, and derives transparent versioned sleep,
-  recovery, and strain metrics without a membership or official-app dependency.
-- Treat compatibility probes as temporary diagnostics feeding the production
-  collector, not as the product boundary.
-- Build the product as a native SwiftUI iPhone application.
-- Keep the app fully useful without a hosted service or memory connection.
-- Preserve privacy: no credentials, signing assets, or real health exports in
-  Git. Sample fixtures must be synthetic and clearly recognizable as such.
-- Preserve unique raw packet evidence, but compact exact byte-for-byte BLE
-  transport retries on the same characteristic instead of multiplying raw and
-  decoded rows. A retry must still count as durably handled before any history
-  acknowledgement is sent.
-- Prefer Apple frameworks and focused dependencies. The future WHOOP protocol
-  layer may reuse compatible NOOP packages after license and integration review.
-- Verify UI changes by building for an iPhone simulator and, when requested,
-  installing on Harley's paired development iPhone.
-- Every physical-phone install must use
-  `Tools/ship_phone.sh --commit <exact-merged-sha>`. It runs the doctor and
-  classifier, builds that clean `origin/main` commit, signs with a matching
-  device profile, verifies private model/seed contents and hashes, installs in
-  place through CoreDevice, launches, proves database activity, and atomically
-  records success. Do not substitute an ad hoc Xcode, `devicectl`, or iPhone
-  Mirroring flow. The internal classifier selects:
-  - `none`: do not reinstall.
-  - `fast`: for presentation-only changes, verify a recent known-good compact
-    backup exists, install the exact merged build in place, launch it, and
-    confirm the process plus database/WAL modification times advance. Current
-    CoreDevice inventory does not expose a physical data-container UUID, so
-    preservation is proved from in-place installation and content checks. Do
-    not transfer the 1+ GB database.
-  - `protected`: for runtime, collector, or storage implementation changes that
-    do not alter schema or app identity, take one coherent preinstall snapshot,
-    then require the launched app's commit-bound database health attestation.
-  - `migration`: for schema, migration, signing, entitlement, project identity,
-    or uncertain changes, require USB and take coherent pre/post snapshots with
-    exact preserved-row comparison.
-  The classifier fails closed to `migration` when its baseline or classification
-  is uncertain. Snapshots retain one standalone database and required sidecars,
-  never the copied live database/WAL or recursive app migration backups. The
-  shipping command owns suspension/resumption, coherent backup validation,
-  manifest-driven retention, data preservation, and install-state updates. If it
-  reports `needs-unlock` or `needs-verification`, rerun only its printed
-  `--resume` command; never uninstall. Never commit its private state or backup
-  manifests.
-- Old pre-pipeline `app-backups` are not ordinary source archives. Consolidate
-  them only with `Tools/consolidate_legacy_backups.sh`: it imports the fullest
-  valid database for each missing schema into the managed restore-point set,
-  proves normalized row counts and integrity, and quarantines the originals.
-  Never retire a valid manifested or install-state-protected backup merely
-  because optional compaction fails.
-- Run `Tools/verify_local.sh` before merging code changes. Hosted iOS CI is a
-  manual fallback only; do not trigger it unless local verification is blocked
-  or Harley explicitly requests a hosted run.
-- Use `Tools/ship_phone.sh --plan --commit <merged-sha>` to inspect pending
-  commits and the required install tier without connecting a phone. Batch
-  routine merged changes into one chosen checkpoint instead of reinstalling
-  every commit.
-- Treat `project.yml` as the source of truth for Xcode targets and build
-  settings. Run `xcodegen generate` after changing it and commit the generated
-  `Sleep.xcodeproj`; the local gate rejects drift.
-- Format changed Swift with `xcrun swift-format format --configuration
-  .swift-format --in-place <files>`. Do not add force unwraps, force tries, or
-  implicitly unwrapped optionals. Swift and Clang warnings are errors, and Swift
-  strict concurrency stays at `complete`.
-- Every behavior change needs deterministic coverage at the lowest useful
-  layer. Protocol/parsing/scoring/storage policy belongs in unit tests;
-  user-visible critical paths belong in UI tests. Do not skip tests or make
-  private fixtures silently optional in the public suite. Private model
-  validation lives in `SleepPrivateTests` and runs explicitly through
-  `Tools/verify_private_models.sh`.
-- Keep framework callbacks and I/O adapters thin. Put deterministic decisions
-  in focused pure types that can be tested without Bluetooth, notifications,
-  the filesystem, or wall-clock time. Avoid adding more responsibilities to
-  `WhoopStore`, `WhoopHandshakeProbe`, or `RootView`; extract a cohesive file
-  when touching a separable concern. See `docs/architecture.md`.
-- A change is done only when relevant tests are added, formatting and generated
-  files are current, `Tools/verify_local.sh` passes without warnings/skips, and
-  privacy boundaries are preserved. Run `Tools/verify_sanitizers.sh` for risky
-  memory/concurrency/storage changes.
-- Do not add an app-side manual sync control for the hosted replica or for
-  memory. Memory reads are initiated from the Mac side. Sleep publication is
-  automatic and has no routine Process/loading UI: explicit awake finalizes
-  immediately, while a current ambiguous `up` sample finalizes provisionally as
-  soon as a durable HISTORY_COMPLETE covers it. State-2 sleep returning within
-  ninety minutes grows the same night instead of losing data, and the corrected
-  morning summary replaces the earlier notification for that date. Never weaken
-  the evidence or complete-metric gates to make this path faster.
+Native SwiftUI client that replaces the official WHOOP app for a personally
+owned WHOOP 5: manages the strap, keeps raw data locally, and derives
+versioned sleep, recovery, and strain metrics.
+
+## Rules
+
+- Fully useful offline. The hosted replica is optional; no app-side manual
+  sync control.
+- Privacy: no credentials, signing assets, or real health data in Git.
+  Fixtures are synthetic. Demo data lives in `SleepApp/DemoHistory.swift`.
+- Keep raw packet evidence, but compact exact BLE retries on the same
+  characteristic. A retry still counts as durably handled before any history
+  acknowledgement.
+- Never weaken evidence or complete-metric gates to publish sleep faster.
+
+## UI
+
+- All colors, fonts, spacing, and the card background come from
+  `SleepApp/Theme.swift`. No literal sizes or RGB values in views.
+- One rounded type family at the sizes in `Theme.Typography`. Mostly greys,
+  black, and white; accent colors only for metrics and status.
+- Small components with minimal overrides. Pass models, not long prop lists.
+
+## Code
+
+- `project.yml` is the source of truth; run `xcodegen generate` and commit
+  `Sleep.xcodeproj`.
+- Format with `xcrun swift-format format --configuration .swift-format
+  --in-place <files>`. No force unwraps, force tries, or IUOs. Warnings are
+  errors; strict concurrency stays `complete`.
+- Keep framework callbacks thin; put decisions in pure, testable types. Don't
+  grow `WhoopStore`, `WhoopHandshakeProbe`, or `RootView`; extract instead.
+  See `docs/architecture.md`.
+- Every behavior change gets deterministic tests at the lowest useful layer.
+  Private model checks run via `Tools/verify_private_models.sh`.
+
+## Done means
+
+`Tools/verify_local.sh` passes with no warnings or skips, generated files are
+current, and privacy holds. Use `Tools/check_fast.sh` while iterating and
+`Tools/verify_sanitizers.sh` for risky storage or concurrency changes.
+
+## Installing on the maintainer's phone
+
+Only via `Tools/ship_phone.sh --commit <exact-merged-sha>`. Never uninstall,
+and never use ad hoc Xcode or `devicectl` installs. Follow `docs/operator.md`.

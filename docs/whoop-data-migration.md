@@ -72,7 +72,7 @@ checkout:
 export WORKSPACE=/path/to/whoop-ios
 export PRIVATE_DATA_ROOT=/private/path/whoop
 export APP_SEED_ROOT="$PRIVATE_DATA_ROOT/app-seeds"
-export ARCHIVE_TOOL_ROOT=/path/to/private/archive-tools
+export WHOOP_DATA_ROOT="$PRIVATE_DATA_ROOT"
 mkdir -p "$PRIVATE_DATA_ROOT" "$APP_SEED_ROOT"
 chmod 700 "$PRIVATE_DATA_ROOT" "$APP_SEED_ROOT"
 ```
@@ -139,14 +139,14 @@ archive: `offline`, `read:recovery`, `read:cycles`, `read:workout`,
 [API reference](https://developer.whoop.com/api/) are the source of truth.
 
 Keep the client secret in a restricted configuration file and tokens in
-Keychain. The companion archiver used by this project exposes the following
+Keychain. The archiver in `archive/` exposes the following
 interface:
 
 ```sh
 chmod 600 /private/path/whoop-oauth.env
-"$ARCHIVE_TOOL_ROOT/whoop_archive.py" --config /private/path/whoop-oauth.env status
-"$ARCHIVE_TOOL_ROOT/whoop_archive.py" --config /private/path/whoop-oauth.env authorize
-"$ARCHIVE_TOOL_ROOT/whoop_archive.py" --config /private/path/whoop-oauth.env archive \
+"$WORKSPACE/archive/whoop_archive.py" --config /private/path/whoop-oauth.env status
+"$WORKSPACE/archive/whoop_archive.py" --config /private/path/whoop-oauth.env authorize
+"$WORKSPACE/archive/whoop_archive.py" --config /private/path/whoop-oauth.env archive \
   --output "$PRIVATE_DATA_ROOT"
 ```
 
@@ -214,10 +214,10 @@ tokens. A safe request record contains only method, path, non-secret query,
 status, fetch time, attempt count, content type, byte length, response SHA-256,
 and the relative body filename.
 
-With a token record already in Keychain, the companion read-only archiver is:
+With a token record already in Keychain, the read-only archiver in `archive/` is:
 
 ```sh
-"$ARCHIVE_TOOL_ROOT/whoop_private_archive.mjs" \
+"$WORKSPACE/archive/whoop_private_archive.mjs" \
   --start YYYY-MM-DD \
   --end YYYY-MM-DD \
   --output "$PRIVATE_DATA_ROOT"
@@ -595,8 +595,8 @@ Tools/ship_phone.sh --commit "$(git rev-parse HEAD)"
    advanced, atomically updates the private install-state file, and applies
    manifest-driven retention.
 
-The defaults point to Harley's canonical private seed, backup, and install-state
-locations outside Git. Override `--private-root`, `--backup-root`, `--state`, or
+The defaults point to private seed, backup, and install-state locations outside
+Git. Override `--private-root`, `--backup-root`, `--state`, or
 `--device` only for a deliberate recovery or test. `Tools/doctor.sh --mode
 migration` is the strictest read-only preflight. Use
 `Tools/ship_phone.sh --plan --commit <merged-sha>` without a connected phone to

@@ -61,19 +61,19 @@ struct WhoopBatteryPercentIcon: View {
             isCharging: chargingStyleActive
         ) {
         case .lightBehindBlack:
-            return Color(uiColor: .systemGray)
+            return Theme.Palette.muted
         case .darkBehindWhite:
-            return Color(uiColor: .systemGray3)
+            return Theme.Palette.mutedDark
         }
     }
 
     private var fillColor: Color {
-        if chargingStyleActive { return .green }
-        return lowBattery ? .red : .primary
+        if chargingStyleActive { return Theme.Palette.positive }
+        return lowBattery ? Theme.Palette.negative : Theme.Palette.text
     }
 
     private var labelColor: Color {
-        chargingStyleActive || lowBattery ? .white : .black
+        chargingStyleActive || lowBattery ? Theme.Palette.text : Theme.Palette.inverseText
     }
 
     private static let shellWidth: CGFloat = 29
@@ -87,10 +87,10 @@ struct WhoopBatteryPercentIcon: View {
                     Text(String(digit))
                 }
             }
-            .font(.system(size: 12.5, weight: .bold, design: .rounded))
+            .font(Theme.Typography.small)
 
             Image(systemName: "bolt.fill")
-                .font(.system(size: 7, weight: .bold))
+                .font(Theme.Icon.glyph)
                 .frame(width: 7 * chargingContentExpansion)
                 .opacity(boltOpacity)
         }
