@@ -54,6 +54,7 @@ jobs:
           CI_PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
           CI_PR_NUMBER: ${{ github.event.pull_request.number }}
           CI_REPOSITORY: ${{ github.repository }}
+          TRUSTED_ACTOR: ${{ github.repository_owner }}
           GH_TOKEN: ${{ github.token }}
         run: |
           files_json=""

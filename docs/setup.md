@@ -16,29 +16,21 @@ Tools/install_git_hooks.sh
 
 ## 2. Sign with your own team
 
-The project ships with the maintainer's team and bundle IDs. Change them in
-`project.yml`:
-
-```yaml
-options:
-  bundleIdPrefix: com.yourname.whoop
-targets:
-  Sleep:
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.yourname.whoop
-        DEVELOPMENT_TEAM: YOURTEAMID   # Xcode → Settings → Accounts
-```
-
-Update the test targets' `PRODUCT_BUNDLE_IDENTIFIER` values the same way, then:
+Copy the example config and fill in your bundle ID and Team ID
+(Xcode → Settings → Accounts):
 
 ```bash
+cp Config/Local.xcconfig.example Config/Local.xcconfig
 xcodegen generate
 ```
 
+`Config/Local.xcconfig` is gitignored. The tools also read
+`~/.config/whoop/local.xcconfig`, which is handy across worktrees. Optional keys:
+`WHOOP_DATA_ROOT`, `WHOOP_CONVEX_SITE_URL`, and the `*_KEYCHAIN_SERVICE` names.
+
 ## 3. Try it in the simulator
 
-Run the `Sleep` scheme. To see a populated dashboard without a strap, add
+Run the `Whoop` scheme. To see a populated dashboard without a strap, add
 `WHOOP_DEMO_DATA=1` under *Edit Scheme → Run → Arguments → Environment*.
 Demo data only works in Debug simulator builds.
 
@@ -111,5 +103,4 @@ The app can push an encrypted replica to your own Convex deployment. See
   strap on your wrist.
 - **App won't open after a week:** free developer accounts expire installs
   after 7 days. Reinstall from Xcode.
-- **Signing errors:** recheck `DEVELOPMENT_TEAM` and the bundle IDs, then rerun
-  `xcodegen generate`.
+- **Signing errors:** recheck `Config/Local.xcconfig`, then rerun `xcodegen generate`.

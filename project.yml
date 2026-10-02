@@ -1,8 +1,10 @@
-name: Sleep
+name: Whoop
 options:
-  bundleIdPrefix: com.clintonst.sideload
   deploymentTarget:
     iOS: "17.0"
+configFiles:
+  Debug: Config/Whoop.xcconfig
+  Release: Config/Whoop.xcconfig
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -16,19 +18,19 @@ settings:
     CURRENT_PROJECT_VERSION: 13
     MARKETING_VERSION: 0.7.1
 targets:
-  Sleep:
+  Whoop:
     type: application
     platform: iOS
     sources:
-      - path: SleepApp
-      - path: WhoopHandshakeApp
+      - path: WhoopApp
+      - path: WhoopKit
     postBuildScripts:
       - name: Embed private WHOOP history
         basedOnDependencyAnalysis: false
         script: |
           "${SRCROOT}/Tools/embed_private_assets.sh"
     info:
-      path: SleepApp/Info.plist
+      path: WhoopApp/Info.plist
       properties:
         CFBundleDisplayName: WHOOP
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
@@ -43,54 +45,53 @@ targets:
         UILaunchScreen: {}
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.clintonst.sideload.sleep
+        PRODUCT_BUNDLE_IDENTIFIER: "$(WHOOP_BUNDLE_ID)"
         PRODUCT_NAME: WHOOP
-        PRODUCT_MODULE_NAME: Sleep
+        PRODUCT_MODULE_NAME: Whoop
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: WM8M9CQZF8
     scheme:
       testTargets:
-        - SleepTests
-        - SleepUITests
-  SleepTests:
+        - WhoopTests
+        - WhoopUITests
+  WhoopTests:
     type: bundle.unit-test
     platform: iOS
     sources:
-      - path: SleepTests
+      - path: WhoopTests
     dependencies:
-      - target: Sleep
+      - target: Whoop
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
-        PRODUCT_BUNDLE_IDENTIFIER: com.clintonst.sideload.sleep.tests
+        PRODUCT_BUNDLE_IDENTIFIER: "$(WHOOP_BUNDLE_ID).tests"
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/WHOOP.app/WHOOP"
         BUNDLE_LOADER: "$(TEST_HOST)"
-  SleepUITests:
+  WhoopUITests:
     type: bundle.ui-testing
     platform: iOS
     sources:
-      - path: SleepUITests
+      - path: WhoopUITests
     dependencies:
-      - target: Sleep
+      - target: Whoop
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
-        PRODUCT_BUNDLE_IDENTIFIER: com.clintonst.sideload.sleep.ui-tests
-        TEST_TARGET_NAME: Sleep
-  SleepPrivateTests:
+        PRODUCT_BUNDLE_IDENTIFIER: "$(WHOOP_BUNDLE_ID).ui-tests"
+        TEST_TARGET_NAME: Whoop
+  WhoopPrivateTests:
     type: bundle.unit-test
     platform: iOS
     sources:
-      - path: SleepPrivateTests
+      - path: WhoopPrivateTests
     dependencies:
-      - target: Sleep
+      - target: Whoop
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
-        PRODUCT_BUNDLE_IDENTIFIER: com.clintonst.sideload.sleep.private-tests
+        PRODUCT_BUNDLE_IDENTIFIER: "$(WHOOP_BUNDLE_ID).private-tests"
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/WHOOP.app/WHOOP"
         BUNDLE_LOADER: "$(TEST_HOST)"
     scheme:
       testTargets:
-        - SleepPrivateTests
+        - WhoopPrivateTests

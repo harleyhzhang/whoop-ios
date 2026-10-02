@@ -28,8 +28,9 @@ from generated_model_features import (
 from generated_model_features import (
     SLEEP_FEATURE_VERSION as SLEEP_FEATURE_VERSION,
 )
+from whoop_config import setting
 
-BUNDLE_IDENTIFIER = "com.clintonst.sideload.sleep"
+BUNDLE_IDENTIFIER = setting("WHOOP_BUNDLE_ID", "com.example.whoop")
 PRIVATE_ASSET_NAMES = (
     "whoop-history.json",
     "whoop-score-model.json",

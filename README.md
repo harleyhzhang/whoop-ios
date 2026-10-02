@@ -25,7 +25,7 @@ Try the UI in the simulator with fake data:
 ```bash
 brew bundle --file Brewfile
 xcodegen generate
-open Sleep.xcodeproj   # Run the "Sleep" scheme with WHOOP_DEMO_DATA=1
+open Whoop.xcodeproj   # Run the "Sleep" scheme with WHOOP_DEMO_DATA=1
 ```
 
 To run it on your own phone with your own strap and history, follow

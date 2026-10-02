@@ -1,6 +1,6 @@
 # Self-hosted runner operations
 
-The repository runner is named `Harleys-Mac-WHOOP` and has the custom label
+The maintainer runs one repository-scoped runner with the custom label
 `whoop-ci` in addition to GitHub's automatic `self-hosted`, `macOS`, and `ARM64`
 labels. It is installed as a per-user macOS LaunchAgent from
 `~/.local/share/whoop-actions-runner`, so it starts for the signed-in user and
@@ -11,7 +11,7 @@ Check local and GitHub-visible status with:
 ```bash
 cd ~/.local/share/whoop-actions-runner
 ./svc.sh status
-gh api repos/harleyhzhang/whoop-ios/actions/runners
+gh api repos/<owner>/<repo>/actions/runners
 ```
 
 The runner must remain repository-scoped. Do not share its label with another

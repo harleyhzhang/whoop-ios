@@ -18,7 +18,7 @@ while IFS= read -r swift_file; do
       violations=1
     fi
   fi
-done < <(find SleepApp WhoopHandshakeApp SleepTests -type f -name '*.swift' -print | sort)
+done < <(find WhoopApp WhoopKit WhoopTests -type f -name '*.swift' -print | sort)
 
 if [ "$violations" -ne 0 ]; then
   exit 1

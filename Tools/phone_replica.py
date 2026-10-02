@@ -19,10 +19,11 @@ from pathlib import Path
 from typing import Any, cast
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from whoop_config import data_root, setting
 
-KEYCHAIN_SERVICE = "com.clintonst.whoop.convex-replica"
-DEFAULT_SITE_URL = "https://greedy-avocet-164.convex.site"
-DEFAULT_BACKUP_ROOT = Path.home() / "Documents/personal/data/whoop/device-backups"
+KEYCHAIN_SERVICE = setting("WHOOP_REPLICA_KEYCHAIN_SERVICE", "whoop.convex-replica")
+DEFAULT_SITE_URL = setting("WHOOP_CONVEX_SITE_URL", "")
+DEFAULT_BACKUP_ROOT = data_root() / "device-backups"
 DEFAULT_CHUNK_SIZE = 8 * 1024 * 1024
 
 

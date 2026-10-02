@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-trusted_actor="${TRUSTED_ACTOR:-harleyhzhang}"
+trusted_actor="${TRUSTED_ACTOR:-${GITHUB_REPOSITORY_OWNER:-}}"
 trusted_dependabot_actor="${TRUSTED_DEPENDABOT_ACTOR:-dependabot[bot]}"
 event_name="${CI_EVENT_NAME:-${GITHUB_EVENT_NAME:-}}"
 actor="${CI_ACTOR:-${GITHUB_ACTOR:-}}"
@@ -20,6 +20,10 @@ fail() {
 is_trusted_identity() {
   [ "$1" = "$trusted_actor" ] || [ "$1" = "$trusted_dependabot_actor" ]
 }
+
+if [ -z "$trusted_actor" ]; then
+  fail "TRUSTED_ACTOR or GITHUB_REPOSITORY_OWNER is required."
+fi
 
 if [ -z "$event_name" ] || [ -z "$actor" ]; then
   fail "the event name and initiating actor are required."

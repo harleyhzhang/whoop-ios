@@ -4,7 +4,7 @@ set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 derived_data_path="$(mktemp -d "${TMPDIR:-/tmp}/whoop-local-verify.XXXXXX")"
-result_bundle_path="$derived_data_path/SleepTests.xcresult"
+result_bundle_path="$derived_data_path/WhoopTests.xcresult"
 minimum_coverage="${WHOOP_MINIMUM_COVERAGE:-58}"
 simulator_udid=""
 
@@ -41,7 +41,7 @@ xcrun swift-format lint \
   --configuration .swift-format \
   --recursive \
   --strict \
-  SleepApp WhoopHandshakeApp SleepTests SleepUITests SleepPrivateTests
+  WhoopApp WhoopKit WhoopTests WhoopUITests WhoopPrivateTests
 
 echo "Checking Swift presentation and test file sizes..."
 Tools/check_swift_file_sizes.sh
@@ -98,8 +98,8 @@ xcrun simctl bootstatus "$simulator_udid" -b
 
 echo "Running tests with code coverage..."
 xcodebuild test -quiet \
-  -project Sleep.xcodeproj \
-  -scheme Sleep \
+  -project Whoop.xcodeproj \
+  -scheme Whoop \
   -configuration Debug \
   -destination "platform=iOS Simulator,id=$simulator_udid" \
   -derivedDataPath "$derived_data_path" \
@@ -133,8 +133,8 @@ uv run --frozen python Tools/check_critical_coverage.py "$result_bundle_path"
 echo "Building Release for iOS Simulator..."
 release_build_log="$derived_data_path/release-build.log"
 if ! xcodebuild clean build \
-  -project Sleep.xcodeproj \
-  -scheme Sleep \
+  -project Whoop.xcodeproj \
+  -scheme Whoop \
   -configuration Release \
   -destination 'generic/platform=iOS Simulator' \
   -derivedDataPath "$derived_data_path" \
@@ -152,8 +152,8 @@ swiftlint analyze \
 
 echo "Running Xcode static analysis..."
 xcodebuild analyze -quiet \
-  -project Sleep.xcodeproj \
-  -scheme Sleep \
+  -project Whoop.xcodeproj \
+  -scheme Whoop \
   -configuration Debug \
   -destination 'generic/platform=iOS Simulator' \
   -derivedDataPath "$derived_data_path" \

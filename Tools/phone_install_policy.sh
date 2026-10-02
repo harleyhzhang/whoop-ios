@@ -86,7 +86,7 @@ if [ -z "$changed_files" ]; then
 fi
 
 production_files=$(printf '%s\n' "$changed_files" | awk '
-  /^SleepApp\// || /^WhoopHandshakeApp\// || /^project\.yml$/ || /^Sleep\.xcodeproj\// { print }
+  /^WhoopApp\// || /^WhoopKit\// || /^project\.yml$/ || /^Whoop\.xcodeproj\// { print }
 ')
 
 if [ -z "$production_files" ]; then
@@ -96,15 +96,15 @@ if [ -z "$production_files" ]; then
 fi
 
 non_presentation_files=$(printf '%s\n' "$production_files" | awk '
-  /^SleepApp\/RootView\.swift$/ { next }
-  /^SleepApp\/DashboardComponents\.swift$/ { next }
-  /^SleepApp\/DashboardHeader\.swift$/ { next }
-  /^SleepApp\/DashboardChartState\.swift$/ { next }
-  /^SleepApp\/DashboardChartGeometry\.swift$/ { next }
-  /^SleepApp\/MetricTrendCard\.swift$/ { next }
-  /^SleepApp\/TrendSupport\.swift$/ { next }
-  /^SleepApp\/Assets\.xcassets\// { next }
-  /^Sleep\.xcodeproj\// { next }
+  /^WhoopApp\/RootView\.swift$/ { next }
+  /^WhoopApp\/DashboardComponents\.swift$/ { next }
+  /^WhoopApp\/DashboardHeader\.swift$/ { next }
+  /^WhoopApp\/DashboardChartState\.swift$/ { next }
+  /^WhoopApp\/DashboardChartGeometry\.swift$/ { next }
+  /^WhoopApp\/MetricTrendCard\.swift$/ { next }
+  /^WhoopApp\/TrendSupport\.swift$/ { next }
+  /^WhoopApp\/Assets\.xcassets\// { next }
+  /^Whoop\.xcodeproj\// { next }
   { print }
 ')
 
@@ -112,9 +112,9 @@ non_presentation_files=$(printf '%s\n' "$production_files" | awk '
 # puts persistence, migration, destructive SQL, or bundle-identity mechanics
 # in either component.
 if git diff -U0 "$base_commit..$head_commit" -- \
-  SleepApp/RootView.swift SleepApp/DashboardComponents.swift SleepApp/DashboardHeader.swift \
-  SleepApp/DashboardChartState.swift SleepApp/DashboardChartGeometry.swift \
-  SleepApp/MetricTrendCard.swift SleepApp/TrendSupport.swift | \
+  WhoopApp/RootView.swift WhoopApp/DashboardComponents.swift WhoopApp/DashboardHeader.swift \
+  WhoopApp/DashboardChartState.swift WhoopApp/DashboardChartGeometry.swift \
+  WhoopApp/MetricTrendCard.swift WhoopApp/TrendSupport.swift | \
   grep -E '^[+-]' | grep -Ev '^(\+\+\+|---)' | \
   grep -Eiq 'SQLite|WhoopStore|schema|migrat|DELETE[[:space:]]+FROM|DROP[[:space:]]+TABLE|bundleIdentifier|FileManager.*remove'; then
   printf 'mode=migration\nbase=%s\nhead=%s\nreason=risk-sensitive storage or identity code appeared in a presentation component\n' \
@@ -131,7 +131,7 @@ if printf '%s\n' "$production_files" | grep -Eq '^project\.yml$|\.entitlements$'
 fi
 
 schema_version_at() {
-  git show "$1:WhoopHandshakeApp/WhoopStore.swift" 2>/dev/null | \
+  git show "$1:WhoopKit/WhoopStore.swift" 2>/dev/null | \
     sed -nE 's/.*private static let (currentSchemaVersion|schemaVersion)[[:space:]]*=[[:space:]]*([0-9]+).*/\2/p' | \
     head -n 1
 }
@@ -154,7 +154,7 @@ fi
 # A read-only PRAGMA user_version query and a same-valued schema constant rename
 # are observability/refactor changes, not migrations. Escalate SQL only when the
 # diff adds a schema write or DDL operation.
-if git diff -U0 "$base_commit..$head_commit" -- SleepApp WhoopHandshakeApp project.yml | \
+if git diff -U0 "$base_commit..$head_commit" -- WhoopApp WhoopKit project.yml | \
   grep -E '^\+' | grep -Ev '^\+\+\+' | \
   grep -Eiq 'PRAGMA[[:space:]]+user_version[[:space:]]*=|CREATE[[:space:]]+TABLE|ALTER[[:space:]]+TABLE|DROP[[:space:]]+TABLE|PRODUCT_BUNDLE_IDENTIFIER|DEVELOPMENT_TEAM|CODE_SIGN|\.entitlements'; then
   printf 'mode=migration\nbase=%s\nhead=%s\nreason=schema, identity, signing, or entitlement mechanics changed\nfiles=%s\n' \

@@ -507,7 +507,7 @@ for finiteness, enforces the exact model/feature versions and 50/169 feature
 counts, rejects MAE/RMSE/p90 error above the absolute or current-model
 regression limits in `Tools/model_promotion_policy.json`, checks the generated
 feature contract, runs the same synthetic Python/Swift golden vectors, and
-loads/predicts with the candidate bundles in `SleepPrivateTests`. Only after
+loads/predicts with the candidate bundles in `WhoopPrivateTests`. Only after
 all checks pass does it replace the model pair, with rollback if the second
 replacement fails.
 
@@ -715,7 +715,7 @@ WHOOP_RECOVERY_MODEL_PATH=/tmp/missing-whoop-recovery-model.json \
 WHOOP_OFFICIAL_METRICS_PATH=/tmp/missing-whoop-official-metrics.json \
 WHOOP_OFFICIAL_ARCHIVE_PATH=/tmp/missing-whoop-official-archive.sqlite3 \
 xcodebuild test -quiet \
-  -project Sleep.xcodeproj -scheme Sleep -configuration Debug \
+  -project Whoop.xcodeproj -scheme Whoop -configuration Debug \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=latest' \
   -derivedDataPath /tmp/WhoopDerivedData CODE_SIGNING_ALLOWED=NO
 ```
@@ -741,7 +741,7 @@ export DERIVED_DATA=/private/path/WhoopDeviceBuild
 export DEVELOPMENT_TEAM_ID=YOUR_APPLE_DEVELOPMENT_TEAM_ID
 
 xcodebuild build -quiet \
-  -project Sleep.xcodeproj -scheme Sleep -configuration Release \
+  -project Whoop.xcodeproj -scheme Whoop -configuration Release \
   -destination 'generic/platform=iOS' \
   -derivedDataPath "$DERIVED_DATA" \
   DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM_ID" \

@@ -2,6 +2,8 @@
 
 set -euo pipefail
 
+export TRUSTED_ACTOR=owner
+
 repo_root="$(git rev-parse --show-toplevel)"
 policy="$repo_root/Tools/check_self_hosted_ci_trust.sh"
 fixture="$(mktemp -d "${TMPDIR:-/tmp}/whoop-ci-trust.XXXXXX")"
@@ -32,30 +34,30 @@ assert_rejects() {
 trusted_pr=(
   env
   CI_EVENT_NAME=pull_request_target
-  CI_ACTOR=harleyhzhang
-  CI_REPOSITORY=harleyhzhang/whoop-ios
-  CI_PR_AUTHOR=harleyhzhang
-  CI_PR_HEAD_REPOSITORY=harleyhzhang/whoop-ios
+  CI_ACTOR=owner
+  CI_REPOSITORY=owner/whoop-ios
+  CI_PR_AUTHOR=owner
+  CI_PR_HEAD_REPOSITORY=owner/whoop-ios
   "$policy"
 )
 
 assert_passes "trusted push" \
-  env CI_EVENT_NAME=push CI_ACTOR=harleyhzhang "$policy"
+  env CI_EVENT_NAME=push CI_ACTOR=owner "$policy"
 assert_rejects "untrusted workflow dispatch" \
   env CI_EVENT_NAME=workflow_dispatch CI_ACTOR=mallory "$policy"
 assert_passes "trusted same-repository pull request" "${trusted_pr[@]}"
 assert_rejects "trusted initiator rerunning an untrusted author's pull request" \
-  env CI_EVENT_NAME=pull_request_target CI_ACTOR=harleyhzhang \
-  CI_REPOSITORY=harleyhzhang/whoop-ios CI_PR_AUTHOR=mallory \
-  CI_PR_HEAD_REPOSITORY=harleyhzhang/whoop-ios "$policy"
+  env CI_EVENT_NAME=pull_request_target CI_ACTOR=owner \
+  CI_REPOSITORY=owner/whoop-ios CI_PR_AUTHOR=mallory \
+  CI_PR_HEAD_REPOSITORY=owner/whoop-ios "$policy"
 assert_rejects "trusted author's fork pull request" \
-  env CI_EVENT_NAME=pull_request_target CI_ACTOR=harleyhzhang \
-  CI_REPOSITORY=harleyhzhang/whoop-ios CI_PR_AUTHOR=harleyhzhang \
-  CI_PR_HEAD_REPOSITORY=harleyhzhang/whoop-ios-fork "$policy"
+  env CI_EVENT_NAME=pull_request_target CI_ACTOR=owner \
+  CI_REPOSITORY=owner/whoop-ios CI_PR_AUTHOR=owner \
+  CI_PR_HEAD_REPOSITORY=owner/whoop-ios-fork "$policy"
 assert_rejects "untrusted initiator on a trusted pull request" \
   env CI_EVENT_NAME=pull_request_target CI_ACTOR=mallory \
-  CI_REPOSITORY=harleyhzhang/whoop-ios CI_PR_AUTHOR=harleyhzhang \
-  CI_PR_HEAD_REPOSITORY=harleyhzhang/whoop-ios "$policy"
+  CI_REPOSITORY=owner/whoop-ios CI_PR_AUTHOR=owner \
+  CI_PR_HEAD_REPOSITORY=owner/whoop-ios "$policy"
 
 cat >"$fixture/allowed.json" <<'JSON'
 [
@@ -70,10 +72,10 @@ JSON
 dependabot_pr=(
   env
   CI_EVENT_NAME=pull_request_target
-  CI_ACTOR=harleyhzhang
-  CI_REPOSITORY=harleyhzhang/whoop-ios
+  CI_ACTOR=owner
+  CI_REPOSITORY=owner/whoop-ios
   CI_PR_AUTHOR=dependabot[bot]
-  CI_PR_HEAD_REPOSITORY=harleyhzhang/whoop-ios
+  CI_PR_HEAD_REPOSITORY=owner/whoop-ios
   CI_PR_CHANGED_FILES=1
   "$policy"
 )
@@ -118,8 +120,8 @@ assert_rejects "Dependabot action deletion without a replacement" \
   "${dependabot_pr[@]}" "$fixture/deletion-only.json"
 assert_rejects "incomplete Dependabot metadata" \
   env CI_EVENT_NAME=pull_request_target CI_ACTOR=dependabot[bot] \
-  CI_REPOSITORY=harleyhzhang/whoop-ios CI_PR_AUTHOR=dependabot[bot] \
-  CI_PR_HEAD_REPOSITORY=harleyhzhang/whoop-ios CI_PR_CHANGED_FILES=2 \
+  CI_REPOSITORY=owner/whoop-ios CI_PR_AUTHOR=dependabot[bot] \
+  CI_PR_HEAD_REPOSITORY=owner/whoop-ios CI_PR_CHANGED_FILES=2 \
   "$policy" "$fixture/allowed.json"
 
 echo "Self-hosted CI trust policy tests passed."

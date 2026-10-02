@@ -16,14 +16,15 @@ if ! command -v xcodegen >/dev/null 2>&1; then
 fi
 
 cp "$repo_dir/project.yml" "$scratch/project.yml"
-ln -s "$repo_dir/SleepApp" "$scratch/SleepApp"
-ln -s "$repo_dir/SleepTests" "$scratch/SleepTests"
-ln -s "$repo_dir/WhoopHandshakeApp" "$scratch/WhoopHandshakeApp"
-if [ -d "$repo_dir/SleepUITests" ]; then
-    ln -s "$repo_dir/SleepUITests" "$scratch/SleepUITests"
+ln -s "$repo_dir/Config" "$scratch/Config"
+ln -s "$repo_dir/WhoopApp" "$scratch/WhoopApp"
+ln -s "$repo_dir/WhoopTests" "$scratch/WhoopTests"
+ln -s "$repo_dir/WhoopKit" "$scratch/WhoopKit"
+if [ -d "$repo_dir/WhoopUITests" ]; then
+    ln -s "$repo_dir/WhoopUITests" "$scratch/WhoopUITests"
 fi
-if [ -d "$repo_dir/SleepPrivateTests" ]; then
-    ln -s "$repo_dir/SleepPrivateTests" "$scratch/SleepPrivateTests"
+if [ -d "$repo_dir/WhoopPrivateTests" ]; then
+    ln -s "$repo_dir/WhoopPrivateTests" "$scratch/WhoopPrivateTests"
 fi
 
 xcodegen generate --spec "$scratch/project.yml" --quiet
@@ -31,13 +32,13 @@ xcodegen generate --spec "$scratch/project.yml" --quiet
 files=("project.pbxproj")
 while IFS= read -r scheme; do
     files+=("xcshareddata/xcschemes/$(basename "$scheme")")
-done < <(find "$repo_dir/Sleep.xcodeproj/xcshareddata/xcschemes" -type f -name '*.xcscheme' | sort)
+done < <(find "$repo_dir/Whoop.xcodeproj/xcshareddata/xcschemes" -type f -name '*.xcscheme' | sort)
 
 for relative_path in "${files[@]}"; do
-    committed="$repo_dir/Sleep.xcodeproj/$relative_path"
-    generated="$scratch/Sleep.xcodeproj/$relative_path"
+    committed="$repo_dir/Whoop.xcodeproj/$relative_path"
+    generated="$scratch/Whoop.xcodeproj/$relative_path"
     if ! cmp -s "$committed" "$generated"; then
-        echo "Sleep.xcodeproj is stale: $relative_path differs from project.yml." >&2
+        echo "Whoop.xcodeproj is stale: $relative_path differs from project.yml." >&2
         echo "Run 'xcodegen generate' and commit the generated project." >&2
         diff -u "$committed" "$generated" || true
         exit 1

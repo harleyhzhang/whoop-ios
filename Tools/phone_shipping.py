@@ -70,10 +70,11 @@ from phone_shipping_environment import (
 from phone_shipping_environment import (
     assert_exact_merged_commit as assert_exact_merged_commit,
 )
+from whoop_config import data_root
 
-DEFAULT_PRIVATE_ROOT = Path.home() / "Documents/personal/data/whoop/app-seeds"
-DEFAULT_STATE_PATH = Path.home() / "Documents/personal/data/whoop/device-install-state.json"
-DEFAULT_BACKUP_ROOT = Path.home() / "Documents/personal/data/whoop/device-backups"
+DEFAULT_PRIVATE_ROOT = data_root() / "app-seeds"
+DEFAULT_STATE_PATH = data_root() / "device-install-state.json"
+DEFAULT_BACKUP_ROOT = data_root() / "device-backups"
 DEFAULT_DERIVED_DATA = Path.home() / "Library/Caches/whoop-ios/device-derived-data"
 RESUME_EXIT_CODE = 75
 

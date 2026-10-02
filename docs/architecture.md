@@ -11,7 +11,7 @@
 
 ## Boundaries
 
-`SleepApp` is the composition and presentation layer. `SleepApp.swift` owns app
+`WhoopApp` is the composition and presentation layer. `WhoopApp.swift` owns app
 lifecycle and notification orchestration; `RootView.swift` is a small dashboard
 coordinator. `DashboardHeader.swift`, `SummaryRing.swift`, and `MetricCard.swift`
 own the corresponding sections. `DashboardCardProjection.swift` joins the
@@ -38,9 +38,9 @@ rejects generated drift. Private fitted artifacts are promoted only through
 `Tools/promote_private_models.sh`, which keeps chronological validation and
 runtime decoding ahead of the external private-file replacement boundary.
 
-`WhoopHandshakeApp` is the device and persistence layer:
+`WhoopKit` is the device and persistence layer:
 
-- `WhoopHandshakeProbe.swift` adapts CoreBluetooth callbacks and coordinates a
+- `WhoopCollector.swift` adapts CoreBluetooth callbacks and coordinates a
   connection/offload session. `WhoopConnectionSession.swift` gives each
   selection/reset a generation token so superseded callbacks and delayed work
   are rejected, while `WhoopHistoricalSyncState.swift` owns the pure opening,
@@ -168,7 +168,7 @@ preserving persist-before-ACK ordering throughout the migration.
 Do not add a second persistence owner, network dependency, or app-global mutable
 singleton for new logic. Pass time, defaults, schedulers, and filesystem roots
 into policy/orchestration code. When modifying a separable responsibility in
-`WhoopStore`, `WhoopHandshakeProbe`, or `RootView`, prefer extracting a focused
+`WhoopStore`, `WhoopCollector`, or `RootView`, prefer extracting a focused
 type rather than growing the file. Database evolution must be transactional,
 backed up according to the migration runbook, and covered from the oldest
 supported schema to current.
