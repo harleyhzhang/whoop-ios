@@ -71,7 +71,7 @@ synthetic fixtures.
 ## GitHub Actions cost policy
 
 `.github/workflows/local-ci.yml` runs the canonical gate on the repository's
-trusted, self-hosted Apple-silicon Mac for Harley's pull requests and `main`.
+trusted, self-hosted Apple-silicon Mac for the maintainer's pull requests and `main`.
 Pull requests use the workflow definition from the protected default branch,
 then validate the initiating actor, original author, and same-repository head
 before checking out the exact proposed commit. Dependabot may only replace
