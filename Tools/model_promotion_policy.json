@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "sleep": {
+    "modelVersion": "whoop5_local_v5_score_staged_1",
+    "featureVersion": "whoop_local_features_v1",
+    "featureCount": 50,
+    "absoluteMaximum": {
+      "mae": 1.7,
+      "rmse": 2.45,
+      "p90AbsoluteError": 3.6
+    },
+    "maximumRegression": {
+      "mae": 0.05,
+      "rmse": 0.05,
+      "p90AbsoluteError": 0.05
+    }
+  },
+  "recovery": {
+    "modelVersion": "whoop5_local_recovery_v1_gbt_ridge",
+    "featureVersion": "whoop_local_recovery_features_v1",
+    "featureCount": 169,
+    "absoluteMaximum": {
+      "mae": 4.85,
+      "rmse": 6.75,
+      "p90AbsoluteError": 10.7
+    },
+    "maximumRegression": {
+      "mae": 0.05,
+      "rmse": 0.05,
+      "p90AbsoluteError": 0.05
+    }
+  }
+}

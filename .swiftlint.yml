@@ -1,0 +1,11 @@
+included:
+  - WhoopApp
+  - WhoopKit
+
+analyzer_rules:
+  - unused_declaration
+
+unused_declaration:
+  include_public_and_open: true
+
+reporter: xcode

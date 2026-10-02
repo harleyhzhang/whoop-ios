@@ -1,0 +1,11 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Generated and private build products live outside source review"
+paths = [
+  '''(^|/)\.git/''',
+  '''(^|/)\.venv/''',
+  '''(^|/)DerivedData[^/]*/''',
+  '''(^|/)build/''',
+]

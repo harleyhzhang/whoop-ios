@@ -1,0 +1,9 @@
+#!/bin/bash
+
+set -euo pipefail
+
+repo_dir="$(git rev-parse --show-toplevel)"
+if uv run --frozen python "$repo_dir/Tools/full_gate_attestation.py" check; then
+    exit 0
+fi
+exec "$repo_dir/Tools/verify_local.sh"

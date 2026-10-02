@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "maximumLines": 600,
+  "legacyMaximumLines": {
+    "WhoopKit/WhoopCollector.swift": 931
+  }
+}
