@@ -31,6 +31,7 @@ from phone_shipping_core import (
     validate_recent_backup,
 )
 from toolchain import ToolchainError, load_contract, mismatches, observe
+from whoop_config import setting
 
 MINIMUM_FREE_BYTES = {
     "fast": 3 * 1024**3,
@@ -247,19 +248,25 @@ def classify_install(
 
 
 def project_development_team(repo_root: Path) -> str:
+    configured = setting("WHOOP_DEVELOPMENT_TEAM", "").strip()
+    if configured:
+        return configured
+    local_config = repo_root / "Config/Local.xcconfig"
     try:
-        project = (repo_root / "project.yml").read_text()
-    except OSError as error:
-        raise ShippingError(f"Cannot read project.yml: {error}") from error
-    match = re.search(r"^\s*DEVELOPMENT_TEAM:\s*([A-Z0-9]+)\s*$", project, re.MULTILINE)
+        config = local_config.read_text()
+    except OSError:
+        config = ""
+    match = re.search(r"^\s*DEVELOPMENT_TEAM\s*=\s*([A-Z0-9]+)\s*$", config, re.MULTILINE)
     if match is None:
-        raise ShippingError("project.yml does not declare DEVELOPMENT_TEAM.")
+        raise ShippingError(
+            "Set WHOOP_DEVELOPMENT_TEAM or DEVELOPMENT_TEAM in Config/Local.xcconfig."
+        )
     return match.group(1)
 
 
 def project_schema_version(repo_root: Path) -> int:
     try:
-        source = (repo_root / "WhoopHandshakeApp/WhoopStore.swift").read_text()
+        source = (repo_root / "WhoopKit/WhoopStore.swift").read_text()
     except OSError as error:
         raise ShippingError(f"Cannot read WhoopStore.swift: {error}") from error
     match = re.search(r"(?:currentSchemaVersion|schemaVersion)\s*=\s*([0-9]+)", source)
@@ -489,6 +496,11 @@ def build_app(
             "WHOOP_RECOVERY_MODEL_PATH": str(private_root / "whoop-recovery-model.json"),
             "WHOOP_OFFICIAL_METRICS_PATH": str(private_root / "whoop-official-metrics.json"),
             "WHOOP_OFFICIAL_ARCHIVE_PATH": str(private_root / "whoop-official-archive.sqlite3"),
+            "WHOOP_REQUIRE_PRIVATE_ASSETS": "1",
+            "WHOOP_CONVEX_SITE_URL": setting("WHOOP_CONVEX_SITE_URL"),
+            "WHOOP_REPLICA_KEYCHAIN_SERVICE": setting(
+                "WHOOP_REPLICA_KEYCHAIN_SERVICE", "whoop.convex-replica"
+            ),
         }
     )
     build_number = shipping_build_number(commit)
@@ -498,9 +510,9 @@ def build_app(
             "build",
             "-quiet",
             "-project",
-            "Sleep.xcodeproj",
+            "Whoop.xcodeproj",
             "-scheme",
-            "Sleep",
+            "Whoop",
             "-configuration",
             "Release",
             "-destination",
@@ -508,6 +520,7 @@ def build_app(
             "-derivedDataPath",
             str(derived_data),
             f"DEVELOPMENT_TEAM={doctor_result.development_team}",
+            f"WHOOP_BUNDLE_ID={BUNDLE_IDENTIFIER}",
             "CODE_SIGN_STYLE=Manual",
             f"PROVISIONING_PROFILE_SPECIFIER={doctor_result.signing_profile.name}",
             f"CODE_SIGN_IDENTITY={doctor_result.signing_profile.code_sign_identity}",

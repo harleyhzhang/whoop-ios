@@ -20,9 +20,10 @@ from phone_shipping_core import (
     sqlite_checks,
     validate_backup_result,
 )
+from whoop_config import data_root
 
-DEFAULT_BACKUP_ROOT = Path.home() / "Documents/personal/data/whoop/device-backups"
-DEFAULT_STATE_PATH = Path.home() / "Documents/personal/data/whoop/device-install-state.json"
+DEFAULT_BACKUP_ROOT = data_root() / "device-backups"
+DEFAULT_STATE_PATH = data_root() / "device-install-state.json"
 RETIRED_DIRECTORY = ".retired"
 RETIREMENT_RECORD = ".retirement.json"
 

@@ -41,12 +41,12 @@ xcrun simctl bootstatus "$simulator_udid" -b
 
 common=(
     -quiet
-    -project Sleep.xcodeproj
-    -scheme Sleep
+    -project Whoop.xcodeproj
+    -scheme Whoop
     -configuration Debug
     -destination "platform=iOS Simulator,id=$simulator_udid"
     -parallel-testing-enabled NO
-    -skip-testing:SleepUITests
+    -skip-testing:WhoopUITests
     CODE_SIGNING_ALLOWED=NO
 )
 

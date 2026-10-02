@@ -73,12 +73,12 @@ def test_toolchain_mismatch_reports_every_contract_boundary() -> None:
 
 
 def test_critical_coverage_is_path_scoped_and_fails_closed(tmp_path: Path) -> None:
-    source = tmp_path / "SleepApp/ScoreModels.swift"
+    source = tmp_path / "WhoopApp/ScoreModels.swift"
     payload = [{"files": [{"path": str(source), "lineCoverage": 0.95}]}]
 
     actual = coverage_by_relative_path(payload, tmp_path)
 
-    assert actual == {"SleepApp/ScoreModels.swift": 95.0}
-    assert not violations(actual, {"SleepApp/ScoreModels.swift": 94.0})
-    assert violations(actual, {"SleepApp/ScoreModels.swift": 96.0})
-    assert violations(actual, {"WhoopHandshakeApp/WhoopStore.swift": 80.0})
+    assert actual == {"WhoopApp/ScoreModels.swift": 95.0}
+    assert not violations(actual, {"WhoopApp/ScoreModels.swift": 94.0})
+    assert violations(actual, {"WhoopApp/ScoreModels.swift": 96.0})
+    assert violations(actual, {"WhoopKit/WhoopStore.swift": 80.0})

@@ -74,7 +74,7 @@ def test_metrics_report_exact_predictions() -> None:
 
 def test_python_features_match_shared_golden_vectors() -> None:
     fixture_path = (
-        Path(__file__).resolve().parents[1] / "SleepPrivateTests/Fixtures/model-feature-golden.json"
+        Path(__file__).resolve().parents[1] / "WhoopPrivateTests/Fixtures/model-feature-golden.json"
     )
     fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
     sleep_fixture = fixture["sleep"]

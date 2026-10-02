@@ -2,6 +2,6 @@
   "schemaVersion": 1,
   "maximumLines": 600,
   "legacyMaximumLines": {
-    "WhoopHandshakeApp/WhoopHandshakeProbe.swift": 931
+    "WhoopKit/WhoopCollector.swift": 931
   }
 }

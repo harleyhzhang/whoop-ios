@@ -269,7 +269,7 @@ README. Newer entries are not guaranteed to be appended here; see the Git log.
   additionally pins the newer surviving phone snapshot before deleting the
   legacy Convex object. Physical-phone shipment no longer uploads a second full
   database representation. The API token and age identity remain in macOS
-  Keychain under `com.clintonst.whoop.convex-replica`; no ciphertext, receipt,
+  Keychain under the replica Keychain service; no ciphertext, receipt,
   credential, or private manifest enters Git.
 - The iPhone also maintains a direct encrypted replica without making the
   backend part of collection or scoring. At launch, after a published sleep,

@@ -24,9 +24,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-KEYCHAIN_SERVICE = "com.clintonst.whoop.convex-replica"
-DEFAULT_BACKUP_ROOT = Path("/Users/harleyzhang/Documents/personal/data/whoop/device-backups")
-DEFAULT_SITE_URL = "https://greedy-avocet-164.convex.site"
+from whoop_config import data_root, setting
+
+KEYCHAIN_SERVICE = setting("WHOOP_REPLICA_KEYCHAIN_SERVICE", "whoop.convex-replica")
+DEFAULT_BACKUP_ROOT = data_root() / "device-backups"
+DEFAULT_SITE_URL = setting("WHOOP_CONVEX_SITE_URL", "")
 
 
 def sha256_file(path: Path) -> str:

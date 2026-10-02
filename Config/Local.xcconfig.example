@@ -1,0 +1,3 @@
+// Copy to Config/Local.xcconfig and fill in your own values.
+WHOOP_BUNDLE_ID = com.yourname.whoop
+DEVELOPMENT_TEAM = YOURTEAMID

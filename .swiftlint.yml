@@ -1,6 +1,6 @@
 included:
-  - SleepApp
-  - WhoopHandshakeApp
+  - WhoopApp
+  - WhoopKit
 
 analyzer_rules:
   - unused_declaration

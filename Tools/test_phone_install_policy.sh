@@ -34,18 +34,18 @@ cd "$fixture"
 git init -q
 git config user.name "WHOOP policy test"
 git config user.email "whoop-policy-test@example.invalid"
-mkdir -p SleepApp/Assets.xcassets WhoopHandshakeApp docs
-printf 'struct RootView {}\n' > SleepApp/RootView.swift
-printf 'struct DashboardComponents {}\n' > SleepApp/DashboardComponents.swift
-printf 'struct DashboardHeader {}\n' > SleepApp/DashboardHeader.swift
-printf 'struct DashboardChartState {}\n' > SleepApp/DashboardChartState.swift
-printf 'struct DashboardChartGeometry {}\n' > SleepApp/DashboardChartGeometry.swift
-printf 'struct MetricTrendCard {}\n' > SleepApp/MetricTrendCard.swift
-printf 'struct TrendSupport {}\n' > SleepApp/TrendSupport.swift
-printf 'struct WhoopStore {}\n' > SleepApp/SleepModels.swift
-printf '{}\n' > SleepApp/Assets.xcassets/Contents.json
-printf 'struct WhoopHandshakeProbe {}\n' > WhoopHandshakeApp/WhoopHandshakeProbe.swift
-printf 'struct WhoopPersistence { private static let schemaVersion = 10 }\n' > WhoopHandshakeApp/WhoopStore.swift
+mkdir -p WhoopApp/Assets.xcassets WhoopKit docs
+printf 'struct RootView {}\n' > WhoopApp/RootView.swift
+printf 'struct DashboardComponents {}\n' > WhoopApp/DashboardComponents.swift
+printf 'struct DashboardHeader {}\n' > WhoopApp/DashboardHeader.swift
+printf 'struct DashboardChartState {}\n' > WhoopApp/DashboardChartState.swift
+printf 'struct DashboardChartGeometry {}\n' > WhoopApp/DashboardChartGeometry.swift
+printf 'struct MetricTrendCard {}\n' > WhoopApp/MetricTrendCard.swift
+printf 'struct TrendSupport {}\n' > WhoopApp/TrendSupport.swift
+printf 'struct WhoopStore {}\n' > WhoopApp/SleepModels.swift
+printf '{}\n' > WhoopApp/Assets.xcassets/Contents.json
+printf 'struct WhoopCollector {}\n' > WhoopKit/WhoopCollector.swift
+printf 'struct WhoopPersistence { private static let schemaVersion = 10 }\n' > WhoopKit/WhoopStore.swift
 printf 'baseline\n' > README.md
 git add .
 git commit -qm baseline
@@ -56,79 +56,79 @@ git commit -qam docs
 docs_commit=$(git rev-parse HEAD)
 assert_mode none --base "$baseline" --head "$docs_commit"
 
-printf '// chart color\n' >> SleepApp/RootView.swift
+printf '// chart color\n' >> WhoopApp/RootView.swift
 git commit -qam ui
 ui_commit=$(git rev-parse HEAD)
 assert_mode fast --base "$docs_commit" --head "$ui_commit"
 
-printf '// battery color\n' >> SleepApp/DashboardComponents.swift
+printf '// battery color\n' >> WhoopApp/DashboardComponents.swift
 git commit -qam dashboard_components_ui
 dashboard_components_ui_commit=$(git rev-parse HEAD)
 assert_mode fast --base "$ui_commit" --head "$dashboard_components_ui_commit"
 
-printf '// transient chart interaction state\n' >> SleepApp/DashboardChartState.swift
+printf '// transient chart interaction state\n' >> WhoopApp/DashboardChartState.swift
 git commit -qam dashboard_chart_state_ui
 dashboard_chart_state_ui_commit=$(git rev-parse HEAD)
 assert_mode fast --base "$dashboard_components_ui_commit" --head "$dashboard_chart_state_ui_commit"
 
-printf '// SQLite schema migration\n' >> SleepApp/DashboardChartState.swift
+printf '// SQLite schema migration\n' >> WhoopApp/DashboardChartState.swift
 git commit -qam risky_dashboard_chart_state
 risky_dashboard_chart_state_commit=$(git rev-parse HEAD)
 assert_mode migration --base "$dashboard_chart_state_ui_commit" --head "$risky_dashboard_chart_state_commit"
 
-sed -i '' '$d' SleepApp/DashboardChartState.swift
+sed -i '' '$d' WhoopApp/DashboardChartState.swift
 git commit -qam restore_dashboard_chart_state
 dashboard_chart_state_restored_commit=$(git rev-parse HEAD)
 
-printf '// chart curve sampler\n' >> SleepApp/TrendSupport.swift
+printf '// chart curve sampler\n' >> WhoopApp/TrendSupport.swift
 git commit -qam trend_support_ui
 trend_support_ui_commit=$(git rev-parse HEAD)
 assert_mode fast --base "$dashboard_chart_state_restored_commit" --head "$trend_support_ui_commit"
 
-printf '// SQLite schema migration\n' >> SleepApp/TrendSupport.swift
+printf '// SQLite schema migration\n' >> WhoopApp/TrendSupport.swift
 git commit -qam risky_trend_support
 risky_trend_support_commit=$(git rev-parse HEAD)
 assert_mode migration --base "$trend_support_ui_commit" --head "$risky_trend_support_commit"
 
-sed -i '' '$d' SleepApp/TrendSupport.swift
+sed -i '' '$d' WhoopApp/TrendSupport.swift
 git commit -qam restore_trend_support
 trend_support_restored_commit=$(git rev-parse HEAD)
 
-printf '// SQLite schema migration\n' >> SleepApp/DashboardComponents.swift
+printf '// SQLite schema migration\n' >> WhoopApp/DashboardComponents.swift
 git commit -qam risky_dashboard_components
 risky_dashboard_components_commit=$(git rev-parse HEAD)
 assert_mode migration --base "$trend_support_restored_commit" --head "$risky_dashboard_components_commit"
 
-printf '// schema migration\n' >> SleepApp/RootView.swift
+printf '// schema migration\n' >> WhoopApp/RootView.swift
 git commit -qam risky_ui
 risky_ui_commit=$(git rev-parse HEAD)
 assert_mode migration --base "$risky_dashboard_components_commit" --head "$risky_ui_commit"
 
-printf '// storage change\n' >> SleepApp/SleepModels.swift
+printf '// storage change\n' >> WhoopApp/SleepModels.swift
 git commit -qam storage
 storage_commit=$(git rev-parse HEAD)
 assert_mode protected --base "$risky_ui_commit" --head "$storage_commit"
 
-printf '// connection presentation\n' >> SleepApp/DashboardHeader.swift
-printf '// chart geometry\n' >> SleepApp/DashboardChartGeometry.swift
-printf '// chart presentation\n' >> SleepApp/MetricTrendCard.swift
+printf '// connection presentation\n' >> WhoopApp/DashboardHeader.swift
+printf '// chart geometry\n' >> WhoopApp/DashboardChartGeometry.swift
+printf '// chart presentation\n' >> WhoopApp/MetricTrendCard.swift
 git commit -qam dashboard_presentation
 dashboard_presentation_commit=$(git rev-parse HEAD)
 assert_mode fast --base "$storage_commit" --head "$dashboard_presentation_commit"
 
-printf '// bluetooth lifecycle\n' >> WhoopHandshakeApp/WhoopHandshakeProbe.swift
+printf '// bluetooth lifecycle\n' >> WhoopKit/WhoopCollector.swift
 git commit -qam bluetooth
 bluetooth_commit=$(git rev-parse HEAD)
 assert_mode protected --base "$dashboard_presentation_commit" --head "$bluetooth_commit"
 
-sed -i '' 's/schemaVersion/currentSchemaVersion/' WhoopHandshakeApp/WhoopStore.swift
-printf 'struct HealthReporter { let sql = "PRAGMA user_version" }\n' > WhoopHandshakeApp/WhoopDeploymentHealthReporter.swift
-git add WhoopHandshakeApp
+sed -i '' 's/schemaVersion/currentSchemaVersion/' WhoopKit/WhoopStore.swift
+printf 'struct HealthReporter { let sql = "PRAGMA user_version" }\n' > WhoopKit/WhoopDeploymentHealthReporter.swift
+git add WhoopKit
 git commit -qm schema_observability
 schema_observability_commit=$(git rev-parse HEAD)
 assert_mode protected --base "$bluetooth_commit" --head "$schema_observability_commit"
 
-sed -i '' 's/currentSchemaVersion = 10/currentSchemaVersion = 11/' WhoopHandshakeApp/WhoopStore.swift
+sed -i '' 's/currentSchemaVersion = 10/currentSchemaVersion = 11/' WhoopKit/WhoopStore.swift
 git commit -qam schema_version_change
 schema_version_change_commit=$(git rev-parse HEAD)
 assert_mode migration --base "$schema_observability_commit" --head "$schema_version_change_commit"

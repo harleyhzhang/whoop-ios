@@ -27,8 +27,9 @@ from phone_shipping_core import (
     sqlite_checks,
     validate_backup_result,
 )
+from whoop_config import data_root
 
-DEFAULT_LEGACY_ROOT = Path.home() / "Documents/personal/data/whoop/app-backups"
+DEFAULT_LEGACY_ROOT = data_root() / "app-backups"
 MIGRATION_DATABASE = re.compile(r"^sleep-v\d+-before-v\d+\.sqlite3$")
 SNAPSHOT_TIMESTAMP = re.compile(r"(?P<stamp>\d{8}T\d{4}(?:\d{2})?)(?P<zone>Z|ET)")
 

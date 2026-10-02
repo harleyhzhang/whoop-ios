@@ -48,9 +48,9 @@ SINGLETONS = {
     "profile": "/user/profile/basic",
     "body_measurement": "/user/measurement/body",
 }
-DEFAULT_CONFIG = Path.home() / ".config/whoop-mcp/env"
+DEFAULT_CONFIG = Path(os.environ.get("WHOOP_API_CONFIG", Path.home() / ".config/whoop/env")).expanduser()
 DEFAULT_ARCHIVE = Path(os.environ.get("WHOOP_DATA_ROOT", Path.home() / "whoop-data"))
-KEYCHAIN_SERVICE = "com.clintonst.sleep.whoop.oauth"
+KEYCHAIN_SERVICE = "whoop.whoop.oauth"
 KEYCHAIN_ACCOUNT = "default"
 
 

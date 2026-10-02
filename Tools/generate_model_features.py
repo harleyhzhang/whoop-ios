@@ -250,7 +250,7 @@ def main() -> None:
             f"Unexpected generated feature counts: sleep={len(sleep)}, recovery={len(recovery)}"
         )
     write_or_check(
-        root / "SleepApp/GeneratedModelFeatures.swift",
+        root / "WhoopApp/GeneratedModelFeatures.swift",
         generate_swift(manifest, sleep, recovery),
         args.check,
         root,
@@ -262,7 +262,7 @@ def main() -> None:
         root,
     )
     write_or_check(
-        root / "SleepPrivateTests/Fixtures/model-feature-golden.json",
+        root / "WhoopPrivateTests/Fixtures/model-feature-golden.json",
         generate_golden(sleep, recovery),
         args.check,
         root,

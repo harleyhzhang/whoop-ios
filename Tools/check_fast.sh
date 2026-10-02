@@ -8,7 +8,7 @@ cd "$repo_dir"
 derived_data_path="${WHOOP_FAST_DERIVED_DATA:-$repo_dir/DerivedData-fast}"
 runtime_id="$(jq -r '.simulatorRuntime.identifier' Tools/toolchain.json)"
 simulator_name="WHOOP Fast Loop"
-test_selection=("-only-testing:SleepTests")
+test_selection=("-only-testing:WhoopTests")
 if [ "$#" -gt 0 ]; then
   test_selection=("$@")
 fi
@@ -21,7 +21,7 @@ xcrun swift-format lint \
   --configuration .swift-format \
   --recursive \
   --strict \
-  SleepApp WhoopHandshakeApp SleepTests SleepUITests SleepPrivateTests
+  WhoopApp WhoopKit WhoopTests WhoopUITests WhoopPrivateTests
 Tools/check_python.sh
 
 simulator_udid="$(
@@ -49,8 +49,8 @@ export WHOOP_OFFICIAL_ARCHIVE_PATH="$derived_data_path/missing-whoop-official-ar
 
 echo "Running warm-cache tests on $simulator_name ($simulator_udid)..."
 xcodebuild test -quiet \
-  -project Sleep.xcodeproj \
-  -scheme Sleep \
+  -project Whoop.xcodeproj \
+  -scheme Whoop \
   -configuration Debug \
   -destination "platform=iOS Simulator,id=$simulator_udid" \
   -derivedDataPath "$derived_data_path" \

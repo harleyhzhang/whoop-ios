@@ -9,7 +9,7 @@ versioned sleep, recovery, and strain metrics.
 - Fully useful offline. The hosted replica is optional; no app-side manual
   sync control.
 - Privacy: no credentials, signing assets, or real health data in Git.
-  Fixtures are synthetic. Demo data lives in `SleepApp/DemoHistory.swift`.
+  Fixtures are synthetic. Demo data lives in `WhoopApp/DemoHistory.swift`.
 - Keep raw packet evidence, but compact exact BLE retries on the same
   characteristic. A retry still counts as durably handled before any history
   acknowledgement.
@@ -18,7 +18,7 @@ versioned sleep, recovery, and strain metrics.
 ## UI
 
 - All colors, fonts, spacing, and the card background come from
-  `SleepApp/Theme.swift`. No literal sizes or RGB values in views.
+  `WhoopApp/Theme.swift`. No literal sizes or RGB values in views.
 - One rounded type family at the sizes in `Theme.Typography`. Mostly greys,
   black, and white; accent colors only for metrics and status.
 - Small components with minimal overrides. Pass models, not long prop lists.
@@ -26,12 +26,12 @@ versioned sleep, recovery, and strain metrics.
 ## Code
 
 - `project.yml` is the source of truth; run `xcodegen generate` and commit
-  `Sleep.xcodeproj`.
+  `Whoop.xcodeproj`.
 - Format with `xcrun swift-format format --configuration .swift-format
   --in-place <files>`. No force unwraps, force tries, or IUOs. Warnings are
   errors; strict concurrency stays `complete`.
 - Keep framework callbacks thin; put decisions in pure, testable types. Don't
-  grow `WhoopStore`, `WhoopHandshakeProbe`, or `RootView`; extract instead.
+  grow `WhoopStore`, `WhoopCollector`, or `RootView`; extract instead.
   See `docs/architecture.md`.
 - Every behavior change gets deterministic tests at the lowest useful layer.
   Private model checks run via `Tools/verify_private_models.sh`.

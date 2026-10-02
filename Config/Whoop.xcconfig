@@ -1,0 +1,6 @@
+// Signing identity. Override in Config/Local.xcconfig (gitignored) or pass
+// WHOOP_BUNDLE_ID and DEVELOPMENT_TEAM as xcodebuild build settings.
+WHOOP_BUNDLE_ID = com.example.whoop
+DEVELOPMENT_TEAM =
+
+#include? "Local.xcconfig"

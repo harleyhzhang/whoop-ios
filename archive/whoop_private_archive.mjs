@@ -16,7 +16,7 @@ import { promisify } from "node:util";
 
 const API_ROOT = "https://api.prod.whoop.com";
 const AUTH_ROOT = `${API_ROOT}/auth-service/v3/whoop/`;
-const KEYCHAIN_SERVICE = "com.clintonst.whoop.private-ios-api";
+const KEYCHAIN_SERVICE = process.env.WHOOP_PRIVATE_API_KEYCHAIN_SERVICE ?? "whoop.private-ios-api";
 const KEYCHAIN_ACCOUNT = "tokens";
 const DEFAULT_OUTPUT_ROOT = process.env.WHOOP_DATA_ROOT ?? path.join(os.homedir(), "whoop-data");
 const APP_VERSION = "5.68.2";

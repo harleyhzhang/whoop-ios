@@ -2,18 +2,18 @@
   "schemaVersion": 1,
   "target": "WHOOP.app",
   "files": {
-    "SleepApp/DayKey.swift": 92,
-    "SleepApp/ScoreModels.swift": 93,
-    "WhoopHandshakeApp/DashboardDatabaseReader.swift": 55,
-    "WhoopHandshakeApp/DashboardRepository.swift": 93,
-    "WhoopHandshakeApp/SQLiteDatabase.swift": 95,
-    "WhoopHandshakeApp/WhoopBackfillPlanner.swift": 95,
-    "WhoopHandshakeApp/WhoopBluetoothPolicy.swift": 93,
-    "WhoopHandshakeApp/WhoopConnectionSession.swift": 90,
-    "WhoopHandshakeApp/WhoopHistoricalSyncState.swift": 85,
-    "WhoopHandshakeApp/WhoopProtocol.swift": 88,
-    "WhoopHandshakeApp/WhoopStorageReliability.swift": 70,
-    "WhoopHandshakeApp/WhoopStore.swift": 73,
-    "WhoopHandshakeApp/WhoopTransportPipeline.swift": 88
+    "WhoopApp/DayKey.swift": 92,
+    "WhoopApp/ScoreModels.swift": 93,
+    "WhoopKit/DashboardDatabaseReader.swift": 55,
+    "WhoopKit/DashboardRepository.swift": 93,
+    "WhoopKit/SQLiteDatabase.swift": 95,
+    "WhoopKit/WhoopBackfillPlanner.swift": 95,
+    "WhoopKit/WhoopBluetoothPolicy.swift": 93,
+    "WhoopKit/WhoopConnectionSession.swift": 90,
+    "WhoopKit/WhoopHistoricalSyncState.swift": 85,
+    "WhoopKit/WhoopProtocol.swift": 88,
+    "WhoopKit/WhoopStorageReliability.swift": 70,
+    "WhoopKit/WhoopStore.swift": 73,
+    "WhoopKit/WhoopTransportPipeline.swift": 88
   }
 }

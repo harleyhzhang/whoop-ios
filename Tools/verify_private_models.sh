@@ -16,7 +16,7 @@ trap cleanup EXIT
 
 cd "$repo_dir"
 
-private_root="${WHOOP_PRIVATE_SEED_ROOT:-${HOME}/Documents/personal/data/whoop/app-seeds}"
+private_root="${WHOOP_PRIVATE_SEED_ROOT:-${WHOOP_DATA_ROOT:-${HOME}/whoop-data}/app-seeds}"
 required_files=(
     whoop-history.json
     whoop-score-model.json
@@ -57,8 +57,8 @@ xcrun simctl boot "$simulator_udid"
 xcrun simctl bootstatus "$simulator_udid" -b
 
 xcodebuild test -quiet \
-    -project Sleep.xcodeproj \
-    -scheme SleepPrivateTests \
+    -project Whoop.xcodeproj \
+    -scheme WhoopPrivateTests \
     -configuration Debug \
     -destination "platform=iOS Simulator,id=$simulator_udid" \
     -derivedDataPath "$derived_data_path" \

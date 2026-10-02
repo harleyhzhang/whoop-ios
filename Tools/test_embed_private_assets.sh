@@ -53,8 +53,13 @@ if [ -e "$build_root/$resource_folder/whoop-score-model.json" ]; then
   exit 1
 fi
 
-if run_embed Release iphoneos >/dev/null 2>&1; then
-  echo "A device Release must fail closed when a private asset is missing." >&2
+if ! run_embed Release iphoneos >/dev/null 2>&1; then
+  echo "A public device Release must build without private assets." >&2
+  exit 1
+fi
+
+if WHOOP_REQUIRE_PRIVATE_ASSETS=1 run_embed Release iphoneos >/dev/null 2>&1; then
+  echo "A shipping build must fail closed when a private asset is missing." >&2
   exit 1
 fi
 

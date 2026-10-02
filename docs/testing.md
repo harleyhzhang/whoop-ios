@@ -44,17 +44,17 @@ every miss runs the complete gate. Install the hook with
 
 ## Test layers
 
-- `SleepTests`: deterministic protocol, scoring, notification, storage,
+- `WhoopTests`: deterministic protocol, scoring, notification, storage,
   migration, and state-machine unit/integration tests using synthetic data.
   Reliability coverage includes every supported schema hop, injected
   `SQLITE_BUSY`/`SQLITE_FULL`/`SQLITE_IOERR` failures, corrupt-database
   fail-closed behavior, bounded retry/backpressure, independent reads during a
   blocked writer, and a deterministic malformed-frame mutation corpus.
-- `SleepUITests`: critical dashboard behavior and diagnostic navigation under
+- `WhoopUITests`: critical dashboard behavior and diagnostic navigation under
   explicit mock launch environment values.
 - `ToolsTests`: Python feature construction, build-gate, model-promotion, and
   private-seed projection logic.
-- `SleepPrivateTests`: opt-in checks against local personal models. Run with
+- `WhoopPrivateTests`: opt-in checks against local personal models. Run with
   `Tools/verify_private_models.sh`; missing private inputs are failures here, not
   skipped public tests. Its generated synthetic fixture is the same golden vector
   consumed by Python, which catches feature-order drift across languages.
