@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct SummaryRings: View {
-    @Environment(\.dynamicTypeSize) private var typeSize
     let selected: HealthDay?
 
     var body: some View {
@@ -18,10 +17,7 @@ struct SummaryRings: View {
         }
         .frame(maxWidth: .infinity, alignment: .center)
         .padding(22)
-        .background(
-            DashboardCardStyle.gradient,
-            in: RoundedRectangle(cornerRadius: 22, style: .continuous)
-        )
+        .cardBackground()
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("summary.rings")
     }
@@ -39,13 +35,8 @@ struct SummaryRings: View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach([HealthMetric.sleep, .recovery, .strain]) { metric in
                 VStack(alignment: .leading, spacing: 0) {
-                    MetricHeader(metric: metric, fontSize: 18)
-                    MetricValue(
-                        metric: metric, value: selected?.value(for: metric),
-                        numberFontSize: typeSize.isAccessibilitySize ? 36 : 30,
-                        unitFontSize: 20
-                    )
-                    .foregroundStyle(metric.color(for: selected?.value(for: metric)))
+                    MetricHeader(metric: metric)
+                    MetricValue(metric: metric, value: selected?.value(for: metric))
                 }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("\(metric.title), \(metric.formatted(selected?.value(for: metric)))")
@@ -72,8 +63,10 @@ private struct SummaryRing: View {
         }
         .overlay(alignment: .top) {
             Image(systemName: metric.symbol)
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(fraction > 0 ? Color.black.opacity(0.85) : Color.white.opacity(0.5))
+                .font(Theme.Icon.ring)
+                .foregroundStyle(
+                    fraction > 0 ? Theme.Palette.inverseText.opacity(0.85) : Theme.Palette.text.opacity(0.5)
+                )
                 .frame(width: 18, height: 18)
                 .offset(y: -9)
         }

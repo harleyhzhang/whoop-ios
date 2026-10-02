@@ -107,7 +107,7 @@ struct RootView: View {
             snapshot: history.snapshot, published: publishedDay, referenceDate: referenceDate
         )
         return ZStack {
-            Color(uiColor: .systemGroupedBackground).ignoresSafeArea()
+            Theme.Palette.canvas.ignoresSafeArea()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
@@ -119,13 +119,13 @@ struct RootView: View {
                         isConnected: isConnected,
                         powerPackBatteryLevel: powerPackBatteryLevel
                     )
-                    VStack(spacing: DashboardCardStyle.spacing) {
+                    VStack(spacing: Theme.Layout.spacing) {
                         SummaryRings(selected: projection.selected)
 
                         LazyVGrid(
                             columns: Array(
-                                repeating: GridItem(.flexible(), spacing: DashboardCardStyle.spacing),
-                                count: typeSize.isAccessibilitySize ? 1 : 2), spacing: DashboardCardStyle.spacing
+                                repeating: GridItem(.flexible(), spacing: Theme.Layout.spacing),
+                                count: typeSize.isAccessibilitySize ? 1 : 2), spacing: Theme.Layout.spacing
                         ) {
                             ForEach([HealthMetric.steps, .duration, .hrv, .rhr, .sleep, .recovery, .strain]) { metric in
                                 MetricCard(metric: metric, selected: projection.selected, days: projection.days)
@@ -134,7 +134,7 @@ struct RootView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, Theme.Layout.screenInset)
                 .padding(.top, 8)
                 .padding(.bottom, 32)
             }

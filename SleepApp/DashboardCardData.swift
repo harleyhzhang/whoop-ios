@@ -53,12 +53,12 @@ enum HealthMetric: String, CaseIterable, Identifiable {
     }
     var color: Color {
         switch self {
-        case .steps: Color(red: 0.64, green: 0.56, blue: 0.86)
+        case .steps: Theme.Palette.steps
         case .duration: .cyan
         case .hrv: .pink
         case .rhr: .red
-        case .sleep: Color(red: 0.39, green: 0.69, blue: 1.0)
-        case .recovery: Color(uiColor: .systemGray)
+        case .sleep: Theme.Palette.sleep
+        case .recovery: Theme.Palette.muted
         case .strain: .blue
         }
     }
@@ -102,9 +102,9 @@ enum RecoveryBand {
 
     var color: Color {
         switch self {
-        case .low: Color(red: 1, green: 0, blue: 38 / 255)
-        case .moderate: Color(red: 1, green: 222 / 255, blue: 0)
-        case .high: Color(red: 22 / 255, green: 236 / 255, blue: 6 / 255)
+        case .low: Theme.Palette.recoveryLow
+        case .moderate: Theme.Palette.recoveryModerate
+        case .high: Theme.Palette.recoveryHigh
         }
     }
 }

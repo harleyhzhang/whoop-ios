@@ -1,37 +1,20 @@
 import SwiftUI
 
-enum DashboardCardStyle {
-    static let spacing: CGFloat = 12
-
-    static var gradient: LinearGradient {
-        LinearGradient(
-            stops: [
-                .init(color: Color(red: 28 / 255, green: 28 / 255, blue: 30 / 255), location: 0),
-                .init(color: Color(red: 29 / 255, green: 29 / 255, blue: 31 / 255), location: 0.65),
-                .init(color: Color(white: 36 / 255), location: 1),
-            ],
-            startPoint: .bottomLeading,
-            endPoint: .topTrailing
-        )
-    }
-}
-
 struct MetricHeader: View {
     let metric: HealthMetric
-    let fontSize: CGFloat
 
     var body: some View {
         HStack(spacing: 5) {
             Image(systemName: metric.symbol)
-                .font(.system(size: 12, weight: .regular))
+                .font(Theme.Icon.label)
                 .frame(width: 14)
-                .foregroundStyle(Color(uiColor: .systemGray))
+                .foregroundStyle(Theme.Palette.muted)
                 .accessibilityHidden(true)
             Text(metric.title)
-                .font(.system(size: fontSize, weight: .regular))
+                .font(Theme.Typography.body)
                 .lineLimit(1)
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(Theme.Palette.text)
     }
 }
 
@@ -42,21 +25,17 @@ struct MetricCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            MetricHeader(metric: metric, fontSize: 16)
+            MetricHeader(metric: metric)
             MetricValue(metric: metric, value: selected?.value(for: metric))
-                .foregroundStyle(metric.color(for: selected?.value(for: metric)))
                 .padding(.top, 2)
             Spacer(minLength: 6)
             MetricChart(metric: metric, days: days)
                 .frame(height: 82)
         }
-        .padding(17)
+        .padding(Theme.Layout.cardPadding)
         .frame(height: 196)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            DashboardCardStyle.gradient,
-            in: RoundedRectangle(cornerRadius: 22, style: .continuous)
-        )
+        .cardBackground()
     }
 }
 
@@ -67,7 +46,7 @@ struct MetricChart: View {
     @Environment(\.displayScale) private var displayScale
     let metric: HealthMetric
     let days: [HealthDay]
-    private let guideColor = Color(white: 0.32)
+    private let guideColor = Theme.Palette.guide
 
     private var averageSteps: [ChartAverageStep] {
         ChartAverageSteps.levels(days: days, metric: metric)
@@ -156,11 +135,11 @@ struct MetricChart: View {
                 level.move(to: CGPoint(x: startX, y: y))
                 level.addLine(to: CGPoint(x: endX, y: y))
                 context.stroke(
-                    level, with: .color(.white), style: StrokeStyle(lineWidth: 2, lineCap: .butt))
+                    level, with: .color(Theme.Palette.text), style: StrokeStyle(lineWidth: 2, lineCap: .butt))
                 context.draw(
                     Text(averageLabel(step.value))
-                        .font(.system(size: 9, weight: .medium))
-                        .tracking(-0.15).foregroundStyle(.white),
+                        .font(Theme.Typography.caption)
+                        .tracking(-0.15).foregroundStyle(Theme.Palette.text),
                     at: CGPoint(x: min(max((startX + endX) / 2, 11), size.width - 11), y: max(6, y - 9)),
                     anchor: .center
                 )
@@ -176,7 +155,7 @@ struct MetricChart: View {
                     ? labelDate.formatted(.dateTime.month(.abbreviated).year(.twoDigits))
                     : labelDate.formatted(.dateTime.month(.abbreviated).day())
                 context.draw(
-                    Text(label).font(.system(size: 10, weight: .regular))
+                    Text(label).font(Theme.Typography.caption)
                         .foregroundStyle(guideColor),
                     at: CGPoint(x: (boundaryX(start) + boundaryX(end)) / 2, y: plotHeight + 12),
                     anchor: .center
