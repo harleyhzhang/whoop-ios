@@ -40,6 +40,10 @@ final class HealthHistoryModel {
     }
 
     func reload() {
+        if DemoHistory.isEnabled {
+            snapshot = DemoHistory.snapshot()
+            return
+        }
         reloadGeneration += 1
         let generation = reloadGeneration
         let store = store
