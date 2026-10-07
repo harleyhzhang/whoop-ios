@@ -62,7 +62,6 @@ struct DashboardHeader: View {
                     .offset(x: -1)
 
                     WhoopBatteryPercentIcon(level: batteryLevel, isCharging: isCharging)
-                        .opacity(isConnected ? 1 : 0.45)
                 }
 
                 HStack(spacing: 3) {

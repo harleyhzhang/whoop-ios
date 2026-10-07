@@ -122,6 +122,12 @@ enum WhoopBluetoothPolicy {
         }
     }
 
+    /// Keep the last valid percentage across disconnects and relaunches, regardless of age.
+    static func cachedBatteryLevel(_ value: Any?) -> Int? {
+        guard let level = value as? Int, (0...100).contains(level) else { return nil }
+        return level
+    }
+
     static func batteryLevelStatus(_ data: Data) -> BatteryStatus? {
         guard data.count >= 3 else { return nil }
         let powerState = UInt16(data[1]) | (UInt16(data[2]) << 8)
