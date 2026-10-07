@@ -69,10 +69,13 @@ enum Theme {
         static let spacing: CGFloat = 12
         static let cornerRadius: CGFloat = 22
         static let cardPadding: CGFloat = 17
+        static let metricCardBottomPadding: CGFloat = 12
         static let screenInset: CGFloat = 16
         static let summaryLeadingInset: CGFloat = 6
         static let summaryColumnSpacing: CGFloat = 40
         static let chartDateOffset: CGFloat = 8
+        static let chartPlotHeight: CGFloat = 62
+        static let chartDateBandHeight: CGFloat = 14
     }
 
     /// Each chart stroke keeps its metric hue and becomes gently lighter at the tip.
