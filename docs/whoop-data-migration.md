@@ -886,8 +886,9 @@ Then verify behavior, not only row counts:
 - the three rings read Sleep, Recovery, and Strain;
 - an unresolved sleep shows empty headlines until automatic publication; there
   is no manual Process control or loading state;
-- the seven cards read Step Count, Sleep duration, HRV, RHR, Sleep, Recovery,
-  and Strain, in two columns (one for accessibility sizes);
+- the six cards read Steps, Sleep duration, RHR, Sleep, Recovery, and Strain,
+  in two columns (one for accessibility sizes); HRV collection, storage, and
+  Recovery inputs continue while its dashboard chart is hidden;
 - Steps and Recovery keep official/local precedence and independent versions;
 - Strain keeps historical official targets and computes later days from direct
   HR plus the rough muscular policy. Its versioned components, input revision,
