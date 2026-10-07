@@ -29,10 +29,11 @@ struct MetricCard: View {
             MetricValue(metric: metric, value: selected?.value(for: metric))
                 .padding(.top, 2)
             MetricChart(metric: metric, days: days)
-                .frame(height: 82)
+                .frame(height: Theme.Layout.chartPlotHeight + Theme.Layout.chartDateBandHeight)
                 .padding(.top, Theme.Layout.spacing)
         }
-        .padding(Theme.Layout.cardPadding)
+        .padding([.top, .horizontal], Theme.Layout.cardPadding)
+        .padding(.bottom, Theme.Layout.metricCardBottomPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardBackground()
     }
@@ -74,7 +75,7 @@ struct MetricChart: View {
             let levels = averageSteps
             let buckets = ChartBuckets.values(days: days, metric: metric)
             let chartDomain = domain(buckets: buckets, levels: levels)
-            let plotHeight = max(size.height - 20, 1)
+            let plotHeight = max(size.height - Theme.Layout.chartDateBandHeight, 1)
             let plotWidth = max(size.width - 1, 1)
             guard !buckets.isEmpty else { return }
             // Each full-history bucket owns a grid interval and one centered stroke.
@@ -91,7 +92,7 @@ struct MetricChart: View {
                 let x = (boundaryX(index) * displayScale).rounded() / displayScale
                 var grid = Path()
                 grid.move(to: CGPoint(x: x, y: 0))
-                grid.addLine(to: CGPoint(x: x, y: plotHeight + (major ? 18 : 0)))
+                grid.addLine(to: CGPoint(x: x, y: plotHeight + (major ? Theme.Layout.chartDateBandHeight : 0)))
                 context.stroke(
                     grid,
                     with: .color(guideColor),
