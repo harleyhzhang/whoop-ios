@@ -635,7 +635,7 @@ state file.
   entitlements, project configuration, divergence, and unclassified changes.
   It supports Wi-Fi and USB with coherent compact pre/post snapshots plus exact
   raw evidence-row comparison. Free iPhone storage must be measurable through
-  the paired device's network disk-usage service before installation.
+  the paired device's USB or network disk-usage service before installation.
 
 Current CoreDevice app inventory does not expose a physical data-container UUID.
 The command therefore proves preservation from the in-place install plus pre/post
@@ -647,6 +647,11 @@ missing, unavailable, divergent, or ambiguous. A fast install is a verification
 optimization, not permission to skip exact-commit building, signing checks,
 private-asset hash checks, in-place installation, launch, or runtime validation.
 
+Backups use the paired app-container AFC service with bounded reads, exact file
+lengths, and unchanged source metadata across the entire snapshot. This avoids
+CoreDevice stream failures on large files and partial final blocks. USB is
+preferred when available; the same paired UDID is used over the network. Missing
+optional files are allowed, but transport errors and truncated files fail closed.
 Backups copy only `sleep.sqlite3`, its optional WAL/SHM, the official archive,
 and bounded telemetry while the app is suspended. After SQLite validation, the
 transport files are compacted to one standalone database plus required

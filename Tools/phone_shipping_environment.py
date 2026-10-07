@@ -306,29 +306,32 @@ def installed_app(
 
 def device_available_storage(runner: CommandRunner, scratch: Path, device: Device) -> int | None:
     del scratch
-    completed = runner.run(
-        [
-            "ideviceinfo",
-            "--network",
-            "--udid",
-            device.udid,
-            "--domain",
-            "com.apple.disk_usage",
-            "--key",
-            "AmountDataAvailable",
-        ],
-        check=False,
-        timeout=30,
-    )
-    if completed.returncode != 0:
-        return None
-    try:
-        available = int(completed.stdout.strip())
-    except ValueError as error:
-        raise ShippingError("ideviceinfo returned no valid iPhone free-space value.") from error
-    if available <= 0:
-        raise ShippingError("ideviceinfo reported no available iPhone storage.")
-    return available
+    transports = (["--network"], []) if device.transport == "localNetwork" else ([], ["--network"])
+    for transport in transports:
+        completed = runner.run(
+            [
+                "ideviceinfo",
+                *transport,
+                "--udid",
+                device.udid,
+                "--domain",
+                "com.apple.disk_usage",
+                "--key",
+                "AmountDataAvailable",
+            ],
+            check=False,
+            timeout=30,
+        )
+        if completed.returncode != 0:
+            continue
+        try:
+            available = int(completed.stdout.strip())
+        except ValueError as error:
+            raise ShippingError("ideviceinfo returned no valid iPhone free-space value.") from error
+        if available <= 0:
+            raise ShippingError("ideviceinfo reported no available iPhone storage.")
+        return available
+    return None
 
 
 def shipping_build_number(commit: str) -> str:
@@ -448,8 +451,8 @@ def doctor(
     if device_available_bytes is None and mode == "migration":
         raise ShippingError(
             "Cannot verify free iPhone storage for a migration install: the paired "
-            "device's network disk-usage service is unavailable. Keep the phone unlocked "
-            "and reachable on the same network, then retry."
+            "device's USB and network disk-usage services are unavailable. Keep the phone unlocked "
+            "and connected by USB or reachable on the same network, then retry."
         )
     if device_available_bytes is not None and device_available_bytes < required_device_bytes:
         raise ShippingError(
