@@ -42,9 +42,9 @@ enum Theme {
         /// Header date.
         static let title = font(22, .semibold)
         /// Units beside a metric value.
-        static let unit = font(18, .semibold)
+        static let unit = font(16, .semibold)
         /// Metric values.
-        static let value = font(28, .semibold)
+        static let value = font(24, .semibold)
 
         static func font(_ size: CGFloat, _ weight: Font.Weight) -> Font {
             .system(size: size, weight: weight, design: design)
