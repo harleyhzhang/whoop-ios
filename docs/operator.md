@@ -15,7 +15,10 @@ Tools/ship_phone.sh --commit "$(git rev-parse HEAD)"
 ```
 
 This is the canonical build, signing, backup, in-place install, launch, and
-verification path. `Tools/ship_phone.sh --plan --commit <merged-sha>` reports
+verification path over Wi-Fi or USB, including migration installs. Keep the
+paired phone reachable and unlocked; the verification tier controls backup and
+integrity checks, not the connection transport.
+`Tools/ship_phone.sh --plan --commit <merged-sha>` reports
 the pending commit count and verification tier without requiring the phone, so
 routine merges can ship as one intentional checkpoint. `Tools/doctor.sh --mode
 migration` performs the strictest read-only preflight.

@@ -589,7 +589,7 @@ Tools/ship_phone.sh --commit "$(git rev-parse HEAD)"
    launched app to publish a commit-bound report proving exact schema,
    `quick_check`, foreign keys, nondecreasing durable row counts, and the
    official-archive hash;
-7. for `migration`, requires USB and takes compact pre/post snapshots, then
+7. for `migration`, takes compact pre/post snapshots over Wi-Fi or USB, then
    compares immutable evidence rows exactly;
 8. launches the app, proves the process is alive and the database or WAL
    advanced, atomically updates the private install-state file, and applies
@@ -633,8 +633,9 @@ state file.
   post-launch health report instead of copying the database back again.
 - `migration` covers schema SQL/versioning, app identity, signing,
   entitlements, project configuration, divergence, and unclassified changes.
-  It requires USB and uses coherent compact pre/post snapshots plus exact raw
-  evidence-row comparison.
+  It supports Wi-Fi and USB with coherent compact pre/post snapshots plus exact
+  raw evidence-row comparison. Free iPhone storage must be measurable through
+  the paired device's network disk-usage service before installation.
 
 Current CoreDevice app inventory does not expose a physical data-container UUID.
 The command therefore proves preservation from the in-place install plus pre/post

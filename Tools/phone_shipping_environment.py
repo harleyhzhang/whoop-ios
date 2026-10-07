@@ -442,18 +442,14 @@ def doctor(
         recorded_device if isinstance(recorded_device, str) and recorded_device else None
     )
     device = choose_device(list_devices(runner, scratch), effective_device)
-    if mode == "migration" and device.transport.lower() not in {"usb", "wired"}:
-        raise ShippingError(
-            "Migration shipping requires a wired USB CoreDevice connection; "
-            f"current transport is {device.transport or 'unknown'}."
-        )
     app = installed_app(runner, scratch, device)
     device_available_bytes = device_available_storage(runner, scratch, device)
     required_device_bytes = MINIMUM_DEVICE_FREE_BYTES[mode]
     if device_available_bytes is None and mode == "migration":
         raise ShippingError(
-            "Cannot verify free iPhone storage for a migration install; connect by USB "
-            "with a compatible device-info service."
+            "Cannot verify free iPhone storage for a migration install: the paired "
+            "device's network disk-usage service is unavailable. Keep the phone unlocked "
+            "and reachable on the same network, then retry."
         )
     if device_available_bytes is not None and device_available_bytes < required_device_bytes:
         raise ShippingError(
