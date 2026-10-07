@@ -122,7 +122,14 @@ struct MetricChart: View {
                 trace.addLine(to: CGPoint(x: x, y: y))
                 context.stroke(
                     trace,
-                    with: .color(metric.color(for: value).opacity(levels.isEmpty ? 1 : 0.75)),
+                    with: .linearGradient(
+                        Theme.chartStrokeGradient(
+                            metric.color(for: value), environment: context.environment,
+                            opacity: levels.isEmpty ? 1 : 0.75
+                        ),
+                        startPoint: CGPoint(x: x, y: plotHeight - 1),
+                        endPoint: CGPoint(x: x, y: y)
+                    ),
                     style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round)
                 )
             }

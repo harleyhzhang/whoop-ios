@@ -9,7 +9,7 @@ enum Theme {
         static let canvas = Color.black
         static let surface = Color(red: 28 / 255, green: 28 / 255, blue: 30 / 255)
         static let surfaceRaised = Color(white: 36 / 255)
-        static let guide = Color(white: 0.32)
+        static let guide = Color(white: 0.22)
         static let muted = Color(uiColor: .systemGray)
         static let mutedDark = Color(uiColor: .systemGray3)
         static let text = Color.white
@@ -65,6 +65,20 @@ enum Theme {
         static let screenInset: CGFloat = 16
         static let summaryLeadingInset: CGFloat = 6
         static let summaryColumnSpacing: CGFloat = 40
+    }
+
+    /// Each chart stroke keeps its metric hue and becomes gently lighter at the tip.
+    static func chartStrokeGradient(
+        _ color: Color, environment: EnvironmentValues, opacity: Double
+    ) -> Gradient {
+        let resolved = color.resolve(in: environment)
+        let highlightMix = 0.3
+        let highlight = Color(
+            red: Double(resolved.red) + (1 - Double(resolved.red)) * highlightMix,
+            green: Double(resolved.green) + (1 - Double(resolved.green)) * highlightMix,
+            blue: Double(resolved.blue) + (1 - Double(resolved.blue)) * highlightMix
+        )
+        return Gradient(colors: [color.opacity(opacity), highlight.opacity(opacity)])
     }
 
     /// Diagonal neutral gradient shared by every card.
