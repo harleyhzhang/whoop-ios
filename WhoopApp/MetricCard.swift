@@ -66,11 +66,8 @@ struct MetricChart: View {
     }
 
     private func domain(buckets: [ChartBucket], levels: [ChartAverageStep]) -> ClosedRange<Double> {
-        if metric == .sleep || metric == .recovery { return 0...100 }
-        if metric == .strain { return 0...21 }
         let values = buckets.compactMap(\.value) + levels.map(\.value)
-        let high = values.max() ?? 1
-        return 0...max(high * 1.1, 1)
+        return ChartValueScale.domain(metric: metric, values: values)
     }
 
     var body: some View {

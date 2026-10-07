@@ -67,6 +67,7 @@
 		8FD536D2E770D2CA856F1DE9 /* WhoopReplicaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C0213CF9C58DA6D00681D42 /* WhoopReplicaClient.swift */; };
 		8FE7F74482522A041C3AEE62 /* WhoopStore+Ingest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 595A77B9A03D32069E3059FA /* WhoopStore+Ingest.swift */; };
 		9C82A93B9453F5BFF6E967FD /* WhoopPacketPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 091534E0E69A987910B4FF86 /* WhoopPacketPersistenceTests.swift */; };
+		9D59D56BC23D6C4B6A6E25D6 /* ChartValueScaleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58551372AE696587E7788ED1 /* ChartValueScaleTests.swift */; };
 		A1BCA080A71B734F53838933 /* WhoopStorageTelemetryModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EE6D64DDB44A0A5B263899C /* WhoopStorageTelemetryModels.swift */; };
 		A5D975F570C6CC9FB60A3C6E /* WhoopTestFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE7096BFFF175D5BE830FE4 /* WhoopTestFixtures.swift */; };
 		A77F669CB8A23C59F38433B1 /* WhoopTransportPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0593BA28D3B0A270B12F80D4 /* WhoopTransportPipeline.swift */; };
@@ -77,6 +78,7 @@
 		B256486859D946ECC8ACE777 /* ChartAverageSteps.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE4F295391E6CF105C5052D /* ChartAverageSteps.swift */; };
 		B8A4BFF86C1BD2C84C87A38B /* ScoreModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFA3FED20C4F51C306B62602 /* ScoreModels.swift */; };
 		B9D9B3AE344C38BA30E3FA5D /* DayKeyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7ACFBF5BFE1C6F02657D9BBB /* DayKeyTests.swift */; };
+		BDB2BFBC11FE0D51730795DE /* ChartValueScale.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3DB09D0456D7E39874016A4 /* ChartValueScale.swift */; };
 		C26129DED40C57C671167DB3 /* WhoopSleepAnalysisTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF0E1EDD33DF9A8EF9B876D3 /* WhoopSleepAnalysisTests.swift */; };
 		C2B258CA00C97901764B3809 /* WhoopCollector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7FC03A33FC8D2FB5A5A48E4 /* WhoopCollector.swift */; };
 		C5BA562D0034E5CD22386C8F /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 942D7E111BF992741CDB47F7 /* RootView.swift */; };
@@ -154,6 +156,7 @@
 		51F2F03598573556C28EAD86 /* DashboardRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardRepository.swift; sourceTree = "<group>"; };
 		53FF761DB8183EDD6943C75E /* WhoopNotificationManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopNotificationManagerTests.swift; sourceTree = "<group>"; };
 		5827DA93D644E43EA934C5EC /* WhoopStore+Diagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WhoopStore+Diagnostics.swift"; sourceTree = "<group>"; };
+		58551372AE696587E7788ED1 /* ChartValueScaleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartValueScaleTests.swift; sourceTree = "<group>"; };
 		595A77B9A03D32069E3059FA /* WhoopStore+Ingest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WhoopStore+Ingest.swift"; sourceTree = "<group>"; };
 		5C10B83C43E985642EB7D2CF /* Whoop.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Whoop.xcconfig; sourceTree = "<group>"; };
 		5EB7198A70B1E62A550269D8 /* WhoopReplicaModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopReplicaModels.swift; sourceTree = "<group>"; };
@@ -187,6 +190,7 @@
 		944BDE1613A89BF7850FC164 /* GeneratedModelFeatures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeneratedModelFeatures.swift; sourceTree = "<group>"; };
 		953A1BDDD652678F6145058D /* WhoopStorageTelemetry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopStorageTelemetry.swift; sourceTree = "<group>"; };
 		A0352BAE579BE65AAAD20ADF /* WhoopStore+SQL.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WhoopStore+SQL.swift"; sourceTree = "<group>"; };
+		A3DB09D0456D7E39874016A4 /* ChartValueScale.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartValueScale.swift; sourceTree = "<group>"; };
 		A9325435ADEEA3A415E84E3F /* SQLiteDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLiteDatabase.swift; sourceTree = "<group>"; };
 		AAB9D3941F5FFD1334BEAE1B /* WhoopReliabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopReliabilityTests.swift; sourceTree = "<group>"; };
 		AF0E1EDD33DF9A8EF9B876D3 /* WhoopSleepAnalysisTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopSleepAnalysisTests.swift; sourceTree = "<group>"; };
@@ -333,6 +337,7 @@
 			children = (
 				E4993619FB1A6CA29D7CF156 /* Assets.xcassets */,
 				5EE4F295391E6CF105C5052D /* ChartAverageSteps.swift */,
+				A3DB09D0456D7E39874016A4 /* ChartValueScale.swift */,
 				91647D7FFB2BD5F9166C7DC4 /* DashboardCardData.swift */,
 				84D28A0CEFAC0758290CF326 /* DashboardCardProjection.swift */,
 				BDB02B6E14BB535E1C73F894 /* DashboardComponents.swift */,
@@ -358,6 +363,7 @@
 		E12CB3379F13CD2918675D39 /* WhoopTests */ = {
 			isa = PBXGroup;
 			children = (
+				58551372AE696587E7788ED1 /* ChartValueScaleTests.swift */,
 				040DB95AC281014105E2D277 /* DashboardBehaviorTests.swift */,
 				01C26EE933532DC51A3D8234 /* DashboardCardProjectionTests.swift */,
 				7ACFBF5BFE1C6F02657D9BBB /* DayKeyTests.swift */,
@@ -562,6 +568,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B256486859D946ECC8ACE777 /* ChartAverageSteps.swift in Sources */,
+				BDB2BFBC11FE0D51730795DE /* ChartValueScale.swift in Sources */,
 				FAA40AFA71028A023B693BB2 /* DashboardCardData.swift in Sources */,
 				D3067D922C08D754F3E40F00 /* DashboardCardProjection.swift in Sources */,
 				12FC10064D8BF4FAF5BD49AA /* DashboardComponents.swift in Sources */,
@@ -639,6 +646,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				9D59D56BC23D6C4B6A6E25D6 /* ChartValueScaleTests.swift in Sources */,
 				15D7C49666D7351F76794071 /* DashboardBehaviorTests.swift in Sources */,
 				78AA67A37AB7DAE20098711E /* DashboardCardProjectionTests.swift in Sources */,
 				B9D9B3AE344C38BA30E3FA5D /* DayKeyTests.swift in Sources */,
