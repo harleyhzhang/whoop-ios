@@ -9,7 +9,7 @@ enum Theme {
         static let canvas = Color.black
         static let surface = Color(red: 28 / 255, green: 28 / 255, blue: 30 / 255)
         static let surfaceRaised = Color(white: 36 / 255)
-        static let guide = Color(white: 0.22)
+        static let guide = Color(white: 0.21)
         static let chartDate = Color(white: 0.4)
         static let muted = Color(uiColor: .systemGray)
         static let mutedDark = Color(uiColor: .systemGray3)
@@ -39,7 +39,7 @@ enum Theme {
         /// Inline status text.
         static let small = font(11, .bold)
         /// Battery percentages.
-        static let battery = numericFont(11, .bold)
+        static let battery = numericFont(12, .bold)
         /// Card and summary metric labels.
         static let body = font(14, .regular)
         /// Header date.
@@ -71,11 +71,18 @@ enum Theme {
         static let cardPadding: CGFloat = 17
         static let metricCardBottomPadding: CGFloat = 12
         static let screenInset: CGFloat = 16
+        static let screenTopInset: CGFloat = 0
+        static let summaryHorizontalPadding: CGFloat = 22
+        static let summaryVerticalPadding: CGFloat = 18
         static let summaryLeadingInset: CGFloat = 6
         static let summaryColumnSpacing: CGFloat = 40
         static let chartDateOffset: CGFloat = 8
         static let chartPlotHeight: CGFloat = 62
         static let chartDateBandHeight: CGFloat = 14
+        static let batteryTerminalSpacing: CGFloat = 1
+        static let batteryTerminalWidth: CGFloat = 2
+        static let batteryTerminalHeight: CGFloat = 5.6
+        static let batteryTerminalRadius: CGFloat = 2.8
     }
 
     /// Each chart stroke keeps its metric hue and becomes gently lighter at the tip.

@@ -99,7 +99,7 @@ struct WhoopBatteryPercentIcon: View {
     }
 
     var body: some View {
-        HStack(spacing: 1.6) {
+        HStack(spacing: Theme.Layout.batteryTerminalSpacing) {
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: Self.shellRadius, style: .continuous)
                     .fill(trackColor)
@@ -116,12 +116,12 @@ struct WhoopBatteryPercentIcon: View {
             UnevenRoundedRectangle(
                 topLeadingRadius: 0,
                 bottomLeadingRadius: 0,
-                bottomTrailingRadius: 3.3,
-                topTrailingRadius: 3.3,
+                bottomTrailingRadius: Theme.Layout.batteryTerminalRadius,
+                topTrailingRadius: Theme.Layout.batteryTerminalRadius,
                 style: .continuous
             )
             .fill(trackColor)
-            .frame(width: 2.4, height: 6.6)
+            .frame(width: Theme.Layout.batteryTerminalWidth, height: Theme.Layout.batteryTerminalHeight)
         }
         .accessibilityHidden(true)
         .task(id: isCharging) {

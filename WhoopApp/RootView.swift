@@ -135,7 +135,7 @@ struct RootView: View {
                     }
                 }
                 .padding(.horizontal, Theme.Layout.screenInset)
-                .padding(.top, 8)
+                .padding(.top, Theme.Layout.screenTopInset)
                 .padding(.bottom, 32)
             }
             .scrollIndicators(.hidden)
