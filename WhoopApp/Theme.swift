@@ -30,25 +30,31 @@ enum Theme {
         static let recoveryHigh = Color(red: 22 / 255, green: 236 / 255, blue: 6 / 255)
     }
 
-    /// One rounded family at a fixed set of sizes.
+    /// Plain system type for text; rounded system type only for numeric readings.
     enum Typography {
-        static let design: Font.Design = .rounded
-
-        /// Chart axis and average labels.
+        /// Chart date labels.
         static let caption = font(9, .medium)
-        /// Battery percentages and inline status text.
+        /// Numeric chart averages.
+        static let numericCaption = numericFont(9, .medium)
+        /// Inline status text.
         static let small = font(11, .bold)
+        /// Battery percentages.
+        static let battery = numericFont(11, .bold)
         /// Card and summary metric labels.
         static let body = font(14, .regular)
         /// Header date.
         static let title = font(22, .semibold)
         /// Units beside a metric value.
-        static let unit = font(16, .semibold)
+        static let unit = numericFont(16, .semibold)
         /// Metric values.
-        static let value = font(24, .semibold)
+        static let value = numericFont(24, .semibold)
 
         static func font(_ size: CGFloat, _ weight: Font.Weight) -> Font {
-            .system(size: size, weight: weight, design: design)
+            .system(size: size, weight: weight)
+        }
+
+        static func numericFont(_ size: CGFloat, _ weight: Font.Weight) -> Font {
+            .system(size: size, weight: weight, design: .rounded)
         }
     }
 
