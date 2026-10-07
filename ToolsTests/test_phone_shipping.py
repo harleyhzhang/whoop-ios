@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import shutil
 import sqlite3
 import subprocess
 import tempfile
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import phone_shipping
 import phone_shipping_core as core
@@ -592,6 +595,64 @@ def test_phone_storage_is_optional_when_legacy_network_query_is_unavailable(
     device = core.Device("CORE-1", "UDID-1", "IP", "iPhone", "27.0", "24A1", "localNetwork")
 
     assert environment.device_available_storage(runner, tmp_path, device) is None
+
+
+@pytest.mark.parametrize("transport", ["localNetwork", "usb"])
+@pytest.mark.parametrize(
+    ("available", "error"),
+    [(3 * 1024**3, None), (1024**3, "at least 2.0 GiB"), (None, "disk-usage service")],
+)
+def test_migration_doctor_allows_both_transports_but_requires_storage_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    transport: str,
+    available: int | None,
+    error: str | None,
+) -> None:
+    private_root = tmp_path / "assets"
+    create_private_assets(private_root)
+    device = replace(core.choose_device(device_payload()), transport=transport)
+    profile = core.SigningProfile(
+        "profile", "uuid", "team", datetime.now(UTC) + timedelta(days=1), ("hash",)
+    )
+    monkeypatch.setattr(environment, "require_commands", lambda _: None)
+    monkeypatch.setattr(environment, "load_contract", lambda _: {})
+    monkeypatch.setattr(environment, "observe", lambda *_: {})
+    monkeypatch.setattr(environment, "mismatches", lambda *_: [])
+    monkeypatch.setattr(shutil, "disk_usage", lambda _: SimpleNamespace(free=20 * 1024**3))
+    monkeypatch.setattr(environment, "list_devices", lambda *_: device_payload())
+    monkeypatch.setattr(environment, "choose_device", lambda *_: device)
+    monkeypatch.setattr(
+        environment, "installed_app", lambda *_: core.AppInfo(core.BUNDLE_IDENTIFIER, "", "1", "1")
+    )
+    monkeypatch.setattr(environment, "device_available_storage", lambda *_: available)
+    monkeypatch.setattr(environment, "project_development_team", lambda _: "team")
+    monkeypatch.setattr(environment, "discover_signing_profile", lambda *_: profile)
+    monkeypatch.setattr(
+        environment.CommandRunner,
+        "run",
+        lambda *_: subprocess.CompletedProcess([], 0, "synthetic", ""),
+    )
+
+    def preflight() -> environment.DoctorResult:
+        return environment.doctor(
+            environment.CommandRunner(verbose=False),
+            tmp_path / "repo",
+            private_root,
+            tmp_path / "state.json",
+            tmp_path / "backups",
+            "migration",
+            None,
+            tmp_path / "scratch",
+        )
+
+    if error is not None:
+        with pytest.raises(core.ShippingError, match=error):
+            preflight()
+    else:
+        result = preflight()
+        assert result.device.transport == transport
+        assert result.device_available_bytes == available
 
 
 class RecordingRunner(phone_shipping.CommandRunner):
