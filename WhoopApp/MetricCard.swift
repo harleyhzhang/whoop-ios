@@ -160,8 +160,11 @@ struct MetricChart: View {
                     : labelDate.formatted(.dateTime.month(.abbreviated).day())
                 context.draw(
                     Text(label).font(Theme.Typography.caption)
-                        .foregroundStyle(guideColor),
-                    at: CGPoint(x: (boundaryX(start) + boundaryX(end)) / 2, y: plotHeight + 12),
+                        .foregroundStyle(Theme.Palette.chartDate),
+                    at: CGPoint(
+                        x: (boundaryX(start) + boundaryX(end)) / 2,
+                        y: plotHeight + Theme.Layout.chartDateOffset
+                    ),
                     anchor: .center
                 )
             }

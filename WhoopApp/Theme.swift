@@ -10,6 +10,7 @@ enum Theme {
         static let surface = Color(red: 28 / 255, green: 28 / 255, blue: 30 / 255)
         static let surfaceRaised = Color(white: 36 / 255)
         static let guide = Color(white: 0.22)
+        static let chartDate = Color(white: 0.4)
         static let muted = Color(uiColor: .systemGray)
         static let mutedDark = Color(uiColor: .systemGray3)
         static let text = Color.white
@@ -65,6 +66,7 @@ enum Theme {
         static let screenInset: CGFloat = 16
         static let summaryLeadingInset: CGFloat = 6
         static let summaryColumnSpacing: CGFloat = 40
+        static let chartDateOffset: CGFloat = 8
     }
 
     /// Each chart stroke keeps its metric hue and becomes gently lighter at the tip.
