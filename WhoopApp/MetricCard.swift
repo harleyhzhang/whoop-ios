@@ -28,12 +28,11 @@ struct MetricCard: View {
             MetricHeader(metric: metric)
             MetricValue(metric: metric, value: selected?.value(for: metric))
                 .padding(.top, 2)
-            Spacer(minLength: 6)
             MetricChart(metric: metric, days: days)
                 .frame(height: 82)
+                .padding(.top, Theme.Layout.spacing)
         }
         .padding(Theme.Layout.cardPadding)
-        .frame(height: 196)
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardBackground()
     }
