@@ -21,7 +21,11 @@ final class WhoopUITests: XCTestCase {
         app.swipeUp()
         XCTAssertTrue(app.staticTexts["Recovery"].firstMatch.exists)
         XCTAssertTrue(app.staticTexts["RHR"].firstMatch.exists)
-        XCTAssertTrue(app.staticTexts["HRV"].firstMatch.exists)
+        XCTAssertFalse(app.staticTexts["HRV"].firstMatch.exists)
+        XCTAssertFalse(app.descendants(matching: .any)["card.hrv"].exists)
+        for metric in ["rhr", "sleep", "recovery", "strain"] {
+            XCTAssertTrue(app.descendants(matching: .any)["card.\(metric)"].exists)
+        }
 
         let batteries = app.otherElements["whoop.batteries"]
         XCTAssertTrue(batteries.exists)

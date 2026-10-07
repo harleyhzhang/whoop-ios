@@ -13,8 +13,9 @@ recovery, and strain locally, with no membership required.
 - Pairs with a WHOOP 5 and collects heart rate, R–R intervals, and motion in
   the background.
 - Stores raw packets and derived metrics in an on-device SQLite database.
-- Shows Sleep, Recovery, Strain, Steps, sleep duration, HRV, and RHR with
-  full-history charts.
+- Shows Sleep, Recovery, Strain, Steps, sleep duration, and RHR with
+  full-history charts. HRV is still collected, stored, and used by Recovery;
+  its chart is hidden from the dashboard.
 - Optionally imports your past WHOOP history so charts start full.
 - Optionally replicates an encrypted backup to a backend you control.
 

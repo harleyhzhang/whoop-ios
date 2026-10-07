@@ -128,10 +128,21 @@ git commit -qm schema_observability
 schema_observability_commit=$(git rev-parse HEAD)
 assert_mode protected --base "$bluetooth_commit" --head "$schema_observability_commit"
 
+# The production store exposes its schema constant internally after refactoring.
+sed -i '' 's/private static/static/' WhoopKit/WhoopStore.swift
+git commit -qam schema_visibility
+schema_visibility_commit=$(git rev-parse HEAD)
+assert_mode protected --base "$schema_observability_commit" --head "$schema_visibility_commit"
+
+printf '// narrower header spacing\n' >> WhoopApp/DashboardHeader.swift
+git commit -qam internal_schema_presentation
+internal_schema_presentation_commit=$(git rev-parse HEAD)
+assert_mode fast --base "$schema_visibility_commit" --head "$internal_schema_presentation_commit"
+
 sed -i '' 's/currentSchemaVersion = 10/currentSchemaVersion = 11/' WhoopKit/WhoopStore.swift
 git commit -qam schema_version_change
 schema_version_change_commit=$(git rev-parse HEAD)
-assert_mode migration --base "$schema_observability_commit" --head "$schema_version_change_commit"
+assert_mode migration --base "$internal_schema_presentation_commit" --head "$schema_version_change_commit"
 
 printf 'settings:\n  DEVELOPMENT_TEAM: CHANGED\n' > project.yml
 git add project.yml

@@ -127,7 +127,7 @@ struct RootView: View {
                                 repeating: GridItem(.flexible(), spacing: Theme.Layout.spacing),
                                 count: typeSize.isAccessibilitySize ? 1 : 2), spacing: Theme.Layout.spacing
                         ) {
-                            ForEach([HealthMetric.steps, .duration, .hrv, .rhr, .sleep, .recovery, .strain]) { metric in
+                            ForEach([HealthMetric.steps, .duration, .rhr, .sleep, .recovery, .strain]) { metric in
                                 MetricCard(metric: metric, selected: projection.selected, days: projection.days)
                                     .accessibilityIdentifier("card.\(metric.rawValue)")
                             }
@@ -135,7 +135,7 @@ struct RootView: View {
                     }
                 }
                 .padding(.horizontal, Theme.Layout.screenInset)
-                .padding(.top, 8)
+                .padding(.top, Theme.Layout.screenTopInset)
                 .padding(.bottom, 32)
             }
             .scrollIndicators(.hidden)

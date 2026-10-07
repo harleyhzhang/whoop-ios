@@ -130,9 +130,10 @@ if printf '%s\n' "$production_files" | grep -Eq '^project\.yml$|\.entitlements$'
   exit 0
 fi
 
+# Access control changes do not change the stored schema version.
 schema_version_at() {
   git show "$1:WhoopKit/WhoopStore.swift" 2>/dev/null | \
-    sed -nE 's/.*private static let (currentSchemaVersion|schemaVersion)[[:space:]]*=[[:space:]]*([0-9]+).*/\2/p' | \
+    sed -nE 's/.*static let (currentSchemaVersion|schemaVersion)[[:space:]]*=[[:space:]]*([0-9]+).*/\2/p' | \
     head -n 1
 }
 

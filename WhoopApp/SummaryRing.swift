@@ -17,7 +17,8 @@ struct SummaryRings: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .center)
-        .padding(22)
+        .padding(.horizontal, Theme.Layout.summaryHorizontalPadding)
+        .padding(.vertical, Theme.Layout.summaryVerticalPadding)
         .cardBackground()
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("summary.rings")
