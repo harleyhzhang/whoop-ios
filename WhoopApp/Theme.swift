@@ -36,15 +36,15 @@ enum Theme {
         /// Chart axis and average labels.
         static let caption = font(9, .medium)
         /// Battery percentages and inline status text.
-        static let small = font(12, .bold)
+        static let small = font(11, .bold)
         /// Card and summary metric labels.
-        static let body = font(16, .regular)
+        static let body = font(14, .regular)
         /// Header date.
-        static let title = font(20, .semibold)
+        static let title = font(22, .semibold)
         /// Units beside a metric value.
-        static let unit = font(20, .semibold)
+        static let unit = font(18, .semibold)
         /// Metric values.
-        static let value = font(32, .semibold)
+        static let value = font(28, .semibold)
 
         static func font(_ size: CGFloat, _ weight: Font.Weight) -> Font {
             .system(size: size, weight: weight, design: design)
@@ -63,6 +63,8 @@ enum Theme {
         static let cornerRadius: CGFloat = 22
         static let cardPadding: CGFloat = 17
         static let screenInset: CGFloat = 16
+        static let summaryLeadingInset: CGFloat = 6
+        static let summaryColumnSpacing: CGFloat = 40
     }
 
     /// Diagonal neutral gradient shared by every card.

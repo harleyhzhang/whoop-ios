@@ -5,10 +5,11 @@ struct SummaryRings: View {
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 32) {
+            HStack(spacing: Theme.Layout.summaryColumnSpacing) {
                 rings.frame(width: 174, height: 174)
                 values
             }
+            .padding(.leading, Theme.Layout.summaryLeadingInset)
             .frame(maxWidth: .infinity, alignment: .leading)
             VStack(spacing: 20) {
                 rings.frame(width: 174, height: 174)
