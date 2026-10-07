@@ -28,12 +28,11 @@ struct MetricCard: View {
             MetricHeader(metric: metric)
             MetricValue(metric: metric, value: selected?.value(for: metric))
                 .padding(.top, 2)
-            Spacer(minLength: 6)
             MetricChart(metric: metric, days: days)
                 .frame(height: 82)
+                .padding(.top, Theme.Layout.spacing)
         }
         .padding(Theme.Layout.cardPadding)
-        .frame(height: 196)
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardBackground()
     }
@@ -66,11 +65,8 @@ struct MetricChart: View {
     }
 
     private func domain(buckets: [ChartBucket], levels: [ChartAverageStep]) -> ClosedRange<Double> {
-        if metric == .sleep || metric == .recovery { return 0...100 }
-        if metric == .strain { return 0...21 }
         let values = buckets.compactMap(\.value) + levels.map(\.value)
-        let high = values.max() ?? 1
-        return 0...max(high * 1.1, 1)
+        return ChartValueScale.domain(metric: metric, values: values)
     }
 
     var body: some View {
@@ -122,7 +118,14 @@ struct MetricChart: View {
                 trace.addLine(to: CGPoint(x: x, y: y))
                 context.stroke(
                     trace,
-                    with: .color(metric.color(for: value).opacity(levels.isEmpty ? 1 : 0.75)),
+                    with: .linearGradient(
+                        Theme.chartStrokeGradient(
+                            metric.color(for: value), environment: context.environment,
+                            opacity: levels.isEmpty ? 1 : 0.75
+                        ),
+                        startPoint: CGPoint(x: x, y: plotHeight - 1),
+                        endPoint: CGPoint(x: x, y: y)
+                    ),
                     style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round)
                 )
             }
@@ -138,7 +141,7 @@ struct MetricChart: View {
                     level, with: .color(Theme.Palette.text), style: StrokeStyle(lineWidth: 2, lineCap: .butt))
                 context.draw(
                     Text(averageLabel(step.value))
-                        .font(Theme.Typography.caption)
+                        .font(Theme.Typography.numericCaption)
                         .tracking(-0.15).foregroundStyle(Theme.Palette.text),
                     at: CGPoint(x: min(max((startX + endX) / 2, 11), size.width - 11), y: max(6, y - 9)),
                     anchor: .center
@@ -156,8 +159,11 @@ struct MetricChart: View {
                     : labelDate.formatted(.dateTime.month(.abbreviated).day())
                 context.draw(
                     Text(label).font(Theme.Typography.caption)
-                        .foregroundStyle(guideColor),
-                    at: CGPoint(x: (boundaryX(start) + boundaryX(end)) / 2, y: plotHeight + 12),
+                        .foregroundStyle(Theme.Palette.chartDate),
+                    at: CGPoint(
+                        x: (boundaryX(start) + boundaryX(end)) / 2,
+                        y: plotHeight + Theme.Layout.chartDateOffset
+                    ),
                     anchor: .center
                 )
             }

@@ -19,7 +19,9 @@ versioned sleep, recovery, and strain metrics.
 
 - All colors, fonts, spacing, and the card background come from
   `WhoopApp/Theme.swift`. No literal sizes or RGB values in views.
-- One rounded type family at the sizes in `Theme.Typography`. Mostly greys,
+- Use plain system type for dates, labels, and other text. Use rounded system
+  type for metric numbers, their units, battery percentages, and numeric chart
+  averages. Sizes and font roles live in `Theme.Typography`. Mostly greys,
   black, and white; accent colors only for metrics and status.
 - Small components with minimal overrides. Pass models, not long prop lists.
 

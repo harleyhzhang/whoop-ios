@@ -133,12 +133,9 @@ final class WhoopCollector: NSObject {
 
     private func restoreCachedTelemetry() {
         let defaults = UserDefaults.standard
-        if defaults.object(forKey: cachedBatteryLevelKey) != nil,
-            let observedAt = defaults.object(forKey: cachedBatteryLevelDateKey) as? Date,
-            Date().timeIntervalSince(observedAt) <= 24 * 60 * 60
-        {
-            batteryLevel = min(max(defaults.integer(forKey: cachedBatteryLevelKey), 0), 100)
-        }
+        batteryLevel = WhoopBluetoothPolicy.cachedBatteryLevel(
+            defaults.object(forKey: cachedBatteryLevelKey)
+        )
         if defaults.object(forKey: cachedHeartRateKey) != nil {
             let bpm = defaults.integer(forKey: cachedHeartRateKey)
             if bpm > 0 {

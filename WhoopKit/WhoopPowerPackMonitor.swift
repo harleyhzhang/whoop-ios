@@ -23,13 +23,6 @@ enum WhoopPowerPackPolicy {
         return Int(rawLevel)
     }
 
-    static func cachedLevelIsFresh(
-        observedAt: Date,
-        now: Date,
-        maximumAge: TimeInterval = 30 * 24 * 60 * 60
-    ) -> Bool {
-        now.timeIntervalSince(observedAt) <= maximumAge
-    }
 }
 
 @MainActor
@@ -95,11 +88,9 @@ final class WhoopPowerPackMonitor: NSObject {
 
     private func restoreCachedBatteryLevel() {
         let defaults = UserDefaults.standard
-        guard defaults.object(forKey: cachedBatteryLevelKey) != nil,
-            let observedAt = defaults.object(forKey: cachedBatteryLevelDateKey) as? Date,
-            WhoopPowerPackPolicy.cachedLevelIsFresh(observedAt: observedAt, now: .now)
-        else { return }
-        batteryLevel = min(max(defaults.integer(forKey: cachedBatteryLevelKey), 0), 100)
+        batteryLevel = WhoopBluetoothPolicy.cachedBatteryLevel(
+            defaults.object(forKey: cachedBatteryLevelKey)
+        )
     }
 
     private func discoverPowerPack() {

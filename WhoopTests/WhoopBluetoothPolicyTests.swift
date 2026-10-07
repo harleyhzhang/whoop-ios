@@ -135,20 +135,18 @@ final class WhoopBluetoothPolicyTests: XCTestCase {
         XCTAssertNil(WhoopPowerPackPolicy.batteryLevel(Data([101])))
     }
 
-    func testPowerPackCachedLevelExpiresAfterThirtyDays() {
-        let observedAt = Date(timeIntervalSince1970: 1_000)
-        XCTAssertTrue(
-            WhoopPowerPackPolicy.cachedLevelIsFresh(
-                observedAt: observedAt,
-                now: observedAt.addingTimeInterval(30 * 24 * 60 * 60)
-            )
-        )
-        XCTAssertFalse(
-            WhoopPowerPackPolicy.cachedLevelIsFresh(
-                observedAt: observedAt,
-                now: observedAt.addingTimeInterval(30 * 24 * 60 * 60 + 1)
-            )
-        )
+    func testCachedBatteryLevelKeepsValidPercentagesIncludingZero() {
+        XCTAssertEqual(WhoopBluetoothPolicy.cachedBatteryLevel(0), 0)
+        XCTAssertEqual(WhoopBluetoothPolicy.cachedBatteryLevel(73), 73)
+        XCTAssertEqual(WhoopBluetoothPolicy.cachedBatteryLevel(100), 100)
+        XCTAssertEqual(WhoopBluetoothPolicy.cachedBatteryLevel(NSNumber(value: 58)), 58)
+    }
+
+    func testCachedBatteryLevelRejectsMissingAndInvalidValues() {
+        XCTAssertNil(WhoopBluetoothPolicy.cachedBatteryLevel(nil))
+        XCTAssertNil(WhoopBluetoothPolicy.cachedBatteryLevel(-1))
+        XCTAssertNil(WhoopBluetoothPolicy.cachedBatteryLevel(101))
+        XCTAssertNil(WhoopBluetoothPolicy.cachedBatteryLevel("unknown"))
     }
 
     func testBatteryTrendInferenceNeverOverridesExplicitChargingState() {

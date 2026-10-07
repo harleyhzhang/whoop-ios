@@ -31,6 +31,20 @@ final class WhoopUITests: XCTestCase {
         )
     }
 
+    func testDisconnectedDashboardStillDisplaysBatteryReadings() {
+        let app = configuredApplication()
+        app.launchEnvironment["WHOOP_MOCK_CONNECTED"] = "0"
+        app.launchEnvironment["WHOOP_MOCK_CHARGING"] = "0"
+        app.launch()
+
+        let batteries = app.otherElements["whoop.batteries"]
+        XCTAssertTrue(batteries.waitForExistence(timeout: 5))
+        XCTAssertEqual(
+            batteries.label,
+            "WHOOP disconnected, battery 73 percent; PowerPack battery 58 percent"
+        )
+    }
+
     func testDashboardHasNoManualSleepProcessingControls() {
         let app = configuredApplication()
         app.launch()

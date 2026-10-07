@@ -9,7 +9,8 @@ enum Theme {
         static let canvas = Color.black
         static let surface = Color(red: 28 / 255, green: 28 / 255, blue: 30 / 255)
         static let surfaceRaised = Color(white: 36 / 255)
-        static let guide = Color(white: 0.32)
+        static let guide = Color(white: 0.22)
+        static let chartDate = Color(white: 0.4)
         static let muted = Color(uiColor: .systemGray)
         static let mutedDark = Color(uiColor: .systemGray3)
         static let text = Color.white
@@ -29,25 +30,31 @@ enum Theme {
         static let recoveryHigh = Color(red: 22 / 255, green: 236 / 255, blue: 6 / 255)
     }
 
-    /// One rounded family at a fixed set of sizes.
+    /// Plain system type for text; rounded system type only for numeric readings.
     enum Typography {
-        static let design: Font.Design = .rounded
-
-        /// Chart axis and average labels.
+        /// Chart date labels.
         static let caption = font(9, .medium)
-        /// Battery percentages and inline status text.
-        static let small = font(12, .bold)
+        /// Numeric chart averages.
+        static let numericCaption = numericFont(9, .medium)
+        /// Inline status text.
+        static let small = font(11, .bold)
+        /// Battery percentages.
+        static let battery = numericFont(11, .bold)
         /// Card and summary metric labels.
-        static let body = font(16, .regular)
+        static let body = font(14, .regular)
         /// Header date.
-        static let title = font(20, .semibold)
+        static let title = font(22, .semibold)
         /// Units beside a metric value.
-        static let unit = font(20, .semibold)
+        static let unit = numericFont(16, .semibold)
         /// Metric values.
-        static let value = font(32, .semibold)
+        static let value = numericFont(24, .semibold)
 
         static func font(_ size: CGFloat, _ weight: Font.Weight) -> Font {
-            .system(size: size, weight: weight, design: design)
+            .system(size: size, weight: weight)
+        }
+
+        static func numericFont(_ size: CGFloat, _ weight: Font.Weight) -> Font {
+            .system(size: size, weight: weight, design: .rounded)
         }
     }
 
@@ -63,6 +70,23 @@ enum Theme {
         static let cornerRadius: CGFloat = 22
         static let cardPadding: CGFloat = 17
         static let screenInset: CGFloat = 16
+        static let summaryLeadingInset: CGFloat = 6
+        static let summaryColumnSpacing: CGFloat = 40
+        static let chartDateOffset: CGFloat = 8
+    }
+
+    /// Each chart stroke keeps its metric hue and becomes gently lighter at the tip.
+    static func chartStrokeGradient(
+        _ color: Color, environment: EnvironmentValues, opacity: Double
+    ) -> Gradient {
+        let resolved = color.resolve(in: environment)
+        let highlightMix = 0.3
+        let highlight = Color(
+            red: Double(resolved.red) + (1 - Double(resolved.red)) * highlightMix,
+            green: Double(resolved.green) + (1 - Double(resolved.green)) * highlightMix,
+            blue: Double(resolved.blue) + (1 - Double(resolved.blue)) * highlightMix
+        )
+        return Gradient(colors: [color.opacity(opacity), highlight.opacity(opacity)])
     }
 
     /// Diagonal neutral gradient shared by every card.
