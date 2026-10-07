@@ -569,7 +569,7 @@ class StorageRunner(phone_shipping.CommandRunner):
         return subprocess.CompletedProcess(arguments, self.returncode, self.output, "unavailable")
 
 
-def test_phone_storage_uses_direct_network_disk_usage_query(tmp_path: Path) -> None:
+def test_phone_storage_uses_direct_usb_disk_usage_query(tmp_path: Path) -> None:
     runner = StorageRunner()
     device = core.Device("CORE-1", "UDID-1", "IP", "iPhone", "27.0", "24A1", "")
 
@@ -578,7 +578,6 @@ def test_phone_storage_uses_direct_network_disk_usage_query(tmp_path: Path) -> N
     assert available == 97_051_308_032
     assert runner.arguments == [
         "ideviceinfo",
-        "--network",
         "--udid",
         "UDID-1",
         "--domain",
@@ -707,6 +706,15 @@ def test_device_backup_copies_only_allowlisted_files_and_compacts(
     selected = core.Device("CORE-1", "UDID-1", "IP", "iPhone", "27.0", "24A1", "")
     monkeypatch.setattr(device_shipping, "wait_for_backup_quiescence", lambda: None)
 
+    def copy_fixture(
+        device: core.Device, root: Path, required: tuple[str, ...], optional: tuple[str, ...]
+    ) -> None:
+        for name in (*required, *optional):
+            device_shipping.copy_app_file(
+                runner, tmp_path, device, name, root / name, required=name in required
+            )
+
+    monkeypatch.setattr(device_shipping, "copy_snapshot", copy_fixture)
     backup = device_shipping.take_backup(
         runner,
         tmp_path / "scratch",
@@ -930,3 +938,35 @@ def test_shipping_lock_rejects_concurrent_invocation(tmp_path: Path) -> None:
     ):
         pass
     assert lock_path.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("transport", ["usb", "wired", "localNetwork"])
+def test_storage_falls_back_only_when_transport_service_is_unavailable(
+    tmp_path: Path, transport: str
+) -> None:
+    class FallbackRunner(StorageRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls: list[list[str]] = []
+
+        def run(self, arguments: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            self.calls.append(arguments)
+            return subprocess.CompletedProcess(
+                arguments, 1 if len(self.calls) == 1 else 0, "123456789", ""
+            )
+
+    runner = FallbackRunner()
+    selected = replace(core.choose_device(device_payload()), transport=transport)
+    assert environment.device_available_storage(runner, tmp_path, selected) == 123456789
+    assert len(runner.calls) == 2
+    assert ("--network" in runner.calls[0]) == (transport == "localNetwork")
+    assert ("--network" in runner.calls[1]) != (transport == "localNetwork")
+    assert all(selected.udid in call for call in runner.calls)
+
+
+@pytest.mark.parametrize("value", ["invalid", "0", "-1"])
+def test_storage_does_not_hide_invalid_or_empty_capacity(tmp_path: Path, value: str) -> None:
+    with pytest.raises(core.ShippingError):
+        environment.device_available_storage(
+            StorageRunner(output=value), tmp_path, core.choose_device(device_payload())
+        )

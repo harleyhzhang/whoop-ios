@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
+from phone_backup_afc import copy_snapshot
 from phone_shipping_core import (
     BUNDLE_IDENTIFIER,
     BackupResult,
@@ -208,10 +209,7 @@ def take_backup(
         directory.chmod(0o700)
     try:
         with suspended_application(runner, scratch, device):
-            for name in BACKUP_REQUIRED_FILES:
-                copy_app_file(runner, scratch, device, name, raw_root / name, required=True)
-            for name in BACKUP_OPTIONAL_FILES:
-                copy_app_file(runner, scratch, device, name, raw_root / name, required=False)
+            copy_snapshot(device, raw_root, BACKUP_REQUIRED_FILES, BACKUP_OPTIONAL_FILES)
         result = validate_backup(raw_root, expected_schema, exact_schema)
         atomic_write_json(destination / "backup-result.json", backup_to_json(result))
         return result
