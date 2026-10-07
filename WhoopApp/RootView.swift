@@ -110,7 +110,7 @@ struct RootView: View {
             Theme.Palette.canvas.ignoresSafeArea()
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: Theme.Layout.spacing) {
                     DashboardHeader(
                         referenceDate: referenceDate,
                         errorMessage: history.errorMessage,
