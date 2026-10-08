@@ -8,7 +8,7 @@ The central rule is simple: source evidence is immutable, derived data is
 rebuildable, and UI projections never become the only surviving copy of a
 measurement.
 
-The current implementation contract is schema 10 and automatic-only sleep
+The current implementation contract is schema 11 and automatic-only sleep
 publication. There is no manual Process control or loading state: explicit
 awake evidence and a current ambiguous `up` sample finalize immediately, and
 sleep returning within 90 minutes grows the same night and replaces that date's
@@ -811,7 +811,10 @@ explicitly with `CODE_SIGN_STYLE=Manual`, `PROVISIONING_PROFILE_SPECIFIER`, and
 `CODE_SIGN_IDENTITY`. Verify the resulting bundle identifier, version,
 signature, embedded profile, and private-asset hashes before installation.
 
-The store currently targets schema 10. Before any non-empty schema upgrade, it
+The store currently targets schema 11. Its addition is a transactional UTC-day
+revision/count index for incremental Strain reads, not the unrelated offline
+packet-compaction prototype. Initial index construction reads retained history
+once; raw evidence and score models remain unchanged. Before any non-empty schema upgrade, it
 uses SQLite's online backup API to create a WAL-consistent standalone database
 under Application Support's `migration-backups` directory, then runs
 `PRAGMA quick_check`. Migration fails closed if that snapshot cannot be made.

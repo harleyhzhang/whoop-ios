@@ -235,8 +235,9 @@ README. Newer entries are not guaranteed to be appended here; see the Git log.
   managers.
 - Dashboard reads are generation-ordered: an older asynchronous reload cannot
   overwrite a newly processed night, and a transient SQLite read error keeps
-  the last known-good charts visible. The unnecessary full-history reload every
-  minute is gone; automatic processing waits silently for HISTORY_COMPLETE.
+  the last known-good charts visible. Dashboard refreshes are coalesced and visible-only; cached Strain input
+  summaries refresh changed UTC slices. Automatic processing waits silently
+  for HISTORY_COMPLETE.
 - SQLite schema setup, transactions, commits, and query completion are now
   checked instead of silently accepting partial reads or failed writes. Morning
   summaries are deduplicated by local date as well as sleep ID, so a grow-only

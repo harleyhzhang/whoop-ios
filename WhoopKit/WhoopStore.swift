@@ -10,6 +10,7 @@ final class WhoopStore: Sendable, WhoopPacketPersisting {
 
     let sqlite = SQLiteDatabase()
     let dashboardReader = DashboardDatabaseReader()
+    let diagnosticsReader = WhoopDiagnosticsReader()
     let readiness = WhoopStorageReadiness()
     let databaseURLOverride: URL?
     let databaseURL: URL?
@@ -17,7 +18,7 @@ final class WhoopStore: Sendable, WhoopPacketPersisting {
     let targetSchemaVersion: Int
     static let logger = Logger(subsystem: "whoop", category: "WhoopStore")
     static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
-    static let currentSchemaVersion = 10
+    static let currentSchemaVersion = 11
     static let expectedSchemaVersion = currentSchemaVersion
     static let decoderVersion = 3
 

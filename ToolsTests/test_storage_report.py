@@ -329,3 +329,18 @@ def test_collect_phone_copies_only_valid_telemetry_atomically(tmp_path: Path) ->
     )
     assert "process" not in copy_call
     assert "install" not in copy_call
+
+
+def test_report_accepts_schema_eleven_but_keeps_mixed_windows_invalid() -> None:
+    document = telemetry([0, 1, 2, 3])
+    snapshots = document["snapshots"]
+    assert isinstance(snapshots, list)
+    for snapshot in snapshots:
+        assert isinstance(snapshot, dict)
+        snapshot["schemaVersion"] = 11
+    evidence = storage_report.build_report(document)["evidence"]
+    assert isinstance(evidence, dict)
+    assert evidence["schemaVersion"] == 11
+    snapshots[0]["schemaVersion"] = 10
+    with pytest.raises(storage_report.ReportError, match="one supported schema"):
+        storage_report.build_report(document)

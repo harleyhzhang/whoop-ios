@@ -50,7 +50,7 @@ every miss runs the complete gate. Install the hook with
   `SQLITE_BUSY`/`SQLITE_FULL`/`SQLITE_IOERR` failures, corrupt-database
   fail-closed behavior, bounded retry/backpressure, independent reads during a
   blocked writer, and a deterministic malformed-frame mutation corpus.
-- `WhoopUITests`: critical dashboard behavior and diagnostic navigation under
+- `WhoopUITests`: critical dashboard presentation and interactions under
   explicit mock launch environment values.
 - `ToolsTests`: Python feature construction, build-gate, model-promotion, and
   private-seed projection logic.
@@ -85,3 +85,9 @@ schedule trigger. Keep every third-party action pinned to a full commit SHA.
 Dependency updates are monthly and grouped to avoid noisy workflow churn.
 Runner maintenance and security invariants are documented in
 [self-hosted runner operations](self-hosted-runner.md).
+
+The fast loop verifies the executed result bundle against every explicit
+`-only-testing:` selection. A file name is not necessarily its XCTest class name;
+an unmatched class/method fails even if other selected tests pass. Failed fast
+runs retain their result bundle at the printed path. Sanitizers use the same
+pinned simulator runtime as the fast and full gates.

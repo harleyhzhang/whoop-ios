@@ -42,9 +42,8 @@ final class WhoopCollector: NSObject {
     @ObservationIgnored private var historicalRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var historicalWatchdogTask: Task<Void, Never>?
     @ObservationIgnored private var handshakeTask: Task<Void, Never>?
-    @ObservationIgnored private var connectionRetryTask: Task<Void, Never>?
+    @ObservationIgnored private let connectionRecovery = WhoopConnectionRecovery()
     @ObservationIgnored private var backgroundDrainTask = UIBackgroundTaskIdentifier.invalid
-    @ObservationIgnored private var reconnectAttempt = 0
     @ObservationIgnored private var historicalSync = WhoopHistoricalSyncState()
     @ObservationIgnored private var lastAcknowledgedHistoricalEndData: [UInt8]?
     @ObservationIgnored private var lastHistoricalAcknowledgementAt: Date?
@@ -107,10 +106,11 @@ final class WhoopCollector: NSObject {
         historicalRefreshTask?.cancel()
         historicalWatchdogTask?.cancel()
         handshakeTask?.cancel()
-        connectionRetryTask?.cancel()
     }
 
     func prepareForBackground() {
+        connectionRecovery.submitPending()
+        WhoopRuntimeDiagnostics.shared.recordEvent("background")
         guard backgroundDrainTask == .invalid else { return }
         backgroundDrainTask = UIApplication.shared.beginBackgroundTask(
             withName: "Persist pending WHOOP packets"
@@ -178,6 +178,7 @@ final class WhoopCollector: NSObject {
                     record.sleepID != self.lastFinalizedSleepID
                 {
                     self.lastFinalizedSleepID = record.sleepID
+                    WhoopRuntimeDiagnostics.shared.recordEvent("sleep published")
                     WhoopNotificationManager.shared.sendMorningSummary(for: record)
                     WhoopHealthHistoryEvents.post(.dayPublished(record))
                     self.replicaScheduler?.requestSync(reason: .sleepPublished)
@@ -333,9 +334,7 @@ final class WhoopCollector: NSObject {
             return
         }
         central.stopScan()
-        connectionRetryTask?.cancel()
-        connectionRetryTask = nil
-        reconnectAttempt = 0
+        connectionRecovery.reset()
         if let peripheral, peripheral.state != .disconnected {
             central.cancelPeripheralConnection(peripheral)
         }
@@ -442,26 +441,13 @@ final class WhoopCollector: NSObject {
     }
 
     private func scheduleReconnect(_ candidate: CBPeripheral, reason: String) {
-        guard central.state == .poweredOn else { return }
-        connectionRetryTask?.cancel()
-        let attempt = reconnectAttempt
-        reconnectAttempt += 1
-        let delay = WhoopReconnectPolicy.delaySeconds(forAttempt: attempt)
-        let expectedSession = connectionSession.token()
-        record("Scheduling reconnect attempt \(attempt + 1) in \(Int(delay)) seconds after \(reason)")
-        connectionRetryTask = Task { @MainActor [weak self, weak candidate] in
-            try? await Task.sleep(for: .seconds(delay))
-            guard !Task.isCancelled,
-                let self,
-                let candidate,
-                let expectedSession,
-                self.connectionSession.accepts(expectedSession),
-                self.central.state == .poweredOn,
-                self.peripheral?.identifier == candidate.identifier,
-                candidate.state == .disconnected
+        guard central.state == .poweredOn, let token = connectionSession.token() else { return }
+        record("Requesting reconnect after \(reason)")
+        connectionRecovery.schedule(afterFailure: reason == "connection failure") { [weak self, weak candidate] in
+            guard let self, let candidate,
+                self.connectionSession.accepts(token), self.central.state == .poweredOn,
+                self.peripheral?.identifier == candidate.identifier, candidate.state == .disconnected
             else { return }
-            self.connectionRetryTask = nil
-            self.record("Starting reconnect attempt \(attempt + 1)")
             self.central.connect(candidate)
         }
     }
@@ -673,14 +659,25 @@ final class WhoopCollector: NSObject {
         }
     }
 
+    private func resumeConnection() {
+        let state = WhoopConnectionResumePolicy.State(peripheral?.state)
+        switch WhoopConnectionResumePolicy.action(for: state, hasServices: commandCharacteristic != nil) {
+        case .scan: startScan()
+        case .connect:
+            if let peripheral { central.connect(peripheral) }
+        case .discover:
+            peripheral?.discoverServices([whoop5Service, heartRateService, batteryService])
+        case .wait: break
+        }
+    }
+
     private func applyState(_ state: CBManagerState) {
         switch state {
         case .poweredOn:
             record("Bluetooth powered on")
-            startScan()
+            resumeConnection()
         case .poweredOff:
-            connectionRetryTask?.cancel()
-            connectionRetryTask = nil
+            connectionRecovery.reset()
             record("Bluetooth powered off")
         case .unauthorized:
             record("Bluetooth permission denied")
@@ -713,12 +710,10 @@ extension WhoopCollector: @preconcurrency CBCentralManagerDelegate {
         restored.delegate = self
         deviceName = restored.name ?? "WHOOP"
         UserDefaults.standard.set(restored.identifier.uuidString, forKey: knownPeripheralKey)
+        WhoopRuntimeDiagnostics.shared.recordEvent("bluetooth restored")
         record("CoreBluetooth restored WHOOP [\(restored.identifier.uuidString)] in state \(restored.state.rawValue)")
-        if restored.state == .connected {
-            restored.discoverServices([whoop5Service, heartRateService, batteryService])
-        } else {
-            central.connect(restored)
-        }
+        // The powered-on callback resumes this adopted peripheral. Starting a
+        // new scan there would cancel the connection Core Bluetooth restored.
     }
 
     // swift-format-ignore: AlwaysUseLowerCamelCase
@@ -749,11 +744,10 @@ extension WhoopCollector: @preconcurrency CBCentralManagerDelegate {
             record("Ignoring connect callback from a superseded peripheral")
             return
         }
-        connectionRetryTask?.cancel()
-        connectionRetryTask = nil
-        reconnectAttempt = 0
+        connectionRecovery.reset()
         resetConnectionSession()
         lastConnectedAt = .now
+        WhoopRuntimeDiagnostics.shared.recordEvent("bluetooth connected")
         record("Connected; discovering WHOOP 5 and Heart Rate services")
         peripheral.discoverServices([whoop5Service, heartRateService, batteryService])
     }
@@ -781,6 +775,7 @@ extension WhoopCollector: @preconcurrency CBCentralManagerDelegate {
                 ? "Disconnected with CLIENT_HELLO outstanding: \(detail)"
                 : "Disconnected: \(detail)")
         resetConnectionSession()
+        WhoopRuntimeDiagnostics.shared.recordEvent("bluetooth disconnected")
         scheduleReconnect(peripheral, reason: "disconnect")
     }
 }

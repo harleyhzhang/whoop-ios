@@ -4,6 +4,34 @@ import XCTest
 @testable import Whoop
 
 final class WhoopReliabilityTests: XCTestCase {
+    @MainActor
+    func testReconnectSubmissionSurvivesBackgroundingAndCancellation() {
+        let recovery = WhoopConnectionRecovery()
+        var requests = 0
+        recovery.schedule(afterFailure: false) { requests += 1 }
+        XCTAssertEqual(requests, 1, "Disconnects submit system work immediately")
+        recovery.schedule(afterFailure: true) { requests += 1 }
+        XCTAssertEqual(requests, 1, "Failed connections back off")
+        recovery.submitPending()
+        XCTAssertEqual(requests, 2, "Backgrounding submits before suspension")
+        recovery.submitPending()
+        XCTAssertEqual(requests, 2, "Submission is exactly once")
+        recovery.schedule(afterFailure: true) { requests += 1 }
+        recovery.reset()
+        recovery.submitPending()
+        XCTAssertEqual(requests, 2, "An obsolete retry cannot reconnect")
+    }
+
+    func testRestorationPreservesPendingAndEstablishedConnections() {
+        typealias Policy = WhoopConnectionResumePolicy
+        XCTAssertEqual(Policy.action(for: .absent, hasServices: false), .scan)
+        XCTAssertEqual(Policy.action(for: .disconnected, hasServices: false), .connect)
+        XCTAssertEqual(Policy.action(for: .connecting, hasServices: false), .wait)
+        XCTAssertEqual(Policy.action(for: .disconnecting, hasServices: false), .wait)
+        XCTAssertEqual(Policy.action(for: .connected, hasServices: false), .discover)
+        XCTAssertEqual(Policy.action(for: .connected, hasServices: true), .wait)
+    }
+
     func testConnectionSessionRejectsSupersededTokensAndPeripherals() throws {
         let firstID = UUID()
         let secondID = UUID()

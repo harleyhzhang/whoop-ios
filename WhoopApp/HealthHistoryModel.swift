@@ -8,11 +8,18 @@ final class HealthHistoryModel {
     private(set) var errorMessage: String?
 
     @ObservationIgnored
-    private let store: WhoopStore
+    private let load: (@escaping @Sendable (Result<DashboardHistorySnapshot, Error>) -> Void) -> Void
     @ObservationIgnored
     private var reloadGeneration = 0
-    init(store: WhoopStore = .shared) {
-        self.store = store
+    @ObservationIgnored
+    private var reloadInFlight = false
+
+    init(
+        load: @escaping (@escaping @Sendable (Result<DashboardHistorySnapshot, Error>) -> Void) -> Void = {
+            WhoopStore.shared.loadDashboardHistory(completion: $0)
+        }
+    ) {
+        self.load = load
         reload()
     }
 
@@ -45,11 +52,21 @@ final class HealthHistoryModel {
             return
         }
         reloadGeneration += 1
+        guard !reloadInFlight else { return }
+        startReload()
+    }
+
+    private func startReload() {
+        reloadInFlight = true
         let generation = reloadGeneration
-        let store = store
-        store.loadDashboardHistory { [weak self] result in
+        load { [weak self] result in
             Task { @MainActor in
-                guard let self, generation == self.reloadGeneration else { return }
+                guard let self else { return }
+                self.reloadInFlight = false
+                guard generation == self.reloadGeneration else {
+                    self.startReload()
+                    return
+                }
                 switch result {
                 case .success(let snapshot):
                     self.snapshot = snapshot

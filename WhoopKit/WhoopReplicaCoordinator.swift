@@ -62,8 +62,9 @@ final class WhoopReplicaCoordinator: WhoopReplicaScheduling {
     }
 
     func prepareForBackground() {
-        // Keep ownership until the worker has closed SQLite and removed its
-        // partial file. Clearing task here would allow overlapping snapshots.
+        // Keep ownership until the worker has closed SQLite and checkpointed
+        // completed work or removed its partial file. Clearing ownership here
+        // would allow overlapping snapshots.
         task?.cancel()
     }
 
@@ -78,30 +79,18 @@ final class WhoopReplicaCoordinator: WhoopReplicaScheduling {
                 // active visit may retry immediately after cleanup completes.
                 defaults.removeObject(forKey: DefaultsKey.lastAttempt)
             }
-            do {
-                try WhoopReplicaSnapshotter.removeArtifacts(at: snapshotURL)
-            } catch {
-                Self.logger.error(
-                    "Replica plaintext cleanup failed: \(error.localizedDescription, privacy: .public)"
-                )
-            }
         }
         do {
-            let snapshot = try await WhoopReplicaSnapshotter.run {
-                try WhoopReplicaSnapshotter.create(
-                    sourceURL: sourceURL,
-                    destinationURL: snapshotURL
-                )
-            }
-            try Task.checkCancellation()
             let key = try WhoopReplicaCodec.key(from: configuration.encryptionKey)
-            let (manifest, descriptors) = try await WhoopReplicaSnapshotter.run {
-                try WhoopReplicaSnapshotter.describe(
-                    snapshot: snapshot,
-                    key: key,
-                    createdAt: createdAt
-                )
+            let prepared = try await WhoopReplicaSnapshotter.run {
+                try WhoopReplicaCheckpoint.prepare(
+                    sourceURL: sourceURL, snapshotURL: snapshotURL,
+                    key: key, scope: configuration.siteURL.absoluteString + "|" + sourceURL.path,
+                    createdAt: createdAt)
             }
+            let snapshot = prepared.snapshot
+            let manifest = prepared.manifest
+            let descriptors = prepared.descriptors
             try Task.checkCancellation()
             let client = WhoopReplicaClient(
                 siteURL: configuration.siteURL,
@@ -126,8 +115,12 @@ final class WhoopReplicaCoordinator: WhoopReplicaScheduling {
             }
             try Task.checkCancellation()
             try await client.commit(manifest: manifest)
-            try WhoopReplicaSnapshotter.removeArtifacts(at: snapshotURL)
-            defaults.set(now(), forKey: DefaultsKey.lastSuccess)
+            try WhoopReplicaCheckpoint.remove(at: snapshotURL)
+            // A resumed snapshot may be old. Do not claim newer backup coverage
+            // or defer the next fresh snapshot by six hours from this upload.
+            defaults.set(
+                Date(timeIntervalSince1970: Double(manifest.createdAt) / 1_000),
+                forKey: DefaultsKey.lastSuccess)
             Self.logger.info(
                 "Encrypted phone replica committed: \(manifest.sourceFingerprint.prefix(12), privacy: .public)"
             )

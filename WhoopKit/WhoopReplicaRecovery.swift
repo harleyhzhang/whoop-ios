@@ -75,6 +75,7 @@ enum WhoopReplicaRecovery {
         }
         defer { sqlite3_close(database) }
         return scalarInt(database, sql: "PRAGMA user_version") == expectedSchema
+            && (expectedSchema < 11 || WhoopStrainInputIndex.isInstalled(in: database))
             && scalarText(database, sql: "PRAGMA quick_check") == "ok"
             && rowCount(database, sql: "PRAGMA foreign_key_check") == 0
     }

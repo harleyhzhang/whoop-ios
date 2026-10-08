@@ -73,7 +73,7 @@ struct WhoopSleepDiagnostics: Codable, Sendable {
     let observedCadenceSeconds: Double?
     let largestGapSeconds: Int?
     let sleepStateHistogram: [String: Int]
-    let rawType47PacketTotal: Int
+    let rawType47PacketTotal: Int?
     let historicalSampleTotal: Int
     let recentType47Outcomes: [String: Int]
     let sessions: [WhoopSleepSessionDiagnostics]

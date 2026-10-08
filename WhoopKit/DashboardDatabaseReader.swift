@@ -8,7 +8,7 @@ final class DashboardDatabaseReader: @unchecked Sendable {
         label: "whoop.whoop-dashboard-reader",
         qos: .userInitiated
     )
-    private let repository = DashboardRepository()
+    private var repository = DashboardRepository()
     private var connection: OpaquePointer?
     private var openURL: URL?
 
@@ -86,6 +86,7 @@ final class DashboardDatabaseReader: @unchecked Sendable {
         if let connection { sqlite3_close_v2(connection) }
         connection = nil
         openURL = nil
+        repository = DashboardRepository()
 
         var candidate: OpaquePointer?
         let result = sqlite3_open_v2(

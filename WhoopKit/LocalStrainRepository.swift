@@ -29,7 +29,7 @@ struct WhoopStrainModel: Codable, Sendable {
 /// Read-only scoring on the dashboard reader queue. Derivations return to the
 /// single store writer for persistence in the existing metadata table, retaining
 /// provenance without adding a schema or touching official targets/raw samples.
-struct LocalStrainRepository {
+final class LocalStrainRepository {
     struct Result {
         let records: [DailyStrainRecord]
         let derivations: [String: String]
@@ -38,15 +38,19 @@ struct LocalStrainRepository {
         let signature: String
         let estimate: StrainEstimate
     }
-    private struct InputDay {
+    private struct InputDay: Codable {
         let day: String
-        let count: Int64
-        let latestID: Int64
-        let firstOffset: Int
-        let lastOffset: Int
-        let latestSample: Double
-        let contentSignature: String
+        var firstOffset: Int
+        var lastOffset: Int
+        var latestSample: Double
     }
+    private struct InputSlice: Codable {
+        let revision: Int64
+        let days: [InputDay]
+    }
+    // Confined to the dashboard reader's serial queue, just like its connection.
+    private var slices: [Int: InputSlice] = [:]
+    private var cachedPeripheral: String?
 
     func load(
         database: OpaquePointer, health: [DailyHealthRecord],
@@ -66,35 +70,74 @@ struct LocalStrainRepository {
         }
         guard let model else { return Result(records: sorted(records), derivations: [:]) }
         var peripheral: String?
-        try query(database, "SELECT peripheral_id FROM whoop_historical_sample ORDER BY sample_at DESC LIMIT 1") {
-            row in
+        try query(database, WhoopStrainInputIndex.latestPeripheralQuery) { row in
             peripheral = text(row, 0)
         }
         guard let peripheral else { return Result(records: sorted(records), derivations: [:]) }
-        var inputDays: [InputDay] = []
+        if cachedPeripheral != peripheral {
+            slices.removeAll()
+            cachedPeripheral = peripheral
+        }
+        var revisions: [Int: Int64] = [:]
         try query(
             database,
-            """
-            SELECT strftime('%Y-%m-%d', sample_at + step_utc_offset_seconds, 'unixepoch'),
-                   COUNT(*), MAX(id), MIN(step_utc_offset_seconds), MAX(step_utc_offset_seconds), MAX(sample_at),
-                   TOTAL(1.0 * id * heart_rate), TOTAL(1.0 * id * step_motion_counter), TOTAL(1.0 * id * sleep_state)
-            FROM whoop_historical_sample WHERE peripheral_id = ? AND step_utc_offset_seconds IS NOT NULL
-            GROUP BY 1 ORDER BY 1
-            """, strings: [peripheral]
+            "SELECT utc_day, revision FROM whoop_strain_input_revision WHERE peripheral_id = ?",
+            strings: [peripheral]
         ) { row in
-            guard let day = text(row, 0) else { return }
-            inputDays.append(
-                InputDay(
-                    day: day, count: sqlite3_column_int64(row, 1),
-                    latestID: sqlite3_column_int64(row, 2), firstOffset: Int(sqlite3_column_int(row, 3)),
-                    lastOffset: Int(sqlite3_column_int(row, 4)), latestSample: sqlite3_column_double(row, 5),
-                    contentSignature:
-                        "\(sqlite3_column_double(row, 6))|\(sqlite3_column_double(row, 7))|\(sqlite3_column_double(row, 8))"
-                ))
+            revisions[Int(sqlite3_column_int64(row, 0))] = sqlite3_column_int64(row, 1)
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         var derivations: [String: String] = [:]
+        slices = slices.filter { revisions[$0.key] != nil }
+        for (utcDay, revision) in revisions where slices[utcDay]?.revision != revision {
+            let cacheKey = "local-strain-input.v1.\(peripheral).\(utcDay)"
+            var storedSlice: InputSlice?
+            try query(database, "SELECT value FROM whoop_store_metadata WHERE key = ?", strings: [cacheKey]) { row in
+                if let value = text(row, 0) {
+                    storedSlice = try? JSONDecoder().decode(InputSlice.self, from: Data(value.utf8))
+                }
+            }
+            if let storedSlice, storedSlice.revision == revision {
+                slices[utcDay] = storedSlice
+                continue
+            }
+            var days: [InputDay] = []
+            try query(
+                database,
+                """
+                SELECT strftime('%Y-%m-%d', sample_at + step_utc_offset_seconds, 'unixepoch'),
+                       MIN(step_utc_offset_seconds), MAX(step_utc_offset_seconds), MAX(sample_at)
+                FROM whoop_historical_sample
+                WHERE peripheral_id = ? AND sample_at >= ? AND sample_at < ?
+                  AND step_utc_offset_seconds IS NOT NULL
+                GROUP BY 1
+                """, strings: [peripheral], numbers: [Double(utcDay * 86400), Double((utcDay + 1) * 86400)]
+            ) { row in
+                guard let day = text(row, 0) else { return }
+                days.append(
+                    InputDay(
+                        day: day, firstOffset: Int(sqlite3_column_int(row, 1)),
+                        lastOffset: Int(sqlite3_column_int(row, 2)), latestSample: sqlite3_column_double(row, 3)))
+            }
+            let slice = InputSlice(revision: revision, days: days)
+            slices[utcDay] = slice
+            derivations[cacheKey] = String(decoding: try encoder.encode(slice), as: UTF8.self)
+        }
+        var inputDays: [String: InputDay] = [:]
+        for slice in slices.values {
+            for day in slice.days {
+                if var previous = inputDays[day.day] {
+                    previous.firstOffset = min(previous.firstOffset, day.firstOffset)
+                    previous.lastOffset = max(previous.lastOffset, day.lastOffset)
+                    previous.latestSample = max(previous.latestSample, day.latestSample)
+                    inputDays[day.day] = previous
+                } else {
+                    inputDays[day.day] = day
+                }
+            }
+        }
+
         let modelKey = "local-strain.model.\(model.calibration.version)"
         let modelJSON = String(decoding: try encoder.encode(model), as: UTF8.self)
         var storedModel: String?
@@ -102,7 +145,7 @@ struct LocalStrainRepository {
             storedModel = text(row, 0)
         }
         if storedModel != modelJSON { derivations[modelKey] = modelJSON }
-        for day in inputDays where records[day.day] == nil {
+        for day in inputDays.values where records[day.day] == nil {
             // Travel/DST dates with conflicting recorded offsets stay unknown.
             // Never silently assign samples to the wrong civil day.
             guard day.firstOffset == day.lastOffset,
@@ -120,8 +163,13 @@ struct LocalStrainRepository {
             }
             let end = min(tomorrow.timeIntervalSince1970, floor(now.timeIntervalSince1970 / 60) * 60)
             guard end > start, day.latestSample >= start else { continue }
+            // Absolute-day revisions cover every row read below, even unknown
+            // offsets and a correction that moves a sample across civil days.
+            let firstUTC = Int(floor(start / 86400))
+            let lastUTC = Int(floor((tomorrow.timeIntervalSince1970 - 1) / 86400))
+            let inputRevision = (firstUTC...lastUTC).map { "\($0):\(revisions[$0] ?? 0)" }.joined(separator: ",")
             let signature =
-                "\(StrainAccumulator.version)|\(model.calibration.version)|\(model.maximumHeartRate)|\(rhr)|\(peripheral)|\(day.count)|\(day.latestID)|\(day.latestSample)|\(day.contentSignature)|\(start)|\(end)"
+                "utc-revision-v1|\(StrainAccumulator.version)|\(modelJSON)|\(rhr)|\(peripheral)|\(inputRevision)|\(start)|\(end)"
             let key = "local-strain.\(day.day).\(peripheral).\(model.calibration.version)"
             var cached: CachedDay?
             try query(database, "SELECT value FROM whoop_store_metadata WHERE key = ?", strings: [key]) { row in

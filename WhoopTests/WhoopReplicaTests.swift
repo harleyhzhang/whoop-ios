@@ -6,6 +6,65 @@ import XCTest
 @testable import Whoop
 
 final class WhoopReplicaTests: XCTestCase {
+    func testRecoveryRejectsSchemaElevenWithoutProductionRevisionIndex() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pending = directory.appendingPathComponent("replica-restore.sqlite3")
+        try makeDatabase(at: pending, value: "not a production schema")
+        var handle: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(pending.path, &handle), SQLITE_OK)
+        let database = try XCTUnwrap(handle)
+        XCTAssertEqual(sqlite3_exec(database, "PRAGMA user_version=11", nil, nil, nil), SQLITE_OK)
+        sqlite3_close(database)
+        XCTAssertThrowsError(try WhoopReplicaRecovery.applyPending(in: directory, expectedSchema: 11))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: pending.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("sleep.sqlite3").path))
+    }
+
+    func testCheckpointResumesOriginalSnapshotAndRejectsDifferentScopeOrKey() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("source.sqlite3")
+        let destination = directory.appendingPathComponent("upload.sqlite3")
+        try makeDatabase(at: source, value: "original")
+        let key = SymmetricKey(data: Data(repeating: 1, count: 32))
+        let first = try WhoopReplicaCheckpoint.prepare(
+            sourceURL: source, snapshotURL: destination,
+            key: key, scope: "first", createdAt: Date(timeIntervalSince1970: 1000))
+        var handle: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(source.path, &handle), SQLITE_OK)
+        let writer = try XCTUnwrap(handle)
+        XCTAssertEqual(sqlite3_exec(writer, "UPDATE sample SET value='newer'", nil, nil, nil), SQLITE_OK)
+        sqlite3_close(writer)
+        let resumed = try WhoopReplicaCheckpoint.prepare(
+            sourceURL: source, snapshotURL: destination,
+            key: key, scope: "first", createdAt: Date(timeIntervalSince1970: 2000))
+        XCTAssertEqual(resumed.manifest.sourceFingerprint, first.manifest.sourceFingerprint)
+        XCTAssertEqual(resumed.manifest.createdAt, first.manifest.createdAt)
+        XCTAssertEqual(try storedValue(at: destination), "original")
+        let changedScope = try WhoopReplicaCheckpoint.prepare(
+            sourceURL: source, snapshotURL: destination,
+            key: key, scope: "second", createdAt: Date(timeIntervalSince1970: 3000))
+        XCTAssertNotEqual(changedScope.manifest.sourceFingerprint, first.manifest.sourceFingerprint)
+        XCTAssertEqual(try storedValue(at: destination), "newer")
+        let changedKey = try WhoopReplicaCheckpoint.prepare(
+            sourceURL: source, snapshotURL: destination,
+            key: SymmetricKey(data: Data(repeating: 2, count: 32)), scope: "second",
+            createdAt: Date(timeIntervalSince1970: 4000))
+        XCTAssertEqual(changedKey.manifest.createdAt, 4_000_000)
+        // A truncated local snapshot cannot be reused even with a valid marker.
+        try Data([0]).write(to: destination)
+        let repaired = try WhoopReplicaCheckpoint.prepare(
+            sourceURL: source, snapshotURL: destination,
+            key: key, scope: "second", createdAt: Date(timeIntervalSince1970: 5000))
+        XCTAssertEqual(try storedValue(at: repaired.snapshot.url), "newer")
+        try WhoopReplicaCheckpoint.remove(at: destination)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.appendingPathExtension("checkpoint").path))
+    }
+
     @MainActor
     func testBackgroundRequestDoesNotBeginOrConsumeRetryWindow() throws {
         let name = "WhoopReplicaTests.\(UUID().uuidString)"

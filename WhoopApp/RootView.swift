@@ -65,7 +65,8 @@ struct RootView: View {
             dashboard(currentDate: context.date)
         }
         .preferredColorScheme(.dark)
-        .task {
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(60))
                 guard !Task.isCancelled else { return }
@@ -81,6 +82,7 @@ struct RootView: View {
                 }
                 return
             }
+            WhoopRuntimeDiagnostics.shared.recordEvent("foreground")
             history.reload()
             whoopCollector.refreshHistoricalData()
             powerPackMonitor.refresh()

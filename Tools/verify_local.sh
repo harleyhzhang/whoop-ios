@@ -108,6 +108,8 @@ xcodebuild test -quiet \
   -enableCodeCoverage YES \
   CODE_SIGNING_ALLOWED=NO
 
+uv run --frozen python Tools/check_test_results.py "$result_bundle_path"
+
 test_summary="$(xcrun xcresulttool get test-results summary --path "$result_bundle_path")"
 passed_tests="$(jq -r '.passedTests // 0' <<<"$test_summary")"
 failed_tests="$(jq -r '.failedTests // 0' <<<"$test_summary")"

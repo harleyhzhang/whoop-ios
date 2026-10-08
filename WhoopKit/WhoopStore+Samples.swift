@@ -280,14 +280,17 @@ extension WhoopStore {
     /// The 48-hour window every sleep decision is made from.
     func recentHistoricalRows(now: Date) -> [HistoricalRow] {
         guard let database else { return [] }
+        return Self.recentHistoricalRows(database: database, now: now)
+    }
+
+    static func recentHistoricalRows(database: OpaquePointer, now: Date) -> [HistoricalRow] {
         let cutoff = now.addingTimeInterval(-48 * 60 * 60).timeIntervalSince1970
         let sql = """
             SELECT sample_at, heart_rate, sleep_state
             FROM whoop_historical_sample
             WHERE sample_at >= ?
               AND peripheral_id = (
-                  SELECT peripheral_id FROM whoop_historical_sample
-                  ORDER BY sample_at DESC LIMIT 1
+                  \(WhoopStrainInputIndex.latestPeripheralQuery)
               )
             ORDER BY sample_at ASC
             """

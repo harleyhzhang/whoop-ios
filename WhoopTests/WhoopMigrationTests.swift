@@ -5,7 +5,7 @@ import XCTest
 
 extension WhoopSleepStateTests {
     func testEverySupportedUserVersionReachesCurrentSchemaIdempotently() throws {
-        for sourceVersion in 1...9 {
+        for sourceVersion in 1..<WhoopStore.currentSchemaVersion {
             let directory = FileManager.default.temporaryDirectory
                 .appendingPathComponent(UUID().uuidString, isDirectory: true)
             let url = directory.appendingPathComponent("sleep.sqlite3")
@@ -31,7 +31,7 @@ extension WhoopSleepStateTests {
                 sqlite3_open_v2(url.path, &checked, SQLITE_OPEN_READONLY, nil),
                 SQLITE_OK
             )
-            XCTAssertEqual(scalarInt(checked, sql: "PRAGMA user_version"), 10)
+            XCTAssertEqual(scalarInt(checked, sql: "PRAGMA user_version"), Int64(WhoopStore.currentSchemaVersion))
             XCTAssertEqual(scalarText(checked, sql: "PRAGMA quick_check"), "ok")
             if let checked { sqlite3_close(checked) }
         }
@@ -55,7 +55,7 @@ extension WhoopSleepStateTests {
         var database: OpaquePointer?
         XCTAssertEqual(sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READONLY, nil), SQLITE_OK)
         defer { if let database { sqlite3_close(database) } }
-        XCTAssertEqual(scalarInt(database, sql: "PRAGMA user_version"), 10)
+        XCTAssertEqual(scalarInt(database, sql: "PRAGMA user_version"), Int64(WhoopStore.currentSchemaVersion))
         XCTAssertEqual(
             scalarInt(
                 database,
@@ -181,7 +181,9 @@ extension WhoopSleepStateTests {
         XCTAssertFalse(FileManager.default.fileExists(atPath: temporary.path + "-shm"))
         XCTAssertTrue(
             FileManager.default.fileExists(
-                atPath: backupDirectory.appendingPathComponent("sleep-v7-before-v10.sqlite3").path
+                atPath: backupDirectory.appendingPathComponent(
+                    "sleep-v7-before-v\(WhoopStore.currentSchemaVersion).sqlite3"
+                ).path
             ))
     }
 
@@ -192,7 +194,7 @@ extension WhoopSleepStateTests {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         do {
-            let store = WhoopStore(databaseURL: databaseURL, runBackgroundDecoding: false)
+            let store = WhoopStore(databaseURL: databaseURL, runBackgroundDecoding: false, targetSchemaVersion: 10)
             store.shutdownForTesting()
         }
 
@@ -287,7 +289,7 @@ extension WhoopSleepStateTests {
         var migrated: OpaquePointer?
         XCTAssertEqual(sqlite3_open_v2(databaseURL.path, &migrated, SQLITE_OPEN_READONLY, nil), SQLITE_OK)
         defer { if let migrated { sqlite3_close(migrated) } }
-        XCTAssertEqual(scalarInt(migrated, sql: "PRAGMA user_version"), 10)
+        XCTAssertEqual(scalarInt(migrated, sql: "PRAGMA user_version"), Int64(WhoopStore.currentSchemaVersion))
         XCTAssertGreaterThan(scalarInt(migrated, sql: "PRAGMA freelist_count"), 0)
         XCTAssertEqual(scalarInt(migrated, sql: "SELECT COUNT(*) FROM heart_rate_sample"), 1)
         XCTAssertEqual(
@@ -317,7 +319,7 @@ extension WhoopSleepStateTests {
         XCTAssertTrue(
             FileManager.default.fileExists(
                 atPath: directory.appendingPathComponent(
-                    "migration-backups/sleep-v9-before-v10.sqlite3"
+                    "migration-backups/sleep-v9-before-v\(WhoopStore.currentSchemaVersion).sqlite3"
                 ).path
             ))
     }

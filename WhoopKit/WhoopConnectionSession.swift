@@ -73,3 +73,18 @@ struct WhoopConnectionSession: Equatable, Sendable {
         generation == token.generation && peripheralID == token.peripheralID
     }
 }
+
+/// Shared by restoration and powered-on callbacks. A pending connection belongs
+/// to Core Bluetooth; duplicate state callbacks must not tear it down.
+enum WhoopConnectionResumePolicy {
+    enum State { case absent, disconnected, connecting, connected, disconnecting }
+    enum Action: Equatable { case scan, connect, discover, wait }
+    static func action(for state: State, hasServices: Bool) -> Action {
+        switch state {
+        case .absent: .scan
+        case .disconnected: .connect
+        case .connected: hasServices ? .wait : .discover
+        case .connecting, .disconnecting: .wait
+        }
+    }
+}
