@@ -6,6 +6,12 @@ tiers live in the [migration runbook](whoop-data-migration.md#10-build-sign-inst
 
 Set `WHOOP_DATA_ROOT` to your private data directory before running these tools.
 
+The optional in-app cloud replica runs while the app is active. Keep the app
+open long enough for a full replica when fresh offsite coverage is needed.
+Backgrounding cancels that attempt without changing local data or the last
+committed replica; a later active visit can retry. Strap collection and sleep
+publication remain background operations and do not depend on cloud backup.
+
 ## Physical-phone shipping
 
 From a clean worktree at the exact merged `origin/main` commit, run:

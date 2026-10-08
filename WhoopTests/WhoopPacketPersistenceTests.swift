@@ -333,6 +333,43 @@ extension WhoopSleepStateTests {
         XCTAssertEqual(scalarInt(database, sql: "SELECT COUNT(*) FROM heart_rate_sample"), 1)
     }
 
+    func testCompletionLookupSkipsLivePacketsWithoutScanningRetainedHistory() throws {
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(":memory:", &database), SQLITE_OK)
+        let opened = try XCTUnwrap(database)
+        defer { sqlite3_close(opened) }
+        let fixture = """
+            CREATE TABLE whoop_raw_packet(id TEXT PRIMARY KEY, delivery_sequence INTEGER);
+            CREATE INDEX whoop_raw_packet_delivery_sequence ON whoop_raw_packet(delivery_sequence);
+            CREATE TABLE whoop_historical_sample(source_packet_id TEXT NOT NULL UNIQUE);
+            CREATE TABLE whoop_offload_session(status TEXT, completion_sequence INTEGER);
+            WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM numbers WHERE n<20010)
+            INSERT INTO whoop_raw_packet SELECT CAST(n AS TEXT), n FROM numbers;
+            INSERT INTO whoop_historical_sample SELECT id FROM whoop_raw_packet WHERE delivery_sequence<=20000;
+            INSERT INTO whoop_offload_session VALUES ('complete', 20001), ('abandoned', 20020);
+            """
+        XCTAssertEqual(sqlite3_exec(opened, fixture, nil, nil, nil), SQLITE_OK)
+        var statement: OpaquePointer?
+        XCTAssertEqual(
+            sqlite3_prepare_v2(opened, WhoopStore.completedOffloadCoverageQuery, -1, &statement, nil), SQLITE_OK)
+        let prepared = try XCTUnwrap(statement)
+        defer { sqlite3_finalize(prepared) }
+        XCTAssertEqual(sqlite3_step(prepared), SQLITE_ROW)
+        XCTAssertEqual(sqlite3_column_int64(prepared, 0), 20000)
+        XCTAssertEqual(sqlite3_column_int64(prepared, 1), 20001)
+        XCTAssertLessThan(sqlite3_stmt_status(prepared, SQLITE_STMTSTATUS_VM_STEP, 0), 1000)
+        sqlite3_reset(prepared)
+        XCTAssertEqual(
+            sqlite3_exec(opened, "INSERT INTO whoop_historical_sample VALUES ('20010')", nil, nil, nil), SQLITE_OK)
+        XCTAssertEqual(sqlite3_step(prepared), SQLITE_ROW)
+        XCTAssertEqual(sqlite3_column_int64(prepared, 0), 20010)
+        XCTAssertEqual(sqlite3_column_int64(prepared, 1), 20001)
+        sqlite3_reset(prepared)
+        XCTAssertEqual(sqlite3_exec(opened, "DELETE FROM whoop_historical_sample", nil, nil, nil), SQLITE_OK)
+        XCTAssertEqual(sqlite3_step(prepared), SQLITE_ROW)
+        XCTAssertEqual(sqlite3_column_int64(prepared, 0), 0)
+    }
+
     func testOffloadCompletionRequiresDurableCRCValidCompletionAfterHistory() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

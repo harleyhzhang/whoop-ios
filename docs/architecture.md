@@ -79,9 +79,13 @@ runtime decoding ahead of the external private-file replacement boundary.
 - `WhoopRuntimeDiagnostics.swift` records MetricKit payloads locally and exposes
   signposts for storage open, batch commits, and dashboard reads.
 - `WhoopReplicaCoordinator.swift` is the throttled, failure-isolated network
-  orchestrator. `WhoopReplicaSnapshotter.swift` opens a separate SQLite read
+  orchestrator. Replica attempts start only while the app is active and cancel
+  when it enters the background, reserving background execution for collection.
+  Cancellation reaches CPU workers and cleanup finishes before another attempt
+  can begin. `WhoopReplicaSnapshotter.swift` opens a separate SQLite read
   connection and produces a standalone online-backup image without becoming a
-  second writer. `WhoopReplicaModels.swift` owns the keyed chunk identity,
+  second writer. Bounded backup steps share one WAL read transaction; hashing
+  and integrity checks also observe cancellation. `WhoopReplicaModels.swift` owns the keyed chunk identity,
   compression, encryption, and schedule policy; `WhoopReplicaClient.swift`
   owns the narrow write-only HTTP boundary. Convex receives only AES-GCM
   ciphertext, keyed identifiers, sizes, and schema metadata.

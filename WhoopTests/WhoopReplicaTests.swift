@@ -6,6 +6,111 @@ import XCTest
 @testable import Whoop
 
 final class WhoopReplicaTests: XCTestCase {
+    @MainActor
+    func testBackgroundRequestDoesNotBeginOrConsumeRetryWindow() throws {
+        let name = "WhoopReplicaTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let coordinator = WhoopReplicaCoordinator(
+            configuration: WhoopReplicaConfiguration(
+                siteURL: try XCTUnwrap(URL(string: "https://example.invalid")),
+                uploadToken: "synthetic", encryptionKey: Data(repeating: 0, count: 32)
+            ),
+            sourceURL: URL(fileURLWithPath: "/synthetic.sqlite3"),
+            defaults: defaults,
+            isForeground: { false }
+        )
+        coordinator.requestSync(reason: .dataChanged)
+        coordinator.requestSync(reason: .sleepPublished)
+        XCTAssertNil(defaults.object(forKey: "WhoopReplica.lastAttempt"))
+    }
+
+    func testCancellationReachesDetachedWorkerAndWaitsForItsCleanup() async throws {
+        let started = expectation(description: "worker started")
+        let cleanedUp = expectation(description: "worker unwound")
+        let task = Task {
+            try await WhoopReplicaSnapshotter.run {
+                defer { cleanedUp.fulfill() }
+                started.fulfill()
+                let deadline = Date().addingTimeInterval(2)
+                while !Task<Never, Never>.isCancelled, Date() < deadline {
+                    Thread.sleep(forTimeInterval: 0.001)
+                }
+                try Task.checkCancellation()
+            }
+        }
+        await fulfillment(of: [started], timeout: 2)
+        task.cancel()
+        do {
+            try await task.value
+            XCTFail("Cancelled work must not return success")
+        } catch is CancellationError {
+            await fulfillment(of: [cleanedUp], timeout: 1)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    func testCancelledPagedBackupRemovesPartialAndPreservesSource() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("source.sqlite3")
+        let destination = directory.appendingPathComponent("partial.sqlite3")
+        try makeDatabase(at: source, value: "original")
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(source.path, &database), SQLITE_OK)
+        let opened = try XCTUnwrap(database)
+        XCTAssertEqual(
+            sqlite3_exec(
+                opened, "CREATE TABLE padding(data BLOB); INSERT INTO padding VALUES (zeroblob(1048576))",
+                nil, nil, nil), SQLITE_OK)
+        sqlite3_close(opened)
+        var checks = 0
+        XCTAssertThrowsError(
+            try WhoopReplicaSnapshotter.create(sourceURL: source, destinationURL: destination) {
+                checks += 1
+                if checks == 3 { throw CancellationError() }
+            }
+        ) { XCTAssertTrue($0 is CancellationError) }
+        XCTAssertEqual(checks, 3)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertEqual(try storedValue(at: source), "original")
+        // Cancellation also releases the SQLite backup/connection so retry works.
+        let retry = try WhoopReplicaSnapshotter.create(sourceURL: source, destinationURL: destination)
+        XCTAssertEqual(retry.schemaVersion, 10)
+        XCTAssertEqual(try storedValue(at: destination), "original")
+    }
+
+    func testPagedBackupKeepsOneSnapshotDuringConcurrentWrites() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("source.sqlite3")
+        let destination = directory.appendingPathComponent("snapshot.sqlite3")
+        try makeDatabase(at: source, value: "original")
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(source.path, &database), SQLITE_OK)
+        let writer = try XCTUnwrap(database)
+        defer { sqlite3_close(writer) }
+        XCTAssertEqual(sqlite3_exec(writer, "PRAGMA journal_mode=WAL", nil, nil, nil), SQLITE_OK)
+        XCTAssertEqual(
+            sqlite3_exec(
+                writer, "CREATE TABLE padding(data BLOB); INSERT INTO padding VALUES (zeroblob(1048576))",
+                nil, nil, nil), SQLITE_OK)
+        var checks = 0
+        _ = try WhoopReplicaSnapshotter.create(sourceURL: source, destinationURL: destination) {
+            checks += 1
+            if checks == 3 {
+                XCTAssertEqual(
+                    sqlite3_exec(writer, "UPDATE sample SET value='newer'", nil, nil, nil), SQLITE_OK)
+            }
+        }
+        XCTAssertGreaterThan(checks, 3)
+        XCTAssertEqual(try storedValue(at: destination), "original")
+        XCTAssertEqual(try storedValue(at: source), "newer")
+    }
+
     func testSyncPolicyThrottlesSuccessesAndFailures() {
         let now = Date(timeIntervalSince1970: 2_000_000_000)
 

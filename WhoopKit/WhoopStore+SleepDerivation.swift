@@ -140,18 +140,21 @@ extension WhoopStore {
     /// A completed offload is an explicit, CRC-validated durable session. The
     /// completion sequence must cover every unique historical sample currently
     /// stored; a later partial offload invalidates the proof until it completes.
+    static let completedOffloadCoverageQuery = """
+        SELECT
+            COALESCE((SELECT p.delivery_sequence
+             FROM whoop_raw_packet p
+             WHERE EXISTS (SELECT 1 FROM whoop_historical_sample h WHERE h.source_packet_id = p.id)
+             ORDER BY p.delivery_sequence DESC LIMIT 1), 0),
+            (SELECT MAX(completion_sequence)
+             FROM whoop_offload_session
+             WHERE status = 'complete')
+        """
     func completedOffloadCoversLatestHistory(database: OpaquePointer) -> Bool {
-        let sql = """
-            SELECT
-                (SELECT COALESCE(MAX(p.delivery_sequence), 0)
-                 FROM whoop_historical_sample h
-                 JOIN whoop_raw_packet p ON p.id = h.source_packet_id),
-                (SELECT MAX(completion_sequence)
-                 FROM whoop_offload_session
-                 WHERE status = 'complete')
-            """
+        // Walk the delivery index backward to the newest actual history packet.
+        // MAX over the joined archive scanned every retained sample per offload.
         var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+        guard sqlite3_prepare_v2(database, Self.completedOffloadCoverageQuery, -1, &statement, nil) == SQLITE_OK,
             let statement
         else { return false }
         defer { sqlite3_finalize(statement) }

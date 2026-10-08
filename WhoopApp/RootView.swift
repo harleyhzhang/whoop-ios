@@ -77,6 +77,7 @@ struct RootView: View {
                 WhoopStore.shared.flushStorageTelemetry()
                 if phase == .background {
                     whoopCollector.prepareForBackground()
+                    replicaCoordinator.prepareForBackground()
                 }
                 return
             }
