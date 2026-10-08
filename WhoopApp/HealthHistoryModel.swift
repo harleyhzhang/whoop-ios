@@ -20,7 +20,6 @@ final class HealthHistoryModel {
         }
     ) {
         self.load = load
-        reload()
     }
 
     /// Applies one freshly derived night without waiting for the full reload, so

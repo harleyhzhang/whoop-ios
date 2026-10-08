@@ -85,7 +85,9 @@ final class WhoopReplicaCoordinator: WhoopReplicaScheduling {
             let prepared = try await WhoopReplicaSnapshotter.run {
                 try WhoopReplicaCheckpoint.prepare(
                     sourceURL: sourceURL, snapshotURL: snapshotURL,
-                    key: key, scope: configuration.siteURL.absoluteString + "|" + sourceURL.path,
+                    key: key,
+                    scope: configuration.siteURL.absoluteString + "|" + sourceURL.path
+                        + "|schema=\(WhoopStore.expectedSchemaVersion)",
                     createdAt: createdAt)
             }
             let snapshot = prepared.snapshot

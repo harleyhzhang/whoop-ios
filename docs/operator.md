@@ -12,7 +12,7 @@ whole database. Once prepared, one protected local snapshot and authenticated
 checkpoint survive backgrounding, network failure, and relaunch; later visits
 resume missing chunks instead of repeating preparation. This retains roughly
 one database's worth of extra disk space until commit. A changed encryption key,
-destination, or invalid snapshot discards the checkpoint and rebuilds it.
+destination, schema version, or invalid snapshot discards the checkpoint and rebuilds it.
 Successful commit removes it. Backup freshness uses the snapshot's original
 time, so completing an old upload does not masquerade as current coverage.
 Strap collection and sleep publication do not depend on cloud backup.

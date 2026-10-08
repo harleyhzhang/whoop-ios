@@ -75,6 +75,8 @@ runtime decoding ahead of the external private-file replacement boundary.
   slices. Slice summaries persist alongside estimates, so relaunches also avoid
   rescanning unchanged history. First use builds the summaries once.
   Civil timestamps/offsets define Strain days independently of wake-based Steps.
+  Dashboard reads begin on activation and publication updates refresh only
+  visible UI; a background relaunch does not trigger a view-model read.
   Missing/conflicting evidence stays missing; current-day coverage is elapsed-time
   coverage. Private calibration remains an embedded, hash-checked asset.
 - `WhoopStorageReliability.swift` owns typed SQLite failures, lifecycle states,

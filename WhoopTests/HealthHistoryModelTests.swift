@@ -13,6 +13,7 @@ final class HealthHistoryModelTests: XCTestCase {
             if completions.count == 2 { restarted.fulfill() }
             if completions.count == 3 { third.fulfill() }
         }
+        XCTAssertEqual(completions.count, 0, "Construction during background restoration must not read the dashboard")
         for _ in 0..<20 { model.reload() }
         XCTAssertEqual(completions.count, 1)
         completions[0](.failure(NSError(domain: "obsolete", code: 1)))
