@@ -4,6 +4,59 @@ import XCTest
 @testable import Whoop
 
 final class WhoopBluetoothPolicyTests: XCTestCase {
+    func testLegacyCollectorPreferencesPreserveTrustAcrossRename() throws {
+        let suite = "WhoopBluetoothPolicyTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let identifier = UUID().uuidString
+        let date = Date(timeIntervalSince1970: 1234)
+        let values: [String: Any] = [
+            "knownPeripheralIdentifier": identifier, "confirmedEncryptedBond": true,
+            "cachedHeartRateBPM": 70, "cachedHeartRateDate": date,
+            "cachedBatteryLevel": 42, "cachedBatteryLevelDate": date,
+        ]
+        for (key, value) in values { defaults.set(value, forKey: "WhoopHandshakeProbe." + key) }
+        WhoopCollectorPreferences.migrateLegacyKeys(in: defaults)
+        WhoopCollectorPreferences.migrateLegacyKeys(in: defaults)
+        for key in values.keys {
+            XCTAssertEqual(
+                defaults.object(forKey: "WhoopCollector." + key) as? NSObject,
+                defaults.object(forKey: "WhoopHandshakeProbe." + key) as? NSObject)
+        }
+    }
+
+    func testLegacyMigrationPreservesNewValuesAndExplicitTrustRejection() throws {
+        let suite = "WhoopBluetoothPolicyTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let identifier = UUID().uuidString
+        defaults.set(identifier, forKey: "WhoopHandshakeProbe.knownPeripheralIdentifier")
+        defaults.set(identifier, forKey: "WhoopCollector.knownPeripheralIdentifier")
+        defaults.set(true, forKey: "WhoopHandshakeProbe.confirmedEncryptedBond")
+        defaults.set(false, forKey: "WhoopCollector.confirmedEncryptedBond")
+        defaults.set(80, forKey: "WhoopHandshakeProbe.cachedBatteryLevel")
+        defaults.set(20, forKey: "WhoopCollector.cachedBatteryLevel")
+        WhoopCollectorPreferences.migrateLegacyKeys(in: defaults)
+        XCTAssertFalse(defaults.bool(forKey: "WhoopCollector.confirmedEncryptedBond"))
+        XCTAssertEqual(defaults.integer(forKey: "WhoopCollector.cachedBatteryLevel"), 20)
+    }
+
+    func testLegacyMigrationNeverTransfersTrustToAnotherOrUnknownPeripheral() throws {
+        let suite = "WhoopBluetoothPolicyTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "WhoopHandshakeProbe.confirmedEncryptedBond")
+        WhoopCollectorPreferences.migrateLegacyKeys(in: defaults)
+        XCTAssertNil(defaults.object(forKey: "WhoopCollector.confirmedEncryptedBond"))
+        defaults.set("invalid", forKey: "WhoopHandshakeProbe.knownPeripheralIdentifier")
+        WhoopCollectorPreferences.migrateLegacyKeys(in: defaults)
+        XCTAssertNil(defaults.object(forKey: "WhoopCollector.confirmedEncryptedBond"))
+        defaults.set(UUID().uuidString, forKey: "WhoopHandshakeProbe.knownPeripheralIdentifier")
+        defaults.set(UUID().uuidString, forKey: "WhoopCollector.knownPeripheralIdentifier")
+        WhoopCollectorPreferences.migrateLegacyKeys(in: defaults)
+        XCTAssertNil(defaults.object(forKey: "WhoopCollector.confirmedEncryptedBond"))
+    }
+
     func testHandshakeBehaviorNeverDependsOnDisplayCopy() {
         XCTAssertTrue(HandshakePhase.acknowledged.isAcknowledged)
         XCTAssertFalse(HandshakePhase.ready.isAcknowledged)
