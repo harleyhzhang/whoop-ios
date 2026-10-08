@@ -232,9 +232,9 @@ def _parse_snapshot(value: object, index: int) -> Snapshot:
 
 def _validate_monotonic(snapshots: Sequence[Snapshot]) -> None:
     schema_versions = {snapshot.schema_version for snapshot in snapshots}
-    if schema_versions != {10}:
+    if len(schema_versions) != 1 or not schema_versions <= {10, 11}:
         raise ReportError(
-            f"A schema-10 evidence window cannot contain schema versions {sorted(schema_versions)}."
+            f"An evidence window requires one supported schema (10 or 11), not {sorted(schema_versions)}."
         )
     source_commits = {snapshot.source_commit for snapshot in snapshots}
     if len(source_commits) != 1:

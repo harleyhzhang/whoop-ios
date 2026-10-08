@@ -67,8 +67,16 @@ runtime decoding ahead of the external private-file replacement boundary.
 - `LocalStrainRepository.swift` integrates `StrainEngine.swift` on the read queue,
   prefers official historical targets, and returns versioned cache derivations.
   `WhoopStore` persists those through `StoreMetadataRepository.swift` on its
-  single writer, using existing metadata rather than a schema migration.
+  single writer, using existing metadata for estimates. Schema 11 adds
+  transactional UTC-slice revisions and sample counts. The reader caches civil
+  day summaries per slice, reloads changed slices, and invalidates estimates
+  for every UTC slice intersecting their absolute-time input window. Updates,
+  deletes, unknown offsets and moves between days all invalidate the relevant
+  slices. Slice summaries persist alongside estimates, so relaunches also avoid
+  rescanning unchanged history. First use builds the summaries once.
   Civil timestamps/offsets define Strain days independently of wake-based Steps.
+  Dashboard reads begin on activation and publication updates refresh only
+  visible UI; a background relaunch does not trigger a view-model read.
   Missing/conflicting evidence stays missing; current-day coverage is elapsed-time
   coverage. Private calibration remains an embedded, hash-checked asset.
 - `WhoopStorageReliability.swift` owns typed SQLite failures, lifecycle states,
@@ -77,11 +85,21 @@ runtime decoding ahead of the external private-file replacement boundary.
 - `DashboardDatabaseReader.swift` runs repository snapshots through a separate
   read-only WAL connection so projection maintenance cannot stall the dashboard.
 - `WhoopRuntimeDiagnostics.swift` records MetricKit payloads locally and exposes
-  signposts for storage open, batch commits, and dashboard reads.
+  signposts for storage open, batch commits, and dashboard reads. A bounded local
+  lifecycle timeline records connection and publication transitions.
+  Diagnostics use their own read-only WAL connection and reuse persisted
+  results rather than rerunning HRV/sleep derivation on the ingestion writer.
 - `WhoopReplicaCoordinator.swift` is the throttled, failure-isolated network
-  orchestrator. `WhoopReplicaSnapshotter.swift` opens a separate SQLite read
+  orchestrator. Replica attempts start only while the app is active and cancel
+  when it enters the background, reserving background execution for collection.
+  Cancellation reaches CPU workers and cleanup finishes before another attempt
+  can begin. `WhoopReplicaSnapshotter.swift` opens a separate SQLite read
   connection and produces a standalone online-backup image without becoming a
-  second writer. `WhoopReplicaModels.swift` owns the keyed chunk identity,
+  second writer. Bounded backup steps share one WAL read transaction; hashing
+  and integrity checks also observe cancellation. A completed snapshot has an
+  authenticated checkpoint and is reused across interrupted uploads; partial
+  preparation is removed. A commit removes both snapshot and checkpoint.
+  `WhoopReplicaModels.swift` owns the keyed chunk identity,
   compression, encryption, and schedule policy; `WhoopReplicaClient.swift`
   owns the narrow write-only HTTP boundary. Convex receives only AES-GCM
   ciphertext, keyed identifiers, sizes, and schema metadata.

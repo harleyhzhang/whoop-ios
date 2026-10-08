@@ -60,7 +60,7 @@ extension WhoopStore {
                 wakeSeconds: 0
             )
             guard candidate.meetsEvidenceGates,
-                shouldDerive(candidate: candidate, database: database)
+                Self.shouldDerive(candidate: candidate, database: database)
             else { continue }
             guard
                 updateLocalSleepScore(
@@ -334,7 +334,7 @@ extension WhoopStore {
                 && candidate.meetsEvidenceGates
                 && candidate.meetsAutomaticWakeGate
             {
-                guard shouldDerive(candidate: candidate, database: database) else { continue }
+                guard Self.shouldDerive(candidate: candidate, database: database) else { continue }
                 let record = derivedRecord(for: candidate, now: now)
                 guard record.hasCompletePrimarySleepMetrics else { continue }
                 publishable.append(record)

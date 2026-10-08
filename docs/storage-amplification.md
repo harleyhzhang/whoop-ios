@@ -1,3 +1,8 @@
+> The offline `storage_v11_prototype.py` name predates production schema 11.
+> Production schema 11 only adds a Strain input revision index; it does not
+> adopt this page/packet compaction prototype. The prototype remains isolated
+> and is not a supported production restore format.
+
 # Storage amplification measurement
 
 The app measures schema-10 storage behavior before any production schema-11

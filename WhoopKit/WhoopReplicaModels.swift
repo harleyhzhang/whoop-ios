@@ -61,13 +61,13 @@ struct WhoopReplicaConfiguration: Sendable {
     }
 }
 
-struct WhoopReplicaChunkDescriptor: Sendable {
+struct WhoopReplicaChunkDescriptor: Codable, Sendable {
     let index: Int
     let identifier: String
     let plainBytes: Int
 }
 
-struct WhoopReplicaSnapshotManifest: Encodable, Sendable {
+struct WhoopReplicaSnapshotManifest: Codable, Sendable {
     let chunkIds: [String]
     let chunkPlainBytes: [Int]
     let chunkSize: Int

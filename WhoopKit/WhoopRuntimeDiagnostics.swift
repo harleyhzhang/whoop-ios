@@ -45,6 +45,28 @@ final class WhoopRuntimeDiagnostics: NSObject, MXMetricManagerSubscriber, @unche
         persist(payloads.map { $0.jsonRepresentation() }, name: "metric-kit-diagnostics.json")
     }
 
+    struct Event: Codable, Sendable {
+        let at: Date
+        let name: String
+    }
+
+    func recordEvent(_ name: String, at: Date = .now) {
+        persistenceQueue.async {
+            guard let directory = WhoopStore.databaseDirectory() else { return }
+            let url = directory.appendingPathComponent("lifecycle-events.json")
+            var events = (try? JSONDecoder().decode([Event].self, from: Data(contentsOf: url))) ?? []
+            events.append(Event(at: at, name: name))
+            events = Array(events.suffix(128))
+            do {
+                try JSONEncoder().encode(events).write(
+                    to: url,
+                    options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            } catch {
+                Self.logger.error("Could not persist lifecycle event: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
     private func persist(_ payloads: [Data], name: String) {
         guard !payloads.isEmpty else { return }
         persistenceQueue.async {

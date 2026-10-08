@@ -543,7 +543,7 @@ def test_exact_commit_must_be_clean_checked_out_and_merged(
 
 def test_real_schema_constant_and_commit_bound_build_number() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    assert environment.project_schema_version(repo_root) == 10
+    assert environment.project_schema_version(repo_root) == 11
     assert environment.shipping_build_number("a" * 40) == str(int("a" * 12, 16))
 
 

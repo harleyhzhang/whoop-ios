@@ -101,7 +101,7 @@ extension WhoopStore {
     /// correctly makes a metric smaller. Within one model version, a later
     /// offload remains grow-only so a partial reconstruction cannot shrink a
     /// settled record. Archived WHOOP rows remain authoritative.
-    func shouldDerive(candidate: SleepCandidate, database: OpaquePointer) -> Bool {
+    static func shouldDerive(candidate: SleepCandidate, database: OpaquePointer) -> Bool {
         let sql = """
             SELECT source, sleep_score, sleep_duration_minutes,
                    hrv_rmssd_milliseconds, resting_heart_rate_bpm
@@ -112,9 +112,9 @@ extension WhoopStore {
             let statement
         else { return false }
         defer { sqlite3_finalize(statement) }
-        bind(candidate.dateKey, to: 1, in: statement)
+        _ = candidate.dateKey.withCString { sqlite3_bind_text(statement, 1, $0, -1, transient) }
         guard sqlite3_step(statement) == SQLITE_ROW else { return true }
-        guard let source = textColumn(statement, 0),
+        guard let source = sqlite3_column_text(statement, 0).map({ String(cString: $0) }),
             source.hasPrefix(Self.localSourcePrefix)
         else { return false }
         if source != Self.localSource { return true }
@@ -140,18 +140,21 @@ extension WhoopStore {
     /// A completed offload is an explicit, CRC-validated durable session. The
     /// completion sequence must cover every unique historical sample currently
     /// stored; a later partial offload invalidates the proof until it completes.
+    static let completedOffloadCoverageQuery = """
+        SELECT
+            COALESCE((SELECT p.delivery_sequence
+             FROM whoop_raw_packet p
+             WHERE EXISTS (SELECT 1 FROM whoop_historical_sample h WHERE h.source_packet_id = p.id)
+             ORDER BY p.delivery_sequence DESC LIMIT 1), 0),
+            (SELECT MAX(completion_sequence)
+             FROM whoop_offload_session
+             WHERE status = 'complete')
+        """
     func completedOffloadCoversLatestHistory(database: OpaquePointer) -> Bool {
-        let sql = """
-            SELECT
-                (SELECT COALESCE(MAX(p.delivery_sequence), 0)
-                 FROM whoop_historical_sample h
-                 JOIN whoop_raw_packet p ON p.id = h.source_packet_id),
-                (SELECT MAX(completion_sequence)
-                 FROM whoop_offload_session
-                 WHERE status = 'complete')
-            """
+        // Walk the delivery index backward to the newest actual history packet.
+        // MAX over the joined archive scanned every retained sample per offload.
         var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+        guard sqlite3_prepare_v2(database, Self.completedOffloadCoverageQuery, -1, &statement, nil) == SQLITE_OK,
             let statement
         else { return false }
         defer { sqlite3_finalize(statement) }
@@ -162,40 +165,6 @@ extension WhoopStore {
         let newestSampleSequence = sqlite3_column_int64(statement, 0)
         let newestCompletionSequence = sqlite3_column_int64(statement, 1)
         return newestCompletionSequence >= newestSampleSequence
-    }
-
-    func storedRecordSummary(forDateKey dateKey: String, database: OpaquePointer) -> String? {
-        let sql = """
-            SELECT sleep_score, sleep_duration_minutes, hrv_rmssd_milliseconds,
-                   resting_heart_rate_bpm, source
-            FROM daily_health_metric WHERE date_key = ? LIMIT 1
-            """
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-            let statement
-        else { return nil }
-        defer { sqlite3_finalize(statement) }
-        bind(dateKey, to: 1, in: statement)
-        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
-        let score = sqlite3_column_double(statement, 0)
-        let duration = sqlite3_column_double(statement, 1)
-        let hrv = sqlite3_column_type(statement, 2) == SQLITE_NULL ? nil : sqlite3_column_double(statement, 2)
-        let rhr = sqlite3_column_type(statement, 3) == SQLITE_NULL ? nil : sqlite3_column_double(statement, 3)
-        let source = textColumn(statement, 4) ?? "?"
-        return
-            "score \(Int(score.rounded()))% | \(Int(duration.rounded())) min | HRV \(hrv.map { String(Int($0.rounded())) } ?? "nil") | RHR \(rhr.map { String(Int($0.rounded())) } ?? "nil") | \(source)"
-    }
-
-    func storedSleepID(forDateKey dateKey: String, database: OpaquePointer) -> String? {
-        let sql = "SELECT sleep_id FROM daily_health_metric WHERE date_key = ? LIMIT 1"
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-            let statement
-        else { return nil }
-        defer { sqlite3_finalize(statement) }
-        bind(dateKey, to: 1, in: statement)
-        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
-        return textColumn(statement, 0)
     }
 
     /// Lowest five-minute mean heart rate across the night. The minimum sample

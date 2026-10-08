@@ -10,7 +10,9 @@ extension WhoopStore {
             let current = try? scalarInt(database, sql: "PRAGMA user_version"),
             current <= targetSchemaVersion
         else { return false }
-        guard current < targetSchemaVersion else { return true }
+        guard current < targetSchemaVersion else {
+            return current < 11 || WhoopStrainInputIndex.isInstalled(in: database)
+        }
         for version in (Int(current) + 1)...targetSchemaVersion {
             do {
                 try withTransaction(.immediate) { database in
@@ -488,6 +490,8 @@ extension WhoopStore {
                     WHERE status != 'decoded'
                     """)
                 && execute("DROP TABLE whoop_decode_result")
+        case 11:
+            return execute(WhoopStrainInputIndex.schema)
         default:
             return false
         }

@@ -47,6 +47,16 @@ export WHOOP_RECOVERY_MODEL_PATH="$derived_data_path/missing-whoop-recovery-mode
 export WHOOP_OFFICIAL_METRICS_PATH="$derived_data_path/missing-whoop-official-metrics.json"
 export WHOOP_OFFICIAL_ARCHIVE_PATH="$derived_data_path/missing-whoop-official-archive.sqlite3"
 
+result_dir="$(mktemp -d "${TMPDIR:-/tmp}/whoop-fast-results.XXXXXX")"
+cleanup_result() {
+  if [ "$?" -eq 0 ]; then
+    rm -rf "$result_dir"
+  else
+    echo "Failed test evidence retained at $result_dir" >&2
+  fi
+}
+trap cleanup_result EXIT
+result_bundle="$result_dir/tests.xcresult"
 echo "Running warm-cache tests on $simulator_name ($simulator_udid)..."
 xcodebuild test -quiet \
   -project Whoop.xcodeproj \
@@ -54,8 +64,11 @@ xcodebuild test -quiet \
   -configuration Debug \
   -destination "platform=iOS Simulator,id=$simulator_udid" \
   -derivedDataPath "$derived_data_path" \
+  -resultBundlePath "$result_bundle" \
   -parallel-testing-enabled NO \
   CODE_SIGNING_ALLOWED=NO \
   "${test_selection[@]}"
+
+uv run --frozen python Tools/check_test_results.py "$result_bundle" "${test_selection[@]}"
 
 echo "Fast check passed; simulator and DerivedData were retained for the next run."

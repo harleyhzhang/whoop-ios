@@ -22,14 +22,8 @@ export WHOOP_RECOVERY_MODEL_PATH="$derived_root/missing-whoop-recovery-model.jso
 export WHOOP_OFFICIAL_METRICS_PATH="$derived_root/missing-whoop-official-metrics.json"
 export WHOOP_OFFICIAL_ARCHIVE_PATH="$derived_root/missing-whoop-official-archive.sqlite3"
 
-runtime_id="$(
-    xcrun simctl list runtimes available -j \
-        | jq -r '[.runtimes[] | select(.isAvailable and (.name | startswith("iOS ")))] | sort_by(.version | split(".") | map(tonumber)) | last.identifier'
-)"
-if [ -z "$runtime_id" ] || [ "$runtime_id" = "null" ]; then
-    echo "No available iOS Simulator runtime was found." >&2
-    exit 1
-fi
+Tools/doctor.sh --toolchain-only
+runtime_id="$(jq -r '.simulatorRuntime.identifier' Tools/toolchain.json)"
 simulator_udid="$(
     xcrun simctl create \
         "WHOOP Sanitizers $$" \

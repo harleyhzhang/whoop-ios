@@ -65,7 +65,9 @@ struct RootView: View {
             dashboard(currentDate: context.date)
         }
         .preferredColorScheme(.dark)
-        .task {
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            history.reload()
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(60))
                 guard !Task.isCancelled else { return }
@@ -77,10 +79,11 @@ struct RootView: View {
                 WhoopStore.shared.flushStorageTelemetry()
                 if phase == .background {
                     whoopCollector.prepareForBackground()
+                    replicaCoordinator.prepareForBackground()
                 }
                 return
             }
-            history.reload()
+            WhoopRuntimeDiagnostics.shared.recordEvent("foreground")
             whoopCollector.refreshHistoricalData()
             powerPackMonitor.refresh()
             WhoopStore.shared.writeSleepDiagnostics()
@@ -88,6 +91,7 @@ struct RootView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .whoopDailyHealthUpdated)) {
             notification in
+            guard scenePhase == .active else { return }
             guard let update = notification.object as? WhoopHealthHistoryUpdate else {
                 history.reload()
                 return

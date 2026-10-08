@@ -4,10 +4,11 @@ import SQLite3
 /// Read-only dashboard queries. The caller supplies the queue-confined SQLite
 /// connection and, when a coherent multi-table snapshot is required, owns the
 /// surrounding transaction.
-struct DashboardRepository: Sendable {
+struct DashboardRepository {
+    private let strainRepository = LocalStrainRepository()
     func loadSnapshot(database: OpaquePointer) throws -> DashboardHistorySnapshot {
         let health = try loadDailyHealthRecords(database: database)
-        let strain = try LocalStrainRepository().load(
+        let strain = try strainRepository.load(
             database: database, health: health,
             model: WhoopStrainModel.load())
         return DashboardHistorySnapshot(
