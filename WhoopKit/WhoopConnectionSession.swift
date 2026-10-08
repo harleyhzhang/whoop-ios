@@ -1,5 +1,32 @@
 import Foundation
 
+enum WhoopCollectorPreferences {
+    /// Persisted keys outlive type renames. Preserve existing values and only
+    /// carry device-specific state forward for the same saved peripheral.
+    static func migrateLegacyKeys(in defaults: UserDefaults) {
+        let oldPrefix = "WhoopHandshakeProbe."
+        let newPrefix = "WhoopCollector."
+        let identityKey = "knownPeripheralIdentifier"
+        guard let legacyID = defaults.string(forKey: oldPrefix + identityKey),
+            let legacyUUID = UUID(uuidString: legacyID)
+        else { return }
+        if let currentID = defaults.string(forKey: newPrefix + identityKey),
+            UUID(uuidString: currentID) != legacyUUID
+        {
+            return
+        }
+        let suffixes = [
+            identityKey, "confirmedEncryptedBond", "cachedHeartRateBPM",
+            "cachedHeartRateDate", "cachedBatteryLevel", "cachedBatteryLevelDate",
+        ]
+        for suffix in suffixes where defaults.object(forKey: newPrefix + suffix) == nil {
+            if let value = defaults.object(forKey: oldPrefix + suffix) {
+                defaults.set(value, forKey: newPrefix + suffix)
+            }
+        }
+    }
+}
+
 enum WhoopReconnectPolicy {
     static func delaySeconds(forAttempt attempt: Int) -> Double {
         let boundedAttempt = min(max(attempt, 0), 5)

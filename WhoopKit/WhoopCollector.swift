@@ -96,6 +96,7 @@ final class WhoopCollector: NSObject {
     init(replicaScheduler: WhoopReplicaScheduling? = nil) {
         self.replicaScheduler = replicaScheduler
         super.init()
+        WhoopCollectorPreferences.migrateLegacyKeys(in: .standard)
         restoreCachedTelemetry()
         record("Probe initialized")
         _ = central
