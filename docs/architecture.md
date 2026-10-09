@@ -53,7 +53,9 @@ runtime decoding ahead of the external private-file replacement boundary.
   bounded packet batching and persistence backlog, bounded transient retries,
   backpressure publication, idle flushing, and throttled UI snapshots.
 - `WhoopBluetoothPolicy.swift` owns deterministic advertisement, framing,
-  charging-inference, acknowledgement, and history-completion decisions. Its
+  acknowledgement, and history-completion decisions. Its `WhoopBatteryState`
+  keeps hardware status separate from reversible level-trend estimates, using
+  only live readings within a connection as the trend baseline. Its
   typed `WhoopCommand` values are the only production owners of wire opcodes and
   payloads.
 - `WhoopProtocol.swift` owns frame integrity and pure protocol decoders.

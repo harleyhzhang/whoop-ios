@@ -159,17 +159,6 @@ enum WhoopBluetoothPolicy {
         return name == "w" || name.contains("whoop") || name.contains("puffin")
     }
 
-    static func inferredBatteryStatus(
-        previousLevel: Int?,
-        currentLevel: Int,
-        currentStatus: BatteryStatus
-    ) -> BatteryStatus {
-        guard !currentStatus.isExplicit, let previousLevel else { return currentStatus }
-        if currentLevel > previousLevel { return .charging }
-        if currentLevel < previousLevel { return .notCharging }
-        return currentStatus
-    }
-
     static func shouldAcknowledgeChunk(
         endData: [UInt8],
         previousEndData: [UInt8]?,
@@ -219,5 +208,39 @@ enum WhoopBluetoothPolicy {
             UInt8((trailer >> 24) & 0xFF),
         ]
         return frame
+    }
+}
+
+/// Keeps hardware status separate from trend estimates so estimates cannot latch.
+struct WhoopBatteryState {
+    private(set) var level: Int?
+    private(set) var status = BatteryStatus.unavailable
+    private var hardwareStatus = BatteryStatus.unavailable
+    private var previousLiveLevel: Int?
+
+    init(cachedLevel: Int? = nil) {
+        level = cachedLevel
+    }
+
+    mutating func observe(_ observation: BatteryObservation) {
+        if observation.status.isExplicit {
+            hardwareStatus = observation.status
+        }
+        if hardwareStatus.isExplicit {
+            status = hardwareStatus
+        } else if let currentLevel = observation.level, let previousLiveLevel {
+            if currentLevel > previousLiveLevel { status = .charging }
+            if currentLevel < previousLiveLevel { status = .notCharging }
+        }
+        if let currentLevel = observation.level {
+            level = currentLevel
+            previousLiveLevel = currentLevel
+        }
+    }
+
+    mutating func resetConnection() {
+        hardwareStatus = .unavailable
+        status = .unavailable
+        previousLiveLevel = nil
     }
 }

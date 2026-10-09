@@ -202,39 +202,63 @@ final class WhoopBluetoothPolicyTests: XCTestCase {
         XCTAssertNil(WhoopBluetoothPolicy.cachedBatteryLevel("unknown"))
     }
 
-    func testBatteryTrendInferenceNeverOverridesExplicitChargingState() {
-        XCTAssertEqual(
-            WhoopBluetoothPolicy.inferredBatteryStatus(
-                previousLevel: 50,
-                currentLevel: 49,
-                currentStatus: .charging
-            ),
-            .charging
-        )
-        XCTAssertEqual(
-            WhoopBluetoothPolicy.inferredBatteryStatus(
-                previousLevel: 50,
-                currentLevel: 51,
-                currentStatus: .unavailable
-            ),
-            .charging
-        )
-        XCTAssertEqual(
-            WhoopBluetoothPolicy.inferredBatteryStatus(
-                previousLevel: 50,
-                currentLevel: 49,
-                currentStatus: .unavailable
-            ),
-            .notCharging
-        )
-        XCTAssertEqual(
-            WhoopBluetoothPolicy.inferredBatteryStatus(
-                previousLevel: 50,
-                currentLevel: 50,
-                currentStatus: .charging
-            ),
-            .charging
-        )
+    func testBatteryTrendReversesAfterDischargeAndChargeWithoutLatching() {
+        var state = WhoopBatteryState()
+        let levels = [50, 49, 49, 50, 50, 51, 50, 50]
+        let statuses: [BatteryStatus] = [
+            .unavailable, .notCharging, .notCharging, .charging,
+            .charging, .charging, .notCharging, .notCharging,
+        ]
+        for (level, status) in zip(levels, statuses) {
+            state.observe(BatteryObservation(level: level, status: .unavailable))
+            XCTAssertEqual(state.level, level)
+            XCTAssertEqual(state.status, status, "After level \(level)")
+        }
+    }
+
+    func testBatteryHardwareStatusTakesPrecedenceOverTrends() {
+        var state = WhoopBatteryState()
+        state.observe(BatteryObservation(level: 50, status: .unavailable))
+        state.observe(BatteryObservation(level: 49, status: .charging))
+        XCTAssertEqual(state.status, .charging)
+        state.observe(BatteryObservation(level: 48, status: .unavailable))
+        XCTAssertEqual(state.status, .charging)
+        state.observe(BatteryObservation(level: 49, status: .notCharging))
+        XCTAssertEqual(state.status, .notCharging)
+        state.observe(BatteryObservation(level: 50, status: .unavailable))
+        XCTAssertEqual(state.status, .notCharging)
+        state.observe(BatteryObservation(level: 51, status: .unknown(rawValue: 42)))
+        XCTAssertEqual(state.status, .unknown(rawValue: 42))
+    }
+
+    func testBatteryStatusBeforeLevelAndMissingObservationsRemainCoherent() {
+        var state = WhoopBatteryState()
+        state.observe(BatteryObservation(level: nil, status: .charging))
+        XCTAssertNil(state.level)
+        XCTAssertEqual(state.status, .charging)
+        state.observe(BatteryObservation(level: 35, status: .unavailable))
+        state.observe(BatteryObservation(level: nil, status: .unavailable))
+        XCTAssertEqual(state.level, 35)
+        XCTAssertEqual(state.status, .charging)
+    }
+
+    func testBatteryTrendsStartWithLiveEvidenceAfterLaunchAndReconnect() {
+        var state = WhoopBatteryState(cachedLevel: 80)
+        XCTAssertEqual(state.level, 80)
+        state.observe(BatteryObservation(level: 35, status: .unavailable))
+        XCTAssertEqual(state.status, .unavailable)
+        state.observe(BatteryObservation(level: 35, status: .unavailable))
+        XCTAssertEqual(state.status, .unavailable)
+        state.observe(BatteryObservation(level: 36, status: .unavailable))
+        XCTAssertEqual(state.status, .charging)
+        state.observe(BatteryObservation(level: nil, status: .notCharging))
+        state.resetConnection()
+        XCTAssertEqual(state.level, 36)
+        XCTAssertEqual(state.status, .unavailable)
+        state.observe(BatteryObservation(level: 40, status: .unavailable))
+        XCTAssertEqual(state.status, .unavailable)
+        state.observe(BatteryObservation(level: 41, status: .unavailable))
+        XCTAssertEqual(state.status, .charging)
     }
 
     func testHistoricalChunkAcknowledgementSuppressesBurstButAllowsRetry() {
