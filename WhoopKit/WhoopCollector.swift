@@ -9,8 +9,9 @@ import UIKit
 final class WhoopCollector: NSObject {
     private(set) var deviceName = "—"
     private(set) var handshakePhase = HandshakePhase.waitingForDevice
-    private(set) var batteryLevel: Int?
-    private(set) var batteryStatus = BatteryStatus.unavailable
+    private var batteryState = WhoopBatteryState()
+    var batteryLevel: Int? { batteryState.level }
+    var batteryStatus: BatteryStatus { batteryState.status }
     private(set) var isSleeping = false
     private(set) var lastConnectedAt: Date?
     @ObservationIgnored private var lastHeartRateReceivedAt: Date?
@@ -134,8 +135,10 @@ final class WhoopCollector: NSObject {
 
     private func restoreCachedTelemetry() {
         let defaults = UserDefaults.standard
-        batteryLevel = WhoopBluetoothPolicy.cachedBatteryLevel(
-            defaults.object(forKey: cachedBatteryLevelKey)
+        batteryState = WhoopBatteryState(
+            cachedLevel: WhoopBluetoothPolicy.cachedBatteryLevel(
+                defaults.object(forKey: cachedBatteryLevelKey)
+            )
         )
         if defaults.object(forKey: cachedHeartRateKey) != nil {
             let bpm = defaults.integer(forKey: cachedHeartRateKey)
@@ -205,22 +208,12 @@ final class WhoopCollector: NSObject {
     }
 
     private func applyBatteryObservation(_ observation: BatteryObservation) {
-        let observedStatus = observation.status
-        guard let level = observation.level else {
-            batteryStatus = observedStatus
-            return
-        }
-        let effectiveStatus = WhoopBluetoothPolicy.inferredBatteryStatus(
-            previousLevel: batteryLevel,
-            currentLevel: level,
-            currentStatus: observedStatus.isExplicit ? observedStatus : batteryStatus
-        )
-        batteryLevel = level
-        batteryStatus = effectiveStatus
+        batteryState.observe(observation)
+        guard let level = observation.level else { return }
         UserDefaults.standard.set(level, forKey: cachedBatteryLevelKey)
         UserDefaults.standard.set(Date(), forKey: cachedBatteryLevelDateKey)
         WhoopNotificationManager.shared.observeBattery(
-            BatteryObservation(level: level, status: effectiveStatus)
+            BatteryObservation(level: level, status: batteryStatus)
         )
     }
 
@@ -423,7 +416,7 @@ final class WhoopCollector: NSObject {
         commandCharacteristic = nil
         heartRateCharacteristic = nil
         _ = connectionSession.resetKeepingPeripheral()
-        batteryStatus = .unavailable
+        batteryState.resetConnection()
         notifyCharacteristics.removeAll(keepingCapacity: true)
         helloOutstanding = false
         helloAttemptID = nil
