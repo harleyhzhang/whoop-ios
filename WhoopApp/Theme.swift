@@ -89,6 +89,8 @@ enum Theme {
         static let historyLabelSpacing: CGFloat = 4
         static let sectionSpacing: CGFloat = 24
         static let rowHeight: CGFloat = 56
+        /// Last-known readings shown while the strap is out of range.
+        static let staleOpacity: Double = 0.4
         static let rowBadge: CGFloat = 34
         static let heroBadge: CGFloat = 76
         static let rowDividerInset: CGFloat = 63

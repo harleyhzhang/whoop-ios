@@ -639,7 +639,9 @@ final class WhoopCollector: NSObject {
     }
 
     private func scheduleAutomaticHandshakeIfTrusted() {
-        guard UserDefaults.standard.bool(forKey: confirmedBondKey) else { return }
+        // No pairing screen ships, so the first bond is also opened automatically;
+        // iOS shows its own pairing prompt the first time.
+        let isFirstBond = !UserDefaults.standard.bool(forKey: confirmedBondKey)
         let expectedSession = connectionSession.token()
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
@@ -650,7 +652,10 @@ final class WhoopCollector: NSObject {
                 !self.helloOutstanding,
                 self.handshakePhase.canAutomaticallyAttempt
             else { return }
-            self.record("Automatically reopening the previously confirmed encrypted bond")
+            self.record(
+                isFirstBond
+                    ? "Opening the first encrypted bond"
+                    : "Automatically reopening the previously confirmed encrypted bond")
             self.attemptHandshake()
         }
     }
