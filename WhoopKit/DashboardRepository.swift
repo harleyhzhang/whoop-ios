@@ -25,7 +25,7 @@ struct DashboardRepository {
             SELECT d.date_key, d.sleep_score,
                    COALESCE(o.official_recovery_score, r.score),
                    CASE WHEN o.official_recovery_score IS NOT NULL
-                        THEN 'whoop_private_ios_api'
+                        THEN 'whoop_official'
                         WHEN r.score IS NOT NULL THEN r.model_version END,
                    d.sleep_duration_minutes, d.hrv_rmssd_milliseconds,
                    d.resting_heart_rate_bpm, d.sleep_id, d.cycle_id,
@@ -72,7 +72,7 @@ struct DashboardRepository {
                        1.0 AS coverage_fraction, 0 AS gap_seconds,
                        0 AS counter_wrap_count, 0 AS rejected_delta_count,
                        NULL AS first_sample_at, NULL AS last_sample_at,
-                       'whoop_private_ios_api' AS source, 1 AS algorithm_version
+                       'whoop_official' AS source, 1 AS algorithm_version
                 FROM whoop_official_daily_metric o
                 WHERE o.official_steps IS NOT NULL
                 UNION ALL
@@ -128,7 +128,7 @@ struct DashboardRepository {
         let sql = """
             SELECT date_key, score, source FROM (
                 SELECT date_key, official_recovery_score AS score,
-                       'whoop_private_ios_api' AS source
+                       'whoop_official' AS source
                 FROM whoop_official_daily_metric
                 WHERE official_recovery_score IS NOT NULL
                 UNION ALL

@@ -247,3 +247,42 @@ extension WhoopSleepStateTests {
         )
     }
 }
+
+extension WhoopSleepStateTests {
+    func testAccountExportImportUpdatesOnlyOlderImportedHistory() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = WhoopStore(
+            databaseURL: directory.appendingPathComponent("sleep.sqlite3"),
+            runBackgroundDecoding: false)
+        defer { store.shutdownForTesting() }
+        func record(score: Double, source: String, updated: String) -> DailyHealthRecord {
+            DailyHealthRecord(
+                dateKey: "2026-01-02", sleepScore: score,
+                sleepDurationMinutes: 450, hrvRMSSDMilliseconds: 60, restingHeartRateBPM: 50,
+                sleepID: nil, cycleID: nil, source: source, sourceArchive: "synthetic",
+                sourceUpdatedAt: updated)
+        }
+        try store.queue.sync {
+            let database = try XCTUnwrap(store.database)
+            let older = record(score: 70, source: "whoop_account_export", updated: "2026-01-03T00:00:00Z")
+            let newer = record(score: 80, source: "whoop_account_export", updated: "2026-01-04T00:00:00Z")
+            XCTAssertTrue(store.upsertDailyHealthRecord(older, database: database))
+            XCTAssertTrue(store.upsertDailyHealthRecord(newer, database: database))
+            XCTAssertTrue(store.upsertDailyHealthRecord(older, database: database))
+            let repository = DashboardRepository()
+            let imported = try repository.loadDailyHealthRecords(database: database)
+            XCTAssertEqual(imported.count, 1)
+            XCTAssertEqual(imported.first?.sleepScore, 80)
+            XCTAssertEqual(imported.first?.source, "whoop_account_export")
+            XCTAssertEqual(
+                sqlite3_exec(
+                    database,
+                    "UPDATE daily_health_metric SET source='whoop5_local_synthetic', sleep_score=90",
+                    nil, nil, nil), SQLITE_OK)
+            XCTAssertTrue(store.upsertDailyHealthRecord(newer, database: database))
+            XCTAssertEqual(try repository.loadDailyHealthRecords(database: database).first?.sleepScore, 90)
+        }
+    }
+}

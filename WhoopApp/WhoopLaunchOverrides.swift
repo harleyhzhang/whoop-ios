@@ -19,6 +19,15 @@ enum WhoopLaunchOverrides {
         value(for: "WHOOP_MOCK_CHARGING") == "1"
     }
 
+    /// Simulator-only stand-in heart rate while an activity is live.
+    static var mocksHeartRate: Bool {
+        #if DEBUG && targetEnvironment(simulator)
+            value(for: "WHOOP_MOCK_HEART_RATE") == "1"
+        #else
+            false
+        #endif
+    }
+
     static var batteryLevel: Int? {
         guard let rawValue = value(for: "WHOOP_MOCK_BATTERY"), let level = Int(rawValue) else {
             return nil

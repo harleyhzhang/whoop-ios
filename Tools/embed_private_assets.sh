@@ -33,6 +33,16 @@ for spec in "${asset_specs[@]}"; do
   fi
 done
 
+# Optional: workouts, sleeps, and naps from a WHOOP account export.
+activities_source="${WHOOP_ACTIVITIES_PATH:-${private_root}/whoop-activities.json}"
+if [ -f "$activities_source" ]; then
+  if ! /usr/bin/cmp -s "$activities_source" "${resource_root}/whoop-activities.json"; then
+    /bin/cp "$activities_source" "${resource_root}/whoop-activities.json"
+  fi
+else
+  /bin/rm -f "${resource_root}/whoop-activities.json"
+fi
+
 if [ "${CONFIGURATION}" = "Release" ] && [ "${PLATFORM_NAME}" = "iphoneos" ] && [ -n "${WHOOP_CONVEX_SITE_URL:-}" ]; then
   replica_service="${WHOOP_REPLICA_KEYCHAIN_SERVICE:-whoop.convex-replica}"
   if ! replica_token="$(security find-generic-password -a phone-upload-token -s "$replica_service" -w 2>/dev/null)" ||

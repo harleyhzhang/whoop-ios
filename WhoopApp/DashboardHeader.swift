@@ -24,13 +24,19 @@ struct DashboardHeader: View {
     let isCharging: Bool
     let isConnected: Bool
     let powerPackBatteryLevel: Int?
+    var openHistory: () -> Void = {}
 
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(referenceDate, format: .dateTime.weekday(.wide).month(.abbreviated).day())
-                    .font(Theme.Typography.title)
-                    .foregroundStyle(Theme.Palette.text)
+                Button(action: openHistory) {
+                    Text(referenceDate, format: .dateTime.weekday(.wide).month(.abbreviated).day())
+                        .font(Theme.Typography.title)
+                        .foregroundStyle(Theme.Palette.text)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Browse your history")
+                .accessibilityIdentifier("header.date")
 
                 if let errorMessage {
                     Text(errorMessage)

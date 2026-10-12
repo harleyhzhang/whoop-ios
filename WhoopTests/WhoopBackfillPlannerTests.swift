@@ -166,10 +166,10 @@ final class WhoopBackfillPlannerTests: XCTestCase {
     }
 
     func testSleepRangeIndexPerformanceAtLongHistoryScale() {
-        let rows = (0..<250_000).map {
+        let rows: [SyntheticSleepRow] = (0..<250_000).map { (index: Int) in
             SyntheticSleepRow(
-                timestamp: Double($0 * 6),
-                isAsleep: ($0 / 4_800) % 3 == 1
+                timestamp: Double(index * 6),
+                isAsleep: (index / 4_800) % 3 == 1
             )
         }
         measure(metrics: [XCTClockMetric(), XCTMemoryMetric()]) {

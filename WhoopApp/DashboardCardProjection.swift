@@ -3,8 +3,8 @@ import Foundation
 /// Disposable all-history projection over the coherent local store snapshot.
 /// Empty dates stay empty, retaining an evenly spaced calendar axis.
 struct DashboardCardProjection {
-    let days: [HealthDay]
-    let selected: HealthDay?
+    var days: [HealthDay]
+    var selected: HealthDay?
 
     init(snapshot: DashboardHistorySnapshot, published: PublishedDashboardDay, referenceDate: Date) {
         let calendar = Calendar.current
@@ -42,5 +42,23 @@ struct DashboardCardProjection {
             hrv: published.health?.hrvRMSSDMilliseconds,
             rhr: published.health?.restingHeartRateBPM, localStrain: strain[key]?.estimate
         )
+    }
+}
+
+extension DashboardCardProjection {
+    /// Fills one day's missing strain with an in-progress floor; recorded
+    /// strain always wins.
+    func withStrainFloor(_ floor: Double?, on dayKey: String) -> Self {
+        guard let floor else { return self }
+        func fill(_ day: HealthDay) -> HealthDay {
+            guard day.day == dayKey, day.strain == nil else { return day }
+            return HealthDay(
+                day: day.day, sleep: day.sleep, recovery: day.recovery, strain: floor, steps: day.steps,
+                duration: day.duration, hrv: day.hrv, rhr: day.rhr, localStrain: day.localStrain)
+        }
+        var copy = self
+        copy.days = days.map(fill)
+        copy.selected = selected.map(fill)
+        return copy
     }
 }

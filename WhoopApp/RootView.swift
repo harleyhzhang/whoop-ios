@@ -17,6 +17,8 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var history = HealthHistoryModel()
+    @State private var log = ManualLogStore.forLaunch()
+    @State private var sheet: DashboardSheet?
     var whoopCollector: WhoopCollector
     var powerPackMonitor: WhoopPowerPackMonitor
     let replicaCoordinator: WhoopReplicaCoordinator
@@ -65,6 +67,11 @@ struct RootView: View {
             dashboard(currentDate: context.date)
         }
         .preferredColorScheme(.dark)
+        .sheet(item: $sheet) { DashboardSheetContent(sheet: $0, snapshot: history.snapshot, log: log) }
+        .onChange(of: whoopCollector.heartRate) { _, bpm in
+            if let bpm { log.record(heartRate: bpm) }
+        }
+        .task(id: log.live?.id) { await MockHeartRate.run(log) }
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
             history.reload()
@@ -107,9 +114,10 @@ struct RootView: View {
 
     private func dashboard(currentDate: Date) -> some View {
         let referenceDate = publishedDay.date ?? currentDate
+        let today = DayKey(date: currentDate, timeZone: .current).rawValue
         let projection = DashboardCardProjection(
             snapshot: history.snapshot, published: publishedDay, referenceDate: referenceDate
-        )
+        ).withStrainFloor(log.strainFloor(on: today), on: today)
         return ZStack {
             Theme.Palette.canvas.ignoresSafeArea()
 
@@ -121,8 +129,18 @@ struct RootView: View {
                         batteryLevel: batteryLevel,
                         isCharging: isCharging,
                         isConnected: isConnected,
-                        powerPackBatteryLevel: powerPackBatteryLevel
+                        powerPackBatteryLevel: powerPackBatteryLevel,
+                        openHistory: { sheet = .history(nil) }
                     )
+                    if let live = log.live {
+                        Button {
+                            sheet = .live
+                        } label: {
+                            LiveEntryCard(entry: live, heartRate: log.heartRate)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("log.live")
+                    }
                     VStack(spacing: Theme.Layout.spacing) {
                         SummaryRings(selected: projection.selected)
 
@@ -132,8 +150,13 @@ struct RootView: View {
                                 count: typeSize.isAccessibilitySize ? 1 : 2), spacing: Theme.Layout.spacing
                         ) {
                             ForEach([HealthMetric.steps, .duration, .rhr, .sleep, .recovery, .strain]) { metric in
-                                MetricCard(metric: metric, selected: projection.selected, days: projection.days)
-                                    .accessibilityIdentifier("card.\(metric.rawValue)")
+                                Button {
+                                    sheet = .forCard(metric)
+                                } label: {
+                                    MetricCard(metric: metric, selected: projection.selected, days: projection.days)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("card.\(metric.rawValue)")
                             }
                         }
                     }

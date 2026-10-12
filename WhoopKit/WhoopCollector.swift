@@ -13,6 +13,8 @@ final class WhoopCollector: NSObject {
     var batteryLevel: Int? { batteryState.level }
     var batteryStatus: BatteryStatus { batteryState.status }
     private(set) var isSleeping = false
+    /// Latest strap heart rate, for live activities.
+    private(set) var heartRate: Int?
     private(set) var lastConnectedAt: Date?
     @ObservationIgnored private var lastHeartRateReceivedAt: Date?
     @ObservationIgnored private var canAttemptHandshake = false
@@ -197,6 +199,7 @@ final class WhoopCollector: NSObject {
 
     private func cacheHeartRate(_ bpm: Int, receivedAt: Date = .now) {
         guard bpm > 0 else { return }
+        heartRate = bpm
         lastHeartRateReceivedAt = receivedAt
         guard lastTelemetryCacheWriteAt.map({ receivedAt.timeIntervalSince($0) >= 30 }) ?? true else {
             return
