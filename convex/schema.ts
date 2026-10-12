@@ -1,6 +1,8 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
+import { webActivity, webDay, webStatus } from "./web";
+
 export default defineSchema({
   replicaArchives: defineTable({
     createdAt: v.number(),
@@ -35,4 +37,12 @@ export default defineSchema({
   })
     .index("by_created_at", ["createdAt"])
     .index("by_source_fingerprint", ["sourceFingerprint"]),
+  webDays: defineTable({ ...webDay.fields, updatedAt: v.number() }).index("by_day", ["day"]),
+  webActivities: defineTable({ ...webActivity.fields, updatedAt: v.number() })
+    .index("by_entry_id", ["entryId"])
+    .index("by_start", ["start"]),
+  webStatus: defineTable({ ...webStatus.fields, syncedAt: v.number() }),
+  webLoginAttempts: defineTable({ key: v.string(), day: v.string(), count: v.number() })
+    .index("by_key_day", ["key", "day"])
+    .index("by_day", ["day"]),
 });

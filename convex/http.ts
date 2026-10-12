@@ -5,6 +5,8 @@ import { internal } from "./_generated/api";
 import {
   phoneWriteAuthorizationEnvironments,
   replicaReadAuthorizationEnvironments,
+  webReadAuthorizationEnvironments,
+  webSyncAuthorizationEnvironments,
 } from "./authorizationPolicy";
 
 const http = httpRouter();
@@ -43,6 +45,19 @@ async function authorizedFor(
     await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)),
   );
   return environmentNames.some((name) => process.env[name] === actualHash);
+}
+
+/** JSON null means "no value"; Convex optional fields expect the key to be absent. */
+function withoutNulls(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutNulls);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, item]) => item !== null)
+        .map(([key, item]) => [key, withoutNulls(item)]),
+    );
+  }
+  return value;
 }
 
 http.route({
@@ -227,6 +242,64 @@ http.route({
       return json({ error: "unauthorized" }, 401);
     }
     return json({ archives: await ctx.runQuery(internal.replica.list, {}) });
+  }),
+});
+
+http.route({
+  path: "/v1/web/sync",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    if (!(await authorizedFor(request, webSyncAuthorizationEnvironments))) {
+      return json({ error: "unauthorized" }, 401);
+    }
+    const body = withoutNulls(await request.json()) as {
+      days?: never[];
+      activities?: never[];
+      removedActivityIds?: string[];
+      status?: never;
+    };
+    try {
+      return json(
+        await ctx.runMutation(internal.web.ingest, {
+          days: body.days ?? [],
+          activities: body.activities ?? [],
+          removedActivityIds: body.removedActivityIds,
+          status: body.status,
+        }),
+      );
+    } catch (error) {
+      return json({ error: String(error) }, 400);
+    }
+  }),
+});
+
+http.route({
+  path: "/v1/web/dashboard",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    if (!(await authorizedFor(request, webReadAuthorizationEnvironments))) {
+      return json({ error: "unauthorized" }, 401);
+    }
+    return json(await ctx.runQuery(internal.web.dashboard, {}));
+  }),
+});
+
+http.route({
+  path: "/v1/web/attempt",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    if (!(await authorizedFor(request, webReadAuthorizationEnvironments))) {
+      return json({ error: "unauthorized" }, 401);
+    }
+    const { key, release } = (await request.json()) as { key?: unknown; release?: unknown };
+    if (typeof key !== "string" || key.length < 16 || key.length > 128) {
+      return json({ error: "bad key" }, 400);
+    }
+    if (release === true) {
+      await ctx.runMutation(internal.web.releaseAttempt, { key });
+      return json({ ok: true });
+    }
+    return json(await ctx.runMutation(internal.web.reserveAttempt, { key }));
   }),
 });
 

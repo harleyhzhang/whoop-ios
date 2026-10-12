@@ -13,6 +13,7 @@ import type * as http from "../http.js";
 import type * as phoneReplica from "../phoneReplica.js";
 import type * as phoneReplicaPolicy from "../phoneReplicaPolicy.js";
 import type * as replica from "../replica.js";
+import type * as web from "../web.js";
 
 import type {
   ApiFromModules,
@@ -26,6 +27,7 @@ declare const fullApi: ApiFromModules<{
   phoneReplica: typeof phoneReplica;
   phoneReplicaPolicy: typeof phoneReplicaPolicy;
   replica: typeof replica;
+  web: typeof web;
 }>;
 
 /**
