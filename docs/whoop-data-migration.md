@@ -193,9 +193,25 @@ with the supported export/API plus local BLE collection.
 
 ### Authentication and email OTP handling
 
-Use a current official-app-compatible authentication helper in an interactive
-terminal. Initiate login in the official app, a browser, or iPhone Mirroring.
-The observed challenge can be `EMAIL_OTP`; do not assume it is SMS.
+Run the bundled helper yourself in an interactive macOS Terminal:
+
+```bash
+python3 Tools/whoop_private_login.py
+```
+
+It prompts for email and a masked password, handles `EMAIL_OTP`, `SMS_MFA`,
+or `SOFTWARE_TOKEN_MFA`, then stores only the access/refresh token record in
+the same macOS Keychain service used by `archive/whoop_private_archive.mjs`.
+No password or code is saved. Xcode’s Swift toolchain writes the record through
+stdin, so tokens do not appear in command arguments or temporary files.
+
+`ClientId: ""` is intentional: this endpoint is WHOOP’s Cognito **proxy**,
+which supplies the client ID and secret hash server-side. This is distinct
+from calling AWS Cognito directly or using a Developer API OAuth client.
+The protocol is documented in [Totem’s authentication source](https://github.com/thebriangao/totem/blob/main/src/whoop/cognito.ts);
+no extraction from the installed WHOOP app is needed. If WHOOP refuses access
+or changes the flow, stop and use supported export/API plus local BLE.
+The challenge can arrive by email; do not assume it is SMS.
 
 Handle credentials and the one-time code through a non-logging input channel:
 

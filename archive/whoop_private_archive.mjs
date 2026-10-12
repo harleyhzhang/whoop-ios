@@ -2,7 +2,8 @@
 /**
  * Read-only archive of the WHOOP iOS API surfaces used by the official app.
  *
- * Authentication is loaded from Totem's local 0600 .env. Tokens and request
+ * Authentication is loaded from macOS Keychain (Tools/whoop_private_login.py)
+ * or an explicitly supplied local 0600 token file. Tokens and request
  * headers are never written to the archive. Every response body is retained
  * byte-for-byte with a provenance/checksum record, including non-2xx bodies.
  */
@@ -13,6 +14,7 @@ import { appendFile, chmod, mkdir, readFile, rename, writeFile } from "node:fs/p
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { parseTokenRecord } from "./whoop_token_record.mjs";
 
 const API_ROOT = "https://api.prod.whoop.com";
 const AUTH_ROOT = `${API_ROOT}/auth-service/v3/whoop/`;
@@ -119,9 +121,6 @@ function monthStarts(start, end) {
   return out;
 }
 function days(start, end) { const out = []; for (let d = start; d <= end; d = addDays(d, 1)) out.push(d); return out; }
-function envFile(text) {
-  return Object.fromEntries(text.split(/\r?\n/).filter((line) => line && !line.startsWith("#") && line.includes("=")).map((line) => { const i = line.indexOf("="); return [line.slice(0, i), line.slice(i + 1)]; }));
-}
 function jwtExpiry(token) {
   try { return JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8")).exp * 1000; } catch { return 0; }
 }
@@ -160,7 +159,7 @@ async function saveTokenText(tokenFile, text) {
 
 const args = parseArgs();
 const envText = await loadTokenText(args.tokenFile);
-const auth = envFile(envText);
+const auth = parseTokenRecord(envText);
 let accessToken = auth.WHOOP_IOS_BEARER_TOKEN;
 let refreshToken = auth.WHOOP_COGNITO_REFRESH_TOKEN;
 if (!accessToken || !refreshToken) throw new Error("Private WHOOP tokens are unavailable; authenticate first");
@@ -178,7 +177,7 @@ const records = [];
 let refreshPromise = null;
 
 async function persistTokens() {
-  let next = envText.split(/\r?\n/);
+  let next = Object.entries(auth).map(([key, value]) => `${key}=${value}`);
   const put = (key, value) => {
     const index = next.findIndex((line) => line.startsWith(`${key}=`));
     if (index >= 0) next[index] = `${key}=${value}`; else next.push(`${key}=${value}`);
@@ -200,6 +199,7 @@ async function refreshAccessToken() {
         "amz-sdk-invocation-id": randomUUID(),
         "user-agent": `aws-sdk-swift/1.5.86 ua/2.1 api/cognito_identity_provider#1.5.86 os/ios#26.3.1 lang/swift#5.10 m/D,N,Z,b`,
       },
+      // WHOOP’s proxy supplies ClientId and SECRET_HASH; the blank ID is intentional.
       body: JSON.stringify({ AuthFlow: "REFRESH_TOKEN_AUTH", AuthParameters: { REFRESH_TOKEN: refreshToken }, ClientId: "" }),
     });
     if (!response.ok) throw new Error(`WHOOP token refresh failed: HTTP ${response.status}`);

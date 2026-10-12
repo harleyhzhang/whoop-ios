@@ -76,10 +76,19 @@ archive/whoop_archive.py --config ~/.config/whoop/env archive
 **Official-app API** (unsupported, read-only, may break):
 
 ```bash
-archive/whoop_private_archive.mjs --start 2025-01-01 --end 2025-12-31
+python3 Tools/whoop_private_login.py
+node archive/whoop_private_archive.mjs --start 2025-01-01 --end 2025-12-31
 ```
 
-Tokens live in the macOS Keychain, never in the archive.
+Run the login command yourself in macOS Terminal. It prompts for your email,
+masked password, and an email/SMS/authenticator code if requested. Only the
+resulting tokens live in macOS Keychain; passwords and codes are not saved.
+The helper uses the installed Swift toolchain to write Keychain data through
+stdin. Do not paste credentials into chat or command arguments.
+
+An empty `ClientId` is intentional here: WHOOP’s proxy supplies the client ID
+and secret hash. A Developer API client ID is for the separate OAuth flow
+above and does not fill this field. See the [migration guide](whoop-data-migration.md#authentication-and-email-otp-handling).
 
 **Build the seed the app imports:**
 
