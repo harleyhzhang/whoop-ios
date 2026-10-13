@@ -3,6 +3,7 @@ import Foundation
 enum WhoopAutomaticSleepPolicy {
     static let reopenWindow: TimeInterval = 90 * 60
     static let sameMorningReopenWindow: TimeInterval = 2 * 60 * 60
+    static let middleOfNightReopenWindow: TimeInterval = 3 * 60 * 60
     static let primarySleepMinimum: TimeInterval = 3 * 60 * 60
 
     /// The ordinary 90-minute window handles interruptions anywhere in a
@@ -18,14 +19,26 @@ enum WhoopAutomaticSleepPolicy {
         let interruption = nextAsleepTimestamp - lastAsleepTimestamp
         guard interruption >= 0 else { return false }
         if interruption <= reopenWindow { return true }
-        guard interruption <= sameMorningReopenWindow,
-            lastAsleepTimestamp - firstAsleepTimestamp >= primarySleepMinimum
-        else { return false }
 
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = timeZone
         let lastAsleep = Date(timeIntervalSince1970: lastAsleepTimestamp)
         let nextAsleep = Date(timeIntervalSince1970: nextAsleepTimestamp)
+
+        // A wake that begins between 8pm and 4am and ends in sleep before
+        // 8am is one night, even when neither half alone reaches the
+        // primary-sleep minimum.
+        let wakeHour = calendar.component(.hour, from: lastAsleep)
+        if interruption <= middleOfNightReopenWindow,
+            wakeHour >= 20 || wakeHour < 4,
+            calendar.component(.hour, from: nextAsleep) < 8
+        {
+            return true
+        }
+
+        guard interruption <= sameMorningReopenWindow,
+            lastAsleepTimestamp - firstAsleepTimestamp >= primarySleepMinimum
+        else { return false }
         return calendar.isDate(lastAsleep, inSameDayAs: nextAsleep)
             && calendar.component(.hour, from: nextAsleep) < 12
     }

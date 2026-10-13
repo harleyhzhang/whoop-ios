@@ -93,6 +93,53 @@ final class WhoopUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Year"].exists)
     }
 
+    func testHeaderDateOpensHistoryAndMetricTrend() {
+        let app = configuredApplication()
+        app.launchEnvironment["WHOOP_DEMO_DATA"] = "1"
+        app.launch()
+        let open = app.buttons["header.date"]
+        XCTAssertTrue(open.waitForExistence(timeout: 5))
+        open.tap()
+        let date = app.buttons["history.date"]
+        XCTAssertTrue(date.waitForExistence(timeout: 5))
+        let latest = date.label
+        XCTAssertFalse(app.buttons["history.next"].isEnabled)
+        app.buttons["history.previous"].tap()
+        XCTAssertNotEqual(date.label, latest)
+        XCTAssertTrue(app.buttons["history.next"].isEnabled)
+        app.buttons["history.metric.sleep"].tap()
+        let week = app.buttons["7D"]
+        XCTAssertTrue(week.waitForExistence(timeout: 5), app.debugDescription)
+        week.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["history.detail.value"].exists)
+        XCTAssertTrue(
+            app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'history.row.'")).firstMatch.exists)
+    }
+
+    func testStrainStartsAndStopsAnActivity() {
+        let app = configuredApplication()
+        app.launchEnvironment["WHOOP_DEMO_DATA"] = "1"
+        app.launch()
+        let strain = app.buttons["card.strain"]
+        XCTAssertTrue(strain.waitForExistence(timeout: 5))
+        strain.tap()
+        let running = app.buttons["log.choice.running"]
+        XCTAssertTrue(running.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["log.choice.pickleball"].exists)
+        running.tap()
+        let start = app.buttons["log.start"]
+        XCTAssertTrue(start.waitForExistence(timeout: 5))
+        start.tap()
+        let end = app.buttons["log.end"]
+        XCTAssertTrue(end.waitForExistence(timeout: 5))
+        end.tap()
+        let save = app.buttons["Save"]
+        XCTAssertTrue(save.waitForExistence(timeout: 5))
+        save.tap()
+        XCTAssertTrue(app.buttons["card.strain"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["log.live"].exists)
+    }
+
     private func configuredApplication() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-ApplePersistenceIgnoreState", "YES"]

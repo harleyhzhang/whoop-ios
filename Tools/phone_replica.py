@@ -142,7 +142,12 @@ def decrypt_chunk(key: bytes, identifier: str, encrypted: bytes) -> bytes:
     if len(encrypted) < 28:
         raise RuntimeError(f"Encrypted chunk {identifier[:12]} is truncated")
     compressed = AESGCM(key).decrypt(encrypted[:12], encrypted[12:], identifier.encode())
-    return zlib.decompress(compressed)
+    try:
+        return zlib.decompress(compressed)
+    except zlib.error:
+        # Apple COMPRESSION_ZLIB emits raw DEFLATE; Python seeds use zlib framing.
+        # Authentication above and the restore's chunk/fingerprint checks cover both.
+        return zlib.decompress(compressed, wbits=-zlib.MAX_WBITS)
 
 
 def seed(database: Path, site_url: str, chunk_size: int) -> None:

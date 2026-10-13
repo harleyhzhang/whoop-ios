@@ -15,8 +15,30 @@ enum WhoopLaunchOverrides {
         value(for: "WHOOP_MOCK_CONNECTED") == "1"
     }
 
+    /// Simulator design review opens a sheet directly (`sleep` or `alarm`).
+    static var previewSheet: DashboardSheet? {
+        #if DEBUG && targetEnvironment(simulator)
+            switch value(for: "WHOOP_PREVIEW_SHEET") {
+            case "sleep": .sleep
+            case "alarm": .alarm
+            default: nil
+            }
+        #else
+            nil
+        #endif
+    }
+
     static var isCharging: Bool {
         value(for: "WHOOP_MOCK_CHARGING") == "1"
+    }
+
+    /// Simulator-only stand-in heart rate while an activity is live.
+    static var mocksHeartRate: Bool {
+        #if DEBUG && targetEnvironment(simulator)
+            value(for: "WHOOP_MOCK_HEART_RATE") == "1"
+        #else
+            false
+        #endif
     }
 
     static var batteryLevel: Int? {

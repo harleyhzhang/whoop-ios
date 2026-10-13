@@ -54,6 +54,9 @@ enum WhoopCommand: Equatable {
     case acknowledgeHistoryChunk([UInt8])
     case realtimeSensors(enabled: Bool)
     case realtimeHeartRate(enabled: Bool)
+    case setAlarm(unix: UInt32)
+    case disableAlarm
+    case buzz
 
     var opcode: UInt8 {
         switch self {
@@ -62,8 +65,14 @@ enum WhoopCommand: Equatable {
         case .acknowledgeHistoryChunk: 23
         case .realtimeSensors: 0x3F
         case .realtimeHeartRate: 0x03
+        case .setAlarm: 66
+        case .disableAlarm: 69
+        case .buzz: 19
         }
     }
+
+    /// WHOOP 5 waveform pair used for both the notification buzz and the wake alarm.
+    private static let waveform: [UInt8] = [47, 152, 0, 0, 0, 0, 0, 0]
 
     var payload: [UInt8] {
         switch self {
@@ -72,6 +81,13 @@ enum WhoopCommand: Equatable {
         case .acknowledgeHistoryChunk(let endData): [0x01] + endData
         case .realtimeSensors(let enabled), .realtimeHeartRate(let enabled):
             [enabled ? 0x01 : 0x00]
+        case .setAlarm(let unix):
+            // Revision 4, alarm slot 1, epoch seconds, zero subseconds, then the
+            // haptic pattern: waveform, loop control, 7 loops, 30 s duration.
+            [0x04, 0x01] + withUnsafeBytes(of: unix.littleEndian, Array.init) + [0, 0]
+                + Self.waveform + [0x00, 0x00, 0x07, 30]
+        case .disableAlarm: [0x02, 0xFF]
+        case .buzz: [0x01] + Self.waveform + [0x00, 0x00, 0x01]
         }
     }
 

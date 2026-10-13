@@ -59,7 +59,7 @@ enum HealthMetric: String, CaseIterable, Identifiable {
         case .rhr: .red
         case .sleep: Theme.Palette.sleep
         case .recovery: Theme.Palette.muted
-        case .strain: .blue
+        case .strain: Theme.Palette.strain
         }
     }
     func color(for value: Double?) -> Color {

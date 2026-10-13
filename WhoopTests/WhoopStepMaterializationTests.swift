@@ -231,11 +231,11 @@ extension WhoopSleepStateTests {
         }
 
         XCTAssertEqual(records.map(\.stepCount), [7_493, 8_123])
-        XCTAssertEqual(records.map(\.source), ["whoop_private_ios_api", "local"])
+        XCTAssertEqual(records.map(\.source), ["whoop_official", "local"])
         let recovery: [DailyRecoveryRecord] = try await withCheckedThrowingContinuation { continuation in
             store.loadDailyRecoveryRecords { continuation.resume(with: $0) }
         }
         XCTAssertEqual(recovery.map(\.score), [91])
-        XCTAssertEqual(recovery.map(\.source), ["whoop_private_ios_api"])
+        XCTAssertEqual(recovery.map(\.source), ["whoop_official"])
     }
 }

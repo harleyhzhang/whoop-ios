@@ -144,17 +144,17 @@ def recovery_features(
 
 def boosted_model() -> GradientBoostingRegressor:
     return GradientBoostingRegressor(
-        n_estimators=350,
+        n_estimators=600,
         max_depth=2,
         min_samples_leaf=6,
-        learning_rate=0.02,
+        learning_rate=0.05,
         loss="huber",
         random_state=3,
     )
 
 
 def ridge_model() -> Any:
-    return make_pipeline(SimpleImputer(strategy="median"), StandardScaler(), Ridge(alpha=1))
+    return make_pipeline(SimpleImputer(strategy="median"), StandardScaler(), Ridge(alpha=50))
 
 
 def chronological_validation(inputs: np.ndarray, targets: np.ndarray) -> dict[str, float]:

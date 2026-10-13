@@ -231,7 +231,8 @@ extension WhoopStore {
                 sleep_consistency_percentage = excluded.sleep_consistency_percentage,
                 sleep_efficiency_percentage = excluded.sleep_efficiency_percentage,
                 sleep_sufficiency_percentage = excluded.sleep_sufficiency_percentage
-            WHERE daily_health_metric.source = 'whoop_api'
+            WHERE daily_health_metric.source IN ('whoop_api', 'whoop_account_export')
+              AND excluded.source IN ('whoop_api', 'whoop_account_export')
               AND excluded.source_updated_at >= daily_health_metric.source_updated_at
             """
         var statement: OpaquePointer?
