@@ -478,7 +478,7 @@ final class WhoopCollector: NSObject {
     }
 
     func testAlarm() {
-        send(.runAlarm, label: "RUN_ALARM")
+        send(.buzz, label: "RUN_HAPTIC_PATTERN_MAVERICK")
     }
 
     /// Re-arms tomorrow's alarm (the strap clears it after firing) or clears
@@ -497,7 +497,7 @@ final class WhoopCollector: NSObject {
         commandSequence &+= 1
         let frame = command.frame(sequence: commandSequence)
         record("Sending \(label), seq \(commandSequence): \(frame.map { String(format: "%02X", $0) }.joined(separator: " "))")
-        peripheral.writeValue(Data(frame), for: commandCharacteristic, type: .withoutResponse)
+        peripheral.writeValue(Data(frame), for: commandCharacteristic, type: .withResponse)
     }
 
     private func scheduleHistoricalSync(after delay: Duration = .seconds(15 * 60)) {

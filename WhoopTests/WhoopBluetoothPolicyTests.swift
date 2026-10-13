@@ -112,12 +112,12 @@ final class WhoopBluetoothPolicyTests: XCTestCase {
         XCTAssertEqual(WhoopCommand.setAlarm(unix: 0x6720_1A2B).opcode, 66)
         XCTAssertEqual(
             WhoopCommand.setAlarm(unix: 0x6720_1A2B).payload,
-            [0x01, 0x2B, 0x1A, 0x20, 0x67, 0, 0, 0, 0]
+            [0x04, 0x01, 0x2B, 0x1A, 0x20, 0x67, 0, 0, 47, 152, 0, 0, 0, 0, 0, 0, 0, 0, 7, 30]
         )
-        XCTAssertEqual(WhoopCommand.getAlarm.opcode, 67)
-        XCTAssertEqual(WhoopCommand.runAlarm.opcode, 68)
         XCTAssertEqual(WhoopCommand.disableAlarm.opcode, 69)
-        XCTAssertEqual(WhoopCommand.disableAlarm.payload, [0x00])
+        XCTAssertEqual(WhoopCommand.disableAlarm.payload, [0x02, 0xFF])
+        XCTAssertEqual(WhoopCommand.buzz.opcode, 19)
+        XCTAssertEqual(WhoopCommand.buzz.payload, [0x01, 47, 152, 0, 0, 0, 0, 0, 0, 0, 0, 1])
     }
 
     func testAlarmArmsNextOccurrenceOrClearsStrap() {
