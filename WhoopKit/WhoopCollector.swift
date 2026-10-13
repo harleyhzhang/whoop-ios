@@ -15,6 +15,7 @@ final class WhoopCollector: NSObject {
     private(set) var isSleeping = false
     /// Latest strap heart rate, for live activities.
     private(set) var heartRate: Int?
+    private(set) var alarm = WhoopAlarmStore.load()
     private(set) var lastConnectedAt: Date?
     @ObservationIgnored private var lastHeartRateReceivedAt: Date?
     @ObservationIgnored private var canAttemptHandshake = false
@@ -460,12 +461,43 @@ final class WhoopCollector: NSObject {
             peripheral.setNotifyValue(true, for: heartRateCharacteristic)
         }
         armRealtimeHeartRate()
+        syncAlarm()
         scheduleHistoricalSync(after: .seconds(1.5))
     }
 
     func refreshHistoricalData() {
         guard isConnected else { return }
+        syncAlarm()
         beginHistoricalSync()
+    }
+
+    func updateAlarm(_ alarm: WhoopAlarm) {
+        self.alarm = alarm
+        WhoopAlarmStore.save(alarm)
+        syncAlarm()
+    }
+
+    func testAlarm() {
+        send(.runAlarm, label: "RUN_ALARM")
+    }
+
+    /// Re-arms tomorrow's alarm (the strap clears it after firing) or clears
+    /// any stale strap alarm while ours is off. Applied again on next connect.
+    private func syncAlarm() {
+        let command = alarm.command(after: .now)
+        send(command, label: command == .disableAlarm ? "DISABLE_ALARM" : "SET_ALARM_TIME")
+    }
+
+    private func send(_ command: WhoopCommand, label: String) {
+        guard let peripheral,
+            peripheral.state == .connected,
+            handshakePhase.isAcknowledged,
+            let commandCharacteristic
+        else { return }
+        commandSequence &+= 1
+        let frame = command.frame(sequence: commandSequence)
+        record("Sending \(label), seq \(commandSequence): \(frame.map { String(format: "%02X", $0) }.joined(separator: " "))")
+        peripheral.writeValue(Data(frame), for: commandCharacteristic, type: .withoutResponse)
     }
 
     private func scheduleHistoricalSync(after delay: Duration = .seconds(15 * 60)) {

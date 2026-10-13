@@ -126,6 +126,23 @@ extension WhoopSleepStateTests {
         XCTAssertLessThan(duration, 397)
     }
 
+    func testMiddleOfNightWakeKeepsOneNight() throws {
+        let timeZone = try XCTUnwrap(TimeZone(identifier: "America/Toronto"))
+        let formatter = ISO8601DateFormatter()
+        // 2026-10-13: asleep 00:32-02:25, awake until 04:47 local.
+        let first = try XCTUnwrap(formatter.date(from: "2026-10-13T04:32:00Z"))
+        let last = try XCTUnwrap(formatter.date(from: "2026-10-13T06:25:00Z"))
+        let resumed = try XCTUnwrap(formatter.date(from: "2026-10-13T08:47:00Z"))
+        XCTAssertTrue(
+            WhoopAutomaticSleepPolicy.shouldMergeAsleepRuns(
+                firstAsleepTimestamp: first.timeIntervalSince1970,
+                lastAsleepTimestamp: last.timeIntervalSince1970,
+                nextAsleepTimestamp: resumed.timeIntervalSince1970,
+                timeZone: timeZone
+            )
+        )
+    }
+
     func testExtendedReopenDoesNotMergeShortSleepOrAfternoonNap() throws {
         let timeZone = try XCTUnwrap(TimeZone(identifier: "America/Toronto"))
         let formatter = ISO8601DateFormatter()

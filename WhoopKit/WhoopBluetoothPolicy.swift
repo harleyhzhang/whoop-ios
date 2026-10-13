@@ -54,6 +54,10 @@ enum WhoopCommand: Equatable {
     case acknowledgeHistoryChunk([UInt8])
     case realtimeSensors(enabled: Bool)
     case realtimeHeartRate(enabled: Bool)
+    case setAlarm(unix: UInt32)
+    case getAlarm
+    case runAlarm
+    case disableAlarm
 
     var opcode: UInt8 {
         switch self {
@@ -62,6 +66,10 @@ enum WhoopCommand: Equatable {
         case .acknowledgeHistoryChunk: 23
         case .realtimeSensors: 0x3F
         case .realtimeHeartRate: 0x03
+        case .setAlarm: 66
+        case .getAlarm: 67
+        case .runAlarm: 68
+        case .disableAlarm: 69
         }
     }
 
@@ -72,6 +80,9 @@ enum WhoopCommand: Equatable {
         case .acknowledgeHistoryChunk(let endData): [0x01] + endData
         case .realtimeSensors(let enabled), .realtimeHeartRate(let enabled):
             [enabled ? 0x01 : 0x00]
+        case .setAlarm(let unix):
+            [0x01] + withUnsafeBytes(of: unix.littleEndian, Array.init) + [0, 0, 0, 0]
+        case .getAlarm, .runAlarm, .disableAlarm: [0x00]
         }
     }
 

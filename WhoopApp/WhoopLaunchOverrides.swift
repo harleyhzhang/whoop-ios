@@ -15,6 +15,19 @@ enum WhoopLaunchOverrides {
         value(for: "WHOOP_MOCK_CONNECTED") == "1"
     }
 
+    /// Simulator design review opens a sheet directly (`sleep` or `alarm`).
+    static var previewSheet: DashboardSheet? {
+        #if DEBUG && targetEnvironment(simulator)
+            switch value(for: "WHOOP_PREVIEW_SHEET") {
+            case "sleep": .sleep
+            case "alarm": .alarm
+            default: nil
+            }
+        #else
+            nil
+        #endif
+    }
+
     static var isCharging: Bool {
         value(for: "WHOOP_MOCK_CHARGING") == "1"
     }

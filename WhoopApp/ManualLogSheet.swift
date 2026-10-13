@@ -6,6 +6,7 @@ enum DashboardSheet: Identifiable, Hashable {
     case activity
     case sleep
     case live
+    case alarm
 
     var id: Self { self }
 
@@ -22,13 +23,18 @@ struct DashboardSheetContent: View {
     let sheet: DashboardSheet
     let snapshot: DashboardHistorySnapshot
     let log: ManualLogStore
+    let collector: WhoopCollector
 
     var body: some View {
         switch sheet {
         case .history(let metric): HistoryBrowser(snapshot: snapshot, log: log, initialMetric: metric)
         case .activity: ManualLogSheet(category: .activity, log: log)
-        case .sleep: ManualLogSheet(category: .sleep, log: log)
+        case .sleep: ManualLogSheet(category: .sleep, log: log, collector: collector)
         case .live: LiveActivityScreen(log: log)
+        case .alarm:
+            NavigationStack { AlarmScreen(collector: collector) }
+                .tint(Theme.Palette.text)
+                .preferredColorScheme(.dark)
         }
     }
 }
@@ -40,6 +46,7 @@ struct ManualLogSheet: View {
     @Environment(\.dismiss) private var dismiss
     let category: Category
     let log: ManualLogStore
+    var collector: WhoopCollector? = nil
     @State private var query = ""
 
     private var todayEntries: [ManualEntry] {
@@ -74,6 +81,15 @@ struct ManualLogSheet: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("log.live")
+                    }
+                    if category == .sleep, let collector {
+                        NavigationLink {
+                            AlarmScreen(collector: collector)
+                        } label: {
+                            AlarmRow(alarm: collector.alarm)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("log.alarm")
                     }
                     if !todayEntries.isEmpty {
                         CardList(items: todayEntries) { entry in

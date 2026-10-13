@@ -108,6 +108,34 @@ final class WhoopBluetoothPolicyTests: XCTestCase {
         XCTAssertEqual(WhoopCommand.realtimeHeartRate(enabled: true).payload, [0x01])
     }
 
+    func testAlarmCommandsMatchStrapProtocol() {
+        XCTAssertEqual(WhoopCommand.setAlarm(unix: 0x6720_1A2B).opcode, 66)
+        XCTAssertEqual(
+            WhoopCommand.setAlarm(unix: 0x6720_1A2B).payload,
+            [0x01, 0x2B, 0x1A, 0x20, 0x67, 0, 0, 0, 0]
+        )
+        XCTAssertEqual(WhoopCommand.getAlarm.opcode, 67)
+        XCTAssertEqual(WhoopCommand.runAlarm.opcode, 68)
+        XCTAssertEqual(WhoopCommand.disableAlarm.opcode, 69)
+        XCTAssertEqual(WhoopCommand.disableAlarm.payload, [0x00])
+    }
+
+    func testAlarmArmsNextOccurrenceOrClearsStrap() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Toronto")!
+        let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 13, hour: 8))!
+        let alarm = WhoopAlarm(isEnabled: true, hour: 7, minute: 30)
+        let tomorrow = calendar.date(
+            from: DateComponents(year: 2026, month: 10, day: 14, hour: 7, minute: 30))!
+
+        XCTAssertEqual(alarm.nextFire(after: now, calendar: calendar), tomorrow)
+        XCTAssertEqual(
+            alarm.command(after: now, calendar: calendar),
+            .setAlarm(unix: UInt32(tomorrow.timeIntervalSince1970))
+        )
+        XCTAssertEqual(WhoopAlarm.default.command(after: now, calendar: calendar), .disableAlarm)
+    }
+
     func testCommandFramePadsPayloadAndPreservesSequenceAndCommand() {
         let frame = WhoopBluetoothPolicy.commandFrame(
             command: 0x17,

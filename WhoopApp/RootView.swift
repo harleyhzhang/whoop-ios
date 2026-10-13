@@ -67,7 +67,10 @@ struct RootView: View {
             dashboard(currentDate: context.date)
         }
         .preferredColorScheme(.dark)
-        .sheet(item: $sheet) { DashboardSheetContent(sheet: $0, snapshot: history.snapshot, log: log) }
+        .sheet(item: $sheet) {
+            DashboardSheetContent(sheet: $0, snapshot: history.snapshot, log: log, collector: whoopCollector)
+        }
+        .onAppear { if sheet == nil { sheet = WhoopLaunchOverrides.previewSheet } }
         .onChange(of: whoopCollector.heartRate) { _, bpm in
             if let bpm { log.record(heartRate: bpm) }
         }
