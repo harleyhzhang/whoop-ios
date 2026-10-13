@@ -236,6 +236,15 @@ final class ManualLogStore {
         {
             loaded = saved
         }
+        // One-time cleanup: early hand-logged sleeps duplicated strap-detected sleep.
+        let purgeKey = "ManualLog.purgedHandLoggedSleep.v1"
+        if url != nil, !UserDefaults.standard.bool(forKey: purgeKey) {
+            loaded.removeAll { $0.kind.isSleep }
+            if let url, let data = try? JSONEncoder().encode(loaded) {
+                try? data.write(to: url, options: [.atomic, .completeFileProtection])
+            }
+            UserDefaults.standard.set(true, forKey: purgeKey)
+        }
         var history: [ManualEntry] = []
         if let importedURL, let data = try? Data(contentsOf: importedURL) {
             history = ImportedActivities.decode(data)
