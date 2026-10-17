@@ -66,7 +66,7 @@ final class LocalStrainRepository {
             guard score.isFinite, (0...21).contains(score) else { return }
             records[day] = DailyStrainRecord(
                 dateKey: day, score: score,
-                source: "whoop_private_ios_api", estimate: nil)
+                source: "whoop_official", estimate: nil)
         }
         guard let model else { return Result(records: sorted(records), derivations: [:]) }
         var peripheral: String?

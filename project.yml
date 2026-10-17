@@ -24,6 +24,9 @@ targets:
     sources:
       - path: WhoopApp
       - path: WhoopKit
+      - path: Shared
+    dependencies:
+      - target: WhoopWidgets
     postBuildScripts:
       - name: Embed private WHOOP history
         basedOnDependencyAnalysis: false
@@ -37,6 +40,7 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         WHOOPSourceCommit: "$(WHOOP_SOURCE_COMMIT)"
         NSBluetoothAlwaysUsageDescription: Establish a local encrypted link to your WHOOP strap and read live measurements.
+        NSSupportsLiveActivities: true
         UIBackgroundModes:
           - bluetooth-central
         UIApplicationSceneManifest:
@@ -54,6 +58,27 @@ targets:
       testTargets:
         - WhoopTests
         - WhoopUITests
+  WhoopWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: WhoopWidgets
+      - path: Shared
+      - path: WhoopApp/Theme.swift
+    info:
+      path: WhoopWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: WHOOP
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: "$(WHOOP_BUNDLE_ID).widgets"
+        PRODUCT_NAME: WhoopWidgets
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
   WhoopTests:
     type: bundle.unit-test
     platform: iOS

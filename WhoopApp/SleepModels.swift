@@ -204,9 +204,17 @@ struct PublishedDashboardDay: Sendable {
         }
         guard let health = healthRecords.last,
             let dayKey = DayKey(rawValue: health.dateKey),
-            let steps = stepRecords.last(where: { DayKey(rawValue: $0.dateKey) == dayKey }),
             let recovery = recoveryRecords.last(where: { DayKey(rawValue: $0.dateKey) == dayKey })
         else {
+            self.health = nil
+            self.steps = nil
+            self.recovery = nil
+            return
+        }
+        // A WHOOP account export never carries steps, so its days publish
+        // without them; strap-derived days still require same-day steps.
+        let steps = stepRecords.last(where: { DayKey(rawValue: $0.dateKey) == dayKey })
+        guard steps != nil || health.source == Self.accountExportSource else {
             self.health = nil
             self.steps = nil
             self.recovery = nil
@@ -217,6 +225,8 @@ struct PublishedDashboardDay: Sendable {
         self.steps = steps
         self.recovery = recovery
     }
+
+    static let accountExportSource = "whoop_account_export"
 
     var date: Date? { health?.date ?? steps?.date }
 }

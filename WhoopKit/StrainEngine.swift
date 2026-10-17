@@ -6,16 +6,28 @@ struct StrainCalibration: Codable, Sendable {
     let exponent: Double
     let loadScale: Double
     let scoreScale: Double
+    /// Everyday-movement term, fitted to WHOOP day strain on non-workout days.
+    /// Credits heart rate between resting and 50% of max, which the cardio
+    /// term ignores. Absent in older calibrations.
+    var lowIntensityScale: Double? = nil
+    var lowIntensityExponent: Double? = nil
 
     var isValid: Bool {
         exponent.isFinite && (0.1...10).contains(exponent)
             && loadScale.isFinite && loadScale > 0
             && scoreScale.isFinite && (2...15).contains(scoreScale)
+            && (lowIntensityScale.map { $0.isFinite && $0 >= 0 } ?? true)
+            && (lowIntensityExponent.map { $0.isFinite && (0.1...10).contains($0) } ?? true)
     }
 
-    func loadPerMinute(heartRate: Double, maximumHeartRate: Double) -> Double {
+    func loadPerMinute(heartRate: Double, maximumHeartRate: Double, restingHeartRate: Double) -> Double {
         let relative = min(max(heartRate / maximumHeartRate, 0), 1)
-        return pow(max((relative - 0.5) / 0.5, 0), exponent)
+        let cardio = pow(max((relative - 0.5) / 0.5, 0), exponent)
+        guard let lowIntensityScale, let lowIntensityExponent, maximumHeartRate > restingHeartRate else {
+            return cardio
+        }
+        let reserve = min(max((heartRate - restingHeartRate) / (maximumHeartRate - restingHeartRate), 0), 1)
+        return cardio + lowIntensityScale * pow(reserve, lowIntensityExponent)
     }
 
     func score(load: Double) -> Double {
@@ -141,7 +153,8 @@ struct StrainAccumulator {
             cardiovascularLoad +=
                 seconds / 60
                 * calibration.loadPerMinute(
-                    heartRate: sample.heartRate, maximumHeartRate: maximumHeartRate)
+                    heartRate: sample.heartRate, maximumHeartRate: maximumHeartRate,
+                    restingHeartRate: restingHeartRate)
             observedSeconds += seconds
             cursor = sliceEnd
         }

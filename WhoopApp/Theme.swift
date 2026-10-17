@@ -23,6 +23,16 @@ enum Theme {
         /// Per-metric chart accents.
         static let steps = Color(red: 0.64, green: 0.56, blue: 0.86)
         static let sleep = Color(red: 0.39, green: 0.69, blue: 1.0)
+        static let strain = Color.blue
+
+        /// Heart-rate zones 1 through 5.
+        static let zones: [Color] = [
+            Color(red: 0.55, green: 0.6, blue: 0.68),
+            Color(red: 0.27, green: 0.6, blue: 1),
+            Color(red: 0.2, green: 0.8, blue: 0.45),
+            Color(red: 1, green: 0.62, blue: 0.1),
+            Color(red: 1, green: 0.25, blue: 0.3),
+        ]
 
         /// WHOOP's published recovery band colors.
         static let recoveryLow = Color(red: 1, green: 0, blue: 38 / 255)
@@ -42,12 +52,18 @@ enum Theme {
         static let battery = numericFont(12, .bold)
         /// Card and summary metric labels.
         static let body = font(14, .regular)
+        /// List rows and form labels.
+        static let row = font(16, .regular)
+        /// Primary buttons.
+        static let action = font(17, .semibold)
         /// Header date.
         static let title = font(22, .semibold)
         /// Units beside a metric value.
         static let unit = numericFont(16, .semibold)
         /// Metric values.
         static let value = numericFont(24, .semibold)
+        /// Live activity timer.
+        static let hero = numericFont(56, .semibold)
 
         static func font(_ size: CGFloat, _ weight: Font.Weight) -> Font {
             .system(size: size, weight: weight)
@@ -63,9 +79,25 @@ enum Theme {
         static let glyph = Typography.font(7, .bold)
         static let ring = Typography.font(10, .bold)
         static let label = Typography.font(12, .regular)
+        static let row = Typography.font(16, .semibold)
+        static let hero = Typography.font(34, .semibold)
     }
 
     enum Layout {
+        static let historyTapHeight: CGFloat = 44
+        static let historyChartHeight: CGFloat = 200
+        static let historyLabelSpacing: CGFloat = 4
+        static let sectionSpacing: CGFloat = 24
+        static let rowHeight: CGFloat = 56
+        /// Last-known readings shown while the strap is out of range.
+        static let staleOpacity: Double = 0.4
+        static let rowBadge: CGFloat = 34
+        static let heroBadge: CGFloat = 76
+        static let rowDividerInset: CGFloat = 63
+        static let hairline: CGFloat = 0.5
+        static let actionHeight: CGFloat = 52
+        static let zoneBarHeight: CGFloat = 8
+        static let zoneSpacing: CGFloat = 3
         static let spacing: CGFloat = 12
         static let cornerRadius: CGFloat = 22
         static let cardPadding: CGFloat = 17
