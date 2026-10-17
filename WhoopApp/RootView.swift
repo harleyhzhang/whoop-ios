@@ -78,10 +78,12 @@ struct RootView: View {
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
             history.reload()
+            syncWeb()
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(60))
                 guard !Task.isCancelled else { return }
                 history.reload()
+                syncWeb()
             }
         }
         .onChange(of: scenePhase) { _, phase in
@@ -170,6 +172,22 @@ struct RootView: View {
             }
             .scrollIndicators(.hidden)
         }
+    }
+
+    private func syncWeb(now: Date = .now) {
+        let today = DayKey(date: now, timeZone: .current).rawValue
+        let projection = DashboardCardProjection(
+            snapshot: history.snapshot, published: publishedDay, referenceDate: now
+        ).withStrainFloor(log.strainFloor(on: today), on: today)
+        WebSync.shared.push(
+            days: projection.days,
+            status: WebSync.Status(
+                heartRate: isConnected ? whoopCollector.heartRate : nil,
+                heartRateAt: isConnected && whoopCollector.heartRate != nil
+                    ? now.timeIntervalSince1970 * 1000 : nil,
+                battery: batteryLevel, powerPackBattery: powerPackBatteryLevel,
+                connected: isConnected),
+            now: now)
     }
 
 }

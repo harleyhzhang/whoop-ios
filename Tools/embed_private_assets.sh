@@ -65,3 +65,16 @@ if [ "${WHOOP_REQUIRE_PRIVATE_ASSETS:-0}" = "1" ] && [ "${#missing[@]}" -gt 0 ];
   printf 'error: WHOOP_REQUIRE_PRIVATE_ASSETS=1 but private assets are; missing: %s\n' "${missing[*]}" >&2
   exit 1
 fi
+
+# Optional: website sync credentials for device builds.
+web_config="${resource_root}/whoop-web-config.json"
+if [ "${PLATFORM_NAME}" = "iphoneos" ] && [ -n "${WHOOP_CONVEX_SITE_URL:-}" ] &&
+   web_token="$(security find-generic-password -s "${WHOOP_WEB_KEYCHAIN_SERVICE:-whoop.web}" -a web-sync-token -w 2>/dev/null)"; then
+  WEB_SITE_URL="$WHOOP_CONVEX_SITE_URL" WEB_SYNC_TOKEN="$web_token" \
+    /usr/bin/python3 -c 'import json, os, sys; json.dump({"siteURL": os.environ["WEB_SITE_URL"], "syncToken": os.environ["WEB_SYNC_TOKEN"]}, sys.stdout, separators=(",", ":"))' \
+    > "$web_config"
+  chmod 600 "$web_config"
+  unset web_token
+else
+  /bin/rm -f "$web_config"
+fi

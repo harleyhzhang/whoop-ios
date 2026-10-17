@@ -91,6 +91,7 @@
 		9D59D56BC23D6C4B6A6E25D6 /* ChartValueScaleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58551372AE696587E7788ED1 /* ChartValueScaleTests.swift */; };
 		9DC9FD405070B1EB9E10D994 /* ManualLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 433F944A97AD3774B7568DE8 /* ManualLog.swift */; };
 		A1BCA080A71B734F53838933 /* WhoopStorageTelemetryModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EE6D64DDB44A0A5B263899C /* WhoopStorageTelemetryModels.swift */; };
+		A4E5277D4D2AE9879F25569A /* WebSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BFA2EBF6F8C4982E85476C3 /* WebSync.swift */; };
 		A5D975F570C6CC9FB60A3C6E /* WhoopTestFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE7096BFFF175D5BE830FE4 /* WhoopTestFixtures.swift */; };
 		A77F669CB8A23C59F38433B1 /* WhoopTransportPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0593BA28D3B0A270B12F80D4 /* WhoopTransportPipeline.swift */; };
 		A82CA467511EF4B6C35BCEAE /* WhoopUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48A1B995E54B85531E728248 /* WhoopUITests.swift */; };
@@ -249,6 +250,7 @@
 		953A1BDDD652678F6145058D /* WhoopStorageTelemetry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopStorageTelemetry.swift; sourceTree = "<group>"; };
 		99BF2CA62AE06EC86E6A5C81 /* WhoopDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhoopDiagnosticsTests.swift; sourceTree = "<group>"; };
 		9BA71BAB27E54F03F4201D3F /* RecordedHistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordedHistoryTests.swift; sourceTree = "<group>"; };
+		9BFA2EBF6F8C4982E85476C3 /* WebSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSync.swift; sourceTree = "<group>"; };
 		A0352BAE579BE65AAAD20ADF /* WhoopStore+SQL.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WhoopStore+SQL.swift"; sourceTree = "<group>"; };
 		A3DB09D0456D7E39874016A4 /* ChartValueScale.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartValueScale.swift; sourceTree = "<group>"; };
 		A6E0EE885D5A78FA458728B9 /* WorkoutActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutActivityAttributes.swift; sourceTree = "<group>"; };
@@ -462,6 +464,7 @@
 				6D0D2B529713BDB4403C7600 /* SleepModels.swift */,
 				C4843CF94FC4CFFDC75D6444 /* SummaryRing.swift */,
 				9146F4B7DFC3DBF290107B22 /* Theme.swift */,
+				9BFA2EBF6F8C4982E85476C3 /* WebSync.swift */,
 				61F8694E6502A9D789E27FC5 /* WhoopApp.swift */,
 				4698E5BCD0FBABAFB2EECE60 /* WhoopLaunchOverrides.swift */,
 				4987DA47506AB1E5B5864717 /* WorkoutLiveActivity.swift */,
@@ -748,6 +751,7 @@
 				4C1BFCCA1130F7363931943C /* StrainEngine.swift in Sources */,
 				225536BD527A11955BDAC301 /* SummaryRing.swift in Sources */,
 				3796E9CEF633502664496647 /* Theme.swift in Sources */,
+				A4E5277D4D2AE9879F25569A /* WebSync.swift in Sources */,
 				90A8A8618452B634CC33616B /* WhoopAlarm.swift in Sources */,
 				298B4948EB9919315C8AD4C5 /* WhoopApp.swift in Sources */,
 				616C9C6DF2CE784A125FECA8 /* WhoopBackfillPlanner.swift in Sources */,
