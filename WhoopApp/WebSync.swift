@@ -38,6 +38,9 @@ final class WebSync {
 
     func push(days: [HealthDay], status: Status, now: Date = .now) {
         guard let config else { return }
+        // Skip until history has loaded; an empty snapshot would blank the site.
+        guard days.dropLast().contains(where: { $0.sleep != nil || $0.strain != nil || $0.steps != nil })
+        else { return }
         if let lastSentAt, now.timeIntervalSince(lastSentAt) < Self.interval { return }
         let body = Body(
             days: days.suffix(7).map {
