@@ -7,8 +7,10 @@ import SQLite3
 extension WhoopStore {
     func derivedRecord(
         for candidate: SleepCandidate,
-        now: Date
+        now: Date,
+        dateKey: String? = nil
     ) -> DailyHealthRecord {
+        let dateKey = dateKey ?? candidate.dateKey
         let durationMinutes = candidate.durationMinutes
         let restingHR = restingHeartRate(rows: candidate.asleepRows, cadence: candidate.cadenceSeconds)
         let hrv = nightlyRMSSD(for: candidate)
@@ -18,7 +20,7 @@ extension WhoopStore {
         )
         let efficiency = min(100, durationMinutes / elapsedMinutes * 100)
         let current = SleepScoreNight(
-            dateKey: candidate.dateKey,
+            dateKey: dateKey,
             durationMinutes: durationMinutes,
             efficiencyPercentage: efficiency,
             startMinute: Self.minuteOfDay(candidate.startedAt),
@@ -26,7 +28,7 @@ extension WhoopStore {
         )
         let features = SleepScoreFeatureBuilder.features(
             current: current,
-            history: scoreHistory(before: candidate.dateKey)
+            history: scoreHistory(before: dateKey)
         )
         let timingAgreement = features.last ?? 100
         let modelPrediction = Self.bundledSleepScoreModel?.prediction(features)
@@ -39,7 +41,7 @@ extension WhoopStore {
             )
         let iso = ISO8601DateFormatter()
         return DailyHealthRecord(
-            dateKey: candidate.dateKey,
+            dateKey: dateKey,
             sleepScore: sleepScore,
             sleepDurationMinutes: durationMinutes,
             hrvRMSSDMilliseconds: hrv,
@@ -280,10 +282,7 @@ extension WhoopStore {
         let sql = """
             SELECT sample_at, rr_intervals_json
             FROM whoop_historical_sample
-            WHERE peripheral_id = (
-                SELECT peripheral_id FROM whoop_historical_sample
-                ORDER BY sample_at DESC LIMIT 1
-            )
+            WHERE peripheral_id = (\(WhoopStrainInputIndex.latestPeripheralQuery))
               AND sample_at BETWEEN ? AND ?
               AND sleep_state = 2
               AND rr_intervals_json != '[]'

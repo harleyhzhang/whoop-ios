@@ -180,6 +180,13 @@ struct PublishedDashboardDay: Sendable {
     let steps: DailyStepRecord?
     let recovery: DailyRecoveryRecord?
 
+    /// A night in progress shows each family it can already support.
+    init(provisional: WhoopProvisionalDay) {
+        health = provisional.health
+        steps = provisional.steps
+        recovery = provisional.recovery
+    }
+
     init(
         healthRecords: [DailyHealthRecord],
         stepRecords: [DailyStepRecord],

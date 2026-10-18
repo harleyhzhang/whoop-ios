@@ -58,6 +58,24 @@ struct WhoopSleepSnapshot: Sendable {
     let isSleeping: Bool
     let sampleAt: Date?
     let finalizedRecord: DailyHealthRecord?
+    /// Only meaningful when `evaluatedProvisional`; background analysis skips
+    /// the extra scoring and must not clear what the dashboard shows.
+    let provisional: WhoopProvisionalDay?
+    let evaluatedProvisional: Bool
+
+    init(
+        isSleeping: Bool,
+        sampleAt: Date?,
+        finalizedRecord: DailyHealthRecord?,
+        provisional: WhoopProvisionalDay? = nil,
+        evaluatedProvisional: Bool = false
+    ) {
+        self.isSleeping = isSleeping
+        self.sampleAt = sampleAt
+        self.finalizedRecord = finalizedRecord
+        self.provisional = provisional
+        self.evaluatedProvisional = evaluatedProvisional
+    }
 }
 
 /// A factual account of what the strap actually banked and how each gate judged

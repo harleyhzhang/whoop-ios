@@ -1,11 +1,15 @@
 import SwiftUI
 
 enum DashboardCurrentDayPolicy {
+    /// The night in progress is the current day. Without one, detected sleep
+    /// dashes the previous day rather than presenting it as current.
     static func displayedDay(
         snapshot: DashboardHistorySnapshot,
+        provisional: WhoopProvisionalDay? = nil,
         metricsArePending: Bool
     ) -> PublishedDashboardDay {
-        PublishedDashboardDay(
+        if let provisional { return PublishedDashboardDay(provisional: provisional) }
+        return PublishedDashboardDay(
             healthRecords: metricsArePending ? [] : snapshot.healthRecords,
             stepRecords: metricsArePending ? [] : snapshot.stepRecords,
             recoveryRecords: metricsArePending ? [] : snapshot.recoveryRecords
@@ -31,8 +35,13 @@ struct RootView: View {
         }
         return DashboardCurrentDayPolicy.displayedDay(
             snapshot: history.snapshot,
+            provisional: provisionalDay,
             metricsArePending: sleepMetricsArePending
         )
+    }
+
+    private var provisionalDay: WhoopProvisionalDay? {
+        WhoopLaunchOverrides.provisionalDay ?? whoopCollector.provisionalSleep.day
     }
 
     private var sleepMetricsArePending: Bool {
@@ -86,7 +95,6 @@ struct RootView: View {
             WhoopRuntimeDiagnostics.shared.recordEvent("foreground")
             whoopCollector.refreshHistoricalData()
             powerPackMonitor.refresh()
-            WhoopStore.shared.writeSleepDiagnostics()
             replicaCoordinator.requestSync(reason: .foreground)
         }
         .onReceive(NotificationCenter.default.publisher(for: .whoopDailyHealthUpdated)) {
@@ -108,7 +116,8 @@ struct RootView: View {
     private func dashboard(currentDate: Date) -> some View {
         let referenceDate = publishedDay.date ?? currentDate
         let projection = DashboardCardProjection(
-            snapshot: history.snapshot, published: publishedDay, referenceDate: referenceDate
+            snapshot: history.snapshot.overlaying(provisionalDay),
+            published: publishedDay, referenceDate: referenceDate
         )
         return ZStack {
             Theme.Palette.canvas.ignoresSafeArea()
