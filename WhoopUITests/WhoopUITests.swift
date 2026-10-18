@@ -72,6 +72,28 @@ final class WhoopUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Process"].exists)
     }
 
+    func testRunningNightShowsMeasuredValuesBeforeItsScores() {
+        let app = configuredApplication()
+        app.launchEnvironment["WHOOP_MOCK_SLEEPING"] = "1"
+        app.launchEnvironment["WHOOP_MOCK_PROVISIONAL"] = "95,40,30"
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["Sleep"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["Sleep, —"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["Recovery, —"].exists)
+    }
+
+    func testRunningNightRollsItsScoresPastTheEvidenceMinimum() {
+        let app = configuredApplication()
+        app.launchEnvironment["WHOOP_MOCK_SLEEPING"] = "1"
+        app.launchEnvironment["WHOOP_MOCK_PROVISIONAL"] = "312,72,61"
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["Sleep"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["Sleep, 72%"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["Recovery, 61%"].exists)
+    }
+
     func testDashboardUsesCardsWithoutRangeControlsOrEstimateLabels() {
         let app = configuredApplication()
         app.launch()

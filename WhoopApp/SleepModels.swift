@@ -142,7 +142,7 @@ struct OfficialDailyMetricSeed: Decodable, Sendable {
     let sourceStrainSHA256: String?
 }
 
-struct DailyStepRecord: Hashable, Identifiable, Sendable {
+struct DailyStepRecord: Codable, Hashable, Identifiable, Sendable {
     let dateKey: String
     let stepCount: Int
     let sampleCount: Int
@@ -163,7 +163,7 @@ struct DailyStepRecord: Hashable, Identifiable, Sendable {
     }
 }
 
-struct DailyRecoveryRecord: Hashable, Identifiable, Sendable {
+struct DailyRecoveryRecord: Codable, Hashable, Identifiable, Sendable {
     let dateKey: String
     let score: Double
     let source: String
@@ -179,6 +179,13 @@ struct PublishedDashboardDay: Sendable {
     let health: DailyHealthRecord?
     let steps: DailyStepRecord?
     let recovery: DailyRecoveryRecord?
+
+    /// A night in progress shows each family it can already support.
+    init(provisional: WhoopProvisionalDay) {
+        health = provisional.health
+        steps = provisional.steps
+        recovery = provisional.recovery
+    }
 
     init(
         healthRecords: [DailyHealthRecord],

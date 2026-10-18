@@ -283,13 +283,15 @@ final class WhoopStore: Sendable, WhoopPacketPersisting {
     func refreshSleepSnapshot(
         now: Date = .now,
         allowAutomaticFinalization: Bool = false,
+        includeProvisional: Bool = false,
         completion: @escaping @Sendable (WhoopSleepSnapshot) -> Void
     ) {
         queue.async { [self] in
             completion(
                 analyzeLatestSleep(
                     now: now,
-                    allowAutomaticFinalization: allowAutomaticFinalization
+                    allowAutomaticFinalization: allowAutomaticFinalization,
+                    includeProvisional: includeProvisional
                 ))
         }
     }

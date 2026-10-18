@@ -140,14 +140,18 @@ enum WhoopReplicaSnapshotter {
         defer { try? handle.close() }
         var sourceAuthentication = HMAC<SHA256>(key: key)
         var descriptors: [WhoopReplicaChunkDescriptor] = []
-        var index = 0
-        while let plaintext = try handle.read(upToCount: WhoopReplicaCodec.chunkSize),
-            !plaintext.isEmpty
-        {
+        while true {
             try Task.checkCancellation()
-            sourceAuthentication.update(data: plaintext)
-            descriptors.append(
-                WhoopReplicaChunkDescriptor(
+            let index = descriptors.count
+            // FileHandle returns autoreleased buffers, and a detached worker
+            // never drains its pool mid-loop. Without a per-chunk pool the
+            // whole snapshot stays resident until iOS jetsams the app.
+            let descriptor = try autoreleasepool { () throws -> WhoopReplicaChunkDescriptor? in
+                guard let plaintext = try handle.read(upToCount: WhoopReplicaCodec.chunkSize),
+                    !plaintext.isEmpty
+                else { return nil }
+                sourceAuthentication.update(data: plaintext)
+                return WhoopReplicaChunkDescriptor(
                     index: index,
                     identifier: WhoopReplicaCodec.chunkIdentifier(
                         key: key,
@@ -156,8 +160,9 @@ enum WhoopReplicaSnapshotter {
                     ),
                     plainBytes: plaintext.count
                 )
-            )
-            index += 1
+            }
+            guard let descriptor else { break }
+            descriptors.append(descriptor)
         }
         guard !descriptors.isEmpty else { throw WhoopReplicaSnapshotError.readFailed }
         let fingerprint = Data(sourceAuthentication.finalize()).hexEncoded

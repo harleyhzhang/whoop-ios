@@ -88,87 +88,9 @@ extension WhoopStore {
         {
             return
         }
-        let healthSQL = """
-            SELECT date_key, sleep_score, sleep_duration_minutes,
-                   hrv_rmssd_milliseconds, resting_heart_rate_bpm,
-                   sleep_id, cycle_id, source, source_archive, source_updated_at,
-                   sleep_start_at, sleep_end_at, sleep_start_minute, sleep_end_minute,
-                   sleep_need_minutes, sleep_consistency_percentage,
-                   sleep_efficiency_percentage, sleep_sufficiency_percentage
-            FROM daily_health_metric
-            WHERE sleep_score IS NOT NULL AND sleep_duration_minutes IS NOT NULL
-              AND hrv_rmssd_milliseconds IS NOT NULL
-              AND resting_heart_rate_bpm IS NOT NULL
-              AND sleep_start_minute IS NOT NULL AND sleep_end_minute IS NOT NULL
-              AND sleep_efficiency_percentage IS NOT NULL
-            ORDER BY date_key ASC
-            """
-        var healthStatementPointer: OpaquePointer?
-        guard sqlite3_prepare_v2(database, healthSQL, -1, &healthStatementPointer, nil) == SQLITE_OK,
-            let healthStatement = healthStatementPointer
+        guard let (records, stepsByDate) = recoveryInputs(database: database),
+            execute("BEGIN IMMEDIATE")
         else { return }
-        var records: [DailyHealthRecord] = []
-        var result = sqlite3_step(healthStatement)
-        while result == SQLITE_ROW {
-            guard let dateKey = textColumn(healthStatement, 0),
-                let source = textColumn(healthStatement, 7),
-                let sourceUpdatedAt = textColumn(healthStatement, 9)
-            else {
-                result = sqlite3_step(healthStatement)
-                continue
-            }
-            records.append(
-                DailyHealthRecord(
-                    dateKey: dateKey,
-                    sleepScore: doubleColumn(healthStatement, 1),
-                    sleepDurationMinutes: doubleColumn(healthStatement, 2),
-                    hrvRMSSDMilliseconds: doubleColumn(healthStatement, 3),
-                    restingHeartRateBPM: doubleColumn(healthStatement, 4),
-                    sleepID: textColumn(healthStatement, 5),
-                    cycleID: int64Column(healthStatement, 6),
-                    source: source,
-                    sourceArchive: textColumn(healthStatement, 8),
-                    sourceUpdatedAt: sourceUpdatedAt,
-                    sleepStartAt: textColumn(healthStatement, 10),
-                    sleepEndAt: textColumn(healthStatement, 11),
-                    sleepStartMinute: doubleColumn(healthStatement, 12),
-                    sleepEndMinute: doubleColumn(healthStatement, 13),
-                    sleepNeedMinutes: doubleColumn(healthStatement, 14),
-                    sleepConsistencyPercentage: doubleColumn(healthStatement, 15),
-                    sleepEfficiencyPercentage: doubleColumn(healthStatement, 16),
-                    sleepSufficiencyPercentage: doubleColumn(healthStatement, 17)
-                ))
-            result = sqlite3_step(healthStatement)
-        }
-        sqlite3_finalize(healthStatement)
-        guard result == SQLITE_DONE else { return }
-
-        let stepsSQL = """
-            SELECT date_key, step_count FROM (
-                SELECT date_key, official_steps AS step_count
-                FROM whoop_official_daily_metric WHERE official_steps IS NOT NULL
-                UNION ALL
-                SELECT l.date_key, l.step_count FROM whoop_daily_step_metric l
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM whoop_official_daily_metric o
-                    WHERE o.date_key = l.date_key AND o.official_steps IS NOT NULL
-                )
-            )
-            """
-        var stepsStatementPointer: OpaquePointer?
-        guard sqlite3_prepare_v2(database, stepsSQL, -1, &stepsStatementPointer, nil) == SQLITE_OK,
-            let stepsStatement = stepsStatementPointer
-        else { return }
-        var stepsByDate: [String: Double] = [:]
-        result = sqlite3_step(stepsStatement)
-        while result == SQLITE_ROW {
-            if let dateKey = textColumn(stepsStatement, 0) {
-                stepsByDate[dateKey] = Double(sqlite3_column_int64(stepsStatement, 1))
-            }
-            result = sqlite3_step(stepsStatement)
-        }
-        sqlite3_finalize(stepsStatement)
-        guard result == SQLITE_DONE, execute("BEGIN IMMEDIATE") else { return }
 
         let upsertSQL = """
             INSERT INTO whoop_daily_recovery_metric
@@ -244,8 +166,99 @@ extension WhoopStore {
         }
     }
 
-    func analyze(now: Date) -> SleepAnalysis {
-        let rows = recentHistoricalRows(now: now)
+    /// Every eligible night in date order plus steps by day, shared by the stored
+    /// backfill and the in-progress night so both score Recovery identically.
+    func recoveryInputs(
+        database: OpaquePointer
+    ) -> (records: [DailyHealthRecord], stepsByDate: [String: Double])? {
+        let healthSQL = """
+            SELECT date_key, sleep_score, sleep_duration_minutes,
+                   hrv_rmssd_milliseconds, resting_heart_rate_bpm,
+                   sleep_id, cycle_id, source, source_archive, source_updated_at,
+                   sleep_start_at, sleep_end_at, sleep_start_minute, sleep_end_minute,
+                   sleep_need_minutes, sleep_consistency_percentage,
+                   sleep_efficiency_percentage, sleep_sufficiency_percentage
+            FROM daily_health_metric
+            WHERE sleep_score IS NOT NULL AND sleep_duration_minutes IS NOT NULL
+              AND hrv_rmssd_milliseconds IS NOT NULL
+              AND resting_heart_rate_bpm IS NOT NULL
+              AND sleep_start_minute IS NOT NULL AND sleep_end_minute IS NOT NULL
+              AND sleep_efficiency_percentage IS NOT NULL
+            ORDER BY date_key ASC
+            """
+        var healthStatementPointer: OpaquePointer?
+        guard sqlite3_prepare_v2(database, healthSQL, -1, &healthStatementPointer, nil) == SQLITE_OK,
+            let healthStatement = healthStatementPointer
+        else { return nil }
+        var records: [DailyHealthRecord] = []
+        var result = sqlite3_step(healthStatement)
+        while result == SQLITE_ROW {
+            guard let dateKey = textColumn(healthStatement, 0),
+                let source = textColumn(healthStatement, 7),
+                let sourceUpdatedAt = textColumn(healthStatement, 9)
+            else {
+                result = sqlite3_step(healthStatement)
+                continue
+            }
+            records.append(
+                DailyHealthRecord(
+                    dateKey: dateKey,
+                    sleepScore: doubleColumn(healthStatement, 1),
+                    sleepDurationMinutes: doubleColumn(healthStatement, 2),
+                    hrvRMSSDMilliseconds: doubleColumn(healthStatement, 3),
+                    restingHeartRateBPM: doubleColumn(healthStatement, 4),
+                    sleepID: textColumn(healthStatement, 5),
+                    cycleID: int64Column(healthStatement, 6),
+                    source: source,
+                    sourceArchive: textColumn(healthStatement, 8),
+                    sourceUpdatedAt: sourceUpdatedAt,
+                    sleepStartAt: textColumn(healthStatement, 10),
+                    sleepEndAt: textColumn(healthStatement, 11),
+                    sleepStartMinute: doubleColumn(healthStatement, 12),
+                    sleepEndMinute: doubleColumn(healthStatement, 13),
+                    sleepNeedMinutes: doubleColumn(healthStatement, 14),
+                    sleepConsistencyPercentage: doubleColumn(healthStatement, 15),
+                    sleepEfficiencyPercentage: doubleColumn(healthStatement, 16),
+                    sleepSufficiencyPercentage: doubleColumn(healthStatement, 17)
+                ))
+            result = sqlite3_step(healthStatement)
+        }
+        sqlite3_finalize(healthStatement)
+        guard result == SQLITE_DONE else { return nil }
+
+        let stepsSQL = """
+            SELECT date_key, step_count FROM (
+                SELECT date_key, official_steps AS step_count
+                FROM whoop_official_daily_metric WHERE official_steps IS NOT NULL
+                UNION ALL
+                SELECT l.date_key, l.step_count FROM whoop_daily_step_metric l
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM whoop_official_daily_metric o
+                    WHERE o.date_key = l.date_key AND o.official_steps IS NOT NULL
+                )
+            )
+            """
+        var stepsStatementPointer: OpaquePointer?
+        guard sqlite3_prepare_v2(database, stepsSQL, -1, &stepsStatementPointer, nil) == SQLITE_OK,
+            let stepsStatement = stepsStatementPointer
+        else { return nil }
+        var stepsByDate: [String: Double] = [:]
+        result = sqlite3_step(stepsStatement)
+        while result == SQLITE_ROW {
+            if let dateKey = textColumn(stepsStatement, 0) {
+                stepsByDate[dateKey] = Double(sqlite3_column_int64(stepsStatement, 1))
+            }
+            result = sqlite3_step(stepsStatement)
+        }
+        sqlite3_finalize(stepsStatement)
+        guard result == SQLITE_DONE else { return nil }
+        return (records, stepsByDate)
+    }
+
+    /// `historyThrough` exists for replaying a retained database at a past
+    /// instant; live analysis reads everything the strap has delivered.
+    func analyze(now: Date, historyThrough: Date? = nil) -> SleepAnalysis {
+        let rows = recentHistoricalRows(now: now, through: historyThrough)
         guard let latest = rows.last else { return .noData }
         let latestDate = Date(timeIntervalSince1970: latest.timestamp)
         let sampleIsCurrent = abs(now.timeIntervalSince(latestDate)) <= 30 * 60
@@ -295,21 +308,27 @@ extension WhoopStore {
     /// or within two hours after a completed main sleep on the same morning.
     func analyzeLatestSleep(
         now: Date = .now,
-        allowAutomaticFinalization: Bool = false
+        allowAutomaticFinalization: Bool = false,
+        includeProvisional: Bool = false,
+        historyThrough: Date? = nil
     ) -> WhoopSleepSnapshot {
-        switch analyze(now: now) {
+        switch analyze(now: now, historyThrough: historyThrough) {
         case .noData:
             return WhoopSleepSnapshot(
                 isSleeping: false,
                 sampleAt: nil,
-                finalizedRecord: nil
+                finalizedRecord: nil,
+                evaluatedProvisional: includeProvisional
             )
 
-        case .sleeping(let sampleAt, _):
+        case .sleeping(let sampleAt, let candidate):
             return WhoopSleepSnapshot(
                 isSleeping: true,
                 sampleAt: sampleAt,
-                finalizedRecord: nil
+                finalizedRecord: nil,
+                provisional: includeProvisional
+                    ? provisionalDay(for: candidate, isSleeping: true, now: now) : nil,
+                evaluatedProvisional: includeProvisional
             )
 
         case .awake(let sampleAt, let candidates):
@@ -355,7 +374,10 @@ extension WhoopStore {
             return WhoopSleepSnapshot(
                 isSleeping: false,
                 sampleAt: sampleAt,
-                finalizedRecord: newest
+                finalizedRecord: newest,
+                provisional: includeProvisional
+                    ? provisionalDay(for: candidates.last, isSleeping: false, now: now) : nil,
+                evaluatedProvisional: includeProvisional
             )
         }
     }

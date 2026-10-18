@@ -296,6 +296,36 @@ final class WhoopReplicaTests: XCTestCase {
         XCTAssertEqual(manifest.chunkIds, descriptors.map(\.identifier))
     }
 
+    func testDescribingLargeSnapshotKeepsMemoryBoundedOnDetachedWorker() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let snapshotURL = directory.appendingPathComponent("snapshot.sqlite3")
+        let chunkCount = 16
+        XCTAssertTrue(FileManager.default.createFile(atPath: snapshotURL.path, contents: nil))
+        let writer = try FileHandle(forWritingTo: snapshotURL)
+        for chunk in 0..<chunkCount {
+            try writer.write(contentsOf: Data(repeating: UInt8(chunk), count: WhoopReplicaCodec.chunkSize))
+        }
+        try writer.close()
+        let sourceBytes = Int64(chunkCount * WhoopReplicaCodec.chunkSize)
+        let snapshot = WhoopReplicaSnapshot(url: snapshotURL, schemaVersion: 11, sourceBytes: sourceBytes)
+        let key = try WhoopReplicaCodec.key(from: Data(0..<32))
+
+        // The production worker is detached, so its autorelease pool only
+        // drains after the whole description returns.
+        let (growth, descriptorCount) = try await WhoopReplicaSnapshotter.run {
+            let before = Self.physicalFootprint()
+            let (_, descriptors) = try WhoopReplicaSnapshotter.describe(
+                snapshot: snapshot, key: key, createdAt: Date(timeIntervalSince1970: 2_000_000_000))
+            return (max(Self.physicalFootprint() - before, 0), descriptors.count)
+        }
+
+        XCTAssertEqual(descriptorCount, chunkCount)
+        XCTAssertLessThan(growth, sourceBytes / 4, "Chunk buffers must not accumulate across the snapshot")
+    }
+
     func testSnapshotArtifactCleanupRemovesDatabaseAndSQLiteSidecars() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -355,6 +385,18 @@ final class WhoopReplicaTests: XCTestCase {
             try WhoopReplicaRecovery.applyPending(in: directory, expectedSchema: 10)
         )
         XCTAssertEqual(try storedValue(at: databaseURL), "current")
+    }
+
+    private static func physicalFootprint() -> Int64 {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        return result == KERN_SUCCESS ? Int64(info.phys_footprint) : 0
     }
 
     private func makeDatabase(at url: URL, value: String, schema: Int = 10) throws {

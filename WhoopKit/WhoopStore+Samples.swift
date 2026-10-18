@@ -278,17 +278,19 @@ extension WhoopStore {
     /// separate from finalization lets automatic timing and evidence gates decide
     /// when a coherent night is ready to publish.
     /// The 48-hour window every sleep decision is made from.
-    func recentHistoricalRows(now: Date) -> [HistoricalRow] {
+    func recentHistoricalRows(now: Date, through: Date? = nil) -> [HistoricalRow] {
         guard let database else { return [] }
-        return Self.recentHistoricalRows(database: database, now: now)
+        return Self.recentHistoricalRows(database: database, now: now, through: through)
     }
 
-    static func recentHistoricalRows(database: OpaquePointer, now: Date) -> [HistoricalRow] {
+    static func recentHistoricalRows(
+        database: OpaquePointer, now: Date, through: Date? = nil
+    ) -> [HistoricalRow] {
         let cutoff = now.addingTimeInterval(-48 * 60 * 60).timeIntervalSince1970
         let sql = """
             SELECT sample_at, heart_rate, sleep_state
             FROM whoop_historical_sample
-            WHERE sample_at >= ?
+            WHERE sample_at >= ? AND sample_at <= ?
               AND peripheral_id = (
                   \(WhoopStrainInputIndex.latestPeripheralQuery)
               )
@@ -300,6 +302,7 @@ extension WhoopStore {
         else { return [] }
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_double(statement, 1, cutoff)
+        sqlite3_bind_double(statement, 2, through?.timeIntervalSince1970 ?? .greatestFiniteMagnitude)
 
         var rows: [HistoricalRow] = []
         while sqlite3_step(statement) == SQLITE_ROW {

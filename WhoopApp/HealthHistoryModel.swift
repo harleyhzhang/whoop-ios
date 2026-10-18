@@ -10,16 +10,25 @@ final class HealthHistoryModel {
     @ObservationIgnored
     private let load: (@escaping @Sendable (Result<DashboardHistorySnapshot, Error>) -> Void) -> Void
     @ObservationIgnored
+    private let cache: DashboardSnapshotCache?
+    @ObservationIgnored
     private var reloadGeneration = 0
     @ObservationIgnored
     private var reloadInFlight = false
 
     init(
+        cache: DashboardSnapshotCache? = DemoHistory.isEnabled ? nil : .production,
         load: @escaping (@escaping @Sendable (Result<DashboardHistorySnapshot, Error>) -> Void) -> Void = {
             WhoopStore.shared.loadDashboardHistory(completion: $0)
         }
     ) {
         self.load = load
+        self.cache = cache
+        // Show the last known dashboard immediately; the first store read
+        // replaces it and changed numbers animate.
+        if let cached = cache?.cachedSnapshot() {
+            snapshot = cached
+        }
     }
 
     /// Applies one freshly derived night without waiting for the full reload, so
@@ -70,6 +79,7 @@ final class HealthHistoryModel {
                 case .success(let snapshot):
                     self.snapshot = snapshot
                     self.errorMessage = nil
+                    self.cache?.save(snapshot)
                 case .failure(let error):
                     // Preserve every last known-good dataset through a
                     // transient read failure instead of blanking its charts.

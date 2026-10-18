@@ -13,6 +13,7 @@ final class WhoopCollector: NSObject {
     var batteryLevel: Int? { batteryState.level }
     var batteryStatus: BatteryStatus { batteryState.status }
     private(set) var isSleeping = false
+    let provisionalSleep = WhoopProvisionalSleepModel()
     private(set) var lastConnectedAt: Date?
     @ObservationIgnored private var lastHeartRateReceivedAt: Date?
     @ObservationIgnored private var canAttemptHandshake = false
@@ -76,6 +77,7 @@ final class WhoopCollector: NSObject {
     private let cachedHeartRateDateKey = "WhoopCollector.cachedHeartRateDate"
     private let cachedBatteryLevelKey = "WhoopCollector.cachedBatteryLevel"
     private let cachedBatteryLevelDateKey = "WhoopCollector.cachedBatteryLevelDate"
+    private let cachedSleepingKey = "WhoopCollector.cachedIsSleeping"
 
     private let whoop5Service = CBUUID(string: "FD4B0001-CCE1-4033-93CE-002D5875F58A")
     private let heartRateService = CBUUID(string: "180D")
@@ -135,6 +137,8 @@ final class WhoopCollector: NSObject {
 
     private func restoreCachedTelemetry() {
         let defaults = UserDefaults.standard
+        // Keep a cold start during sleep dashed instead of flashing cached values.
+        isSleeping = defaults.bool(forKey: cachedSleepingKey)
         batteryState = WhoopBatteryState(
             cachedLevel: WhoopBluetoothPolicy.cachedBatteryLevel(
                 defaults.object(forKey: cachedBatteryLevelKey)
@@ -164,7 +168,8 @@ final class WhoopCollector: NSObject {
 
     private func refreshSleepSnapshot(
         force: Bool = false,
-        allowAutomaticFinalization: Bool = false
+        allowAutomaticFinalization: Bool = false,
+        includeProvisional: Bool = UIApplication.shared.applicationState == .active
     ) {
         let now = Date()
         guard force || lastSleepAnalysisAt.map({ now.timeIntervalSince($0) >= 30 }) ?? true else {
@@ -172,11 +177,16 @@ final class WhoopCollector: NSObject {
         }
         lastSleepAnalysisAt = now
         store.refreshSleepSnapshot(
-            allowAutomaticFinalization: allowAutomaticFinalization
+            allowAutomaticFinalization: allowAutomaticFinalization,
+            includeProvisional: includeProvisional
         ) { [weak self] snapshot in
             Task { @MainActor in
                 guard let self else { return }
-                self.isSleeping = snapshot.isSleeping
+                self.provisionalSleep.apply(snapshot)
+                if self.isSleeping != snapshot.isSleeping {
+                    self.isSleeping = snapshot.isSleeping
+                    UserDefaults.standard.set(snapshot.isSleeping, forKey: self.cachedSleepingKey)
+                }
                 if let record = snapshot.finalizedRecord,
                     record.sleepID != self.lastFinalizedSleepID
                 {
@@ -461,6 +471,8 @@ final class WhoopCollector: NSObject {
     }
 
     func refreshHistoricalData() {
+        // Score the night from stored history now; the offload refines it.
+        refreshSleepSnapshot(force: true, includeProvisional: true)
         guard isConnected else { return }
         beginHistoricalSync()
     }
