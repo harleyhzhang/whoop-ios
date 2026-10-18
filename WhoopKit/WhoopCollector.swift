@@ -76,6 +76,7 @@ final class WhoopCollector: NSObject {
     private let cachedHeartRateDateKey = "WhoopCollector.cachedHeartRateDate"
     private let cachedBatteryLevelKey = "WhoopCollector.cachedBatteryLevel"
     private let cachedBatteryLevelDateKey = "WhoopCollector.cachedBatteryLevelDate"
+    private let cachedSleepingKey = "WhoopCollector.cachedIsSleeping"
 
     private let whoop5Service = CBUUID(string: "FD4B0001-CCE1-4033-93CE-002D5875F58A")
     private let heartRateService = CBUUID(string: "180D")
@@ -135,6 +136,8 @@ final class WhoopCollector: NSObject {
 
     private func restoreCachedTelemetry() {
         let defaults = UserDefaults.standard
+        // Keep a cold start during sleep dashed instead of flashing cached values.
+        isSleeping = defaults.bool(forKey: cachedSleepingKey)
         batteryState = WhoopBatteryState(
             cachedLevel: WhoopBluetoothPolicy.cachedBatteryLevel(
                 defaults.object(forKey: cachedBatteryLevelKey)
@@ -176,7 +179,10 @@ final class WhoopCollector: NSObject {
         ) { [weak self] snapshot in
             Task { @MainActor in
                 guard let self else { return }
-                self.isSleeping = snapshot.isSleeping
+                if self.isSleeping != snapshot.isSleeping {
+                    self.isSleeping = snapshot.isSleeping
+                    UserDefaults.standard.set(snapshot.isSleeping, forKey: self.cachedSleepingKey)
+                }
                 if let record = snapshot.finalizedRecord,
                     record.sleepID != self.lastFinalizedSleepID
                 {

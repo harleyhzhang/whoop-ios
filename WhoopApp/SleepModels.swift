@@ -142,7 +142,7 @@ struct OfficialDailyMetricSeed: Decodable, Sendable {
     let sourceStrainSHA256: String?
 }
 
-struct DailyStepRecord: Hashable, Identifiable, Sendable {
+struct DailyStepRecord: Codable, Hashable, Identifiable, Sendable {
     let dateKey: String
     let stepCount: Int
     let sampleCount: Int
@@ -163,7 +163,7 @@ struct DailyStepRecord: Hashable, Identifiable, Sendable {
     }
 }
 
-struct DailyRecoveryRecord: Hashable, Identifiable, Sendable {
+struct DailyRecoveryRecord: Codable, Hashable, Identifiable, Sendable {
     let dateKey: String
     let score: Double
     let source: String

@@ -1,7 +1,7 @@
 import Foundation
 import SQLite3
 
-struct DailyStrainRecord: Sendable {
+struct DailyStrainRecord: Codable, Sendable {
     let dateKey: String
     let score: Double
     let source: String
