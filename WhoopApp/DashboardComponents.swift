@@ -78,16 +78,22 @@ struct WhoopBatteryPercentIcon: View {
 
     private static let shellWidth: CGFloat = 29
     private static let shellHeight: CGFloat = 16
-    private static let shellRadius: CGFloat = 4.6
+    private static let shellRadius: CGFloat = 5.4
+
+    private var percentageFont: Font {
+        // Three digits plus the bolt overflow the shell at full size.
+        chargingStyleActive && percentageText.count > 2
+            ? Theme.Typography.batteryCompact : Theme.Typography.battery
+    }
 
     private var statusLabel: some View {
-        HStack(spacing: chargingContentExpansion * 0.25) {
+        HStack(spacing: chargingContentExpansion * -0.5) {
             HStack(spacing: -0.5) {
                 ForEach(Array(percentageText.enumerated()), id: \.offset) { _, digit in
                     Text(String(digit))
                 }
             }
-            .font(Theme.Typography.battery)
+            .font(percentageFont)
 
             Image(systemName: "bolt.fill")
                 .font(Theme.Icon.glyph)

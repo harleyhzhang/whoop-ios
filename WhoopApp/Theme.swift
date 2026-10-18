@@ -39,7 +39,9 @@ enum Theme {
         /// Inline status text.
         static let small = font(11, .bold)
         /// Battery percentages.
-        static let battery = numericFont(12, .bold)
+        static let battery = numericFont(13, .bold)
+        /// Battery percentage when "100" must share the shell with the charging bolt.
+        static let batteryCompact = numericFont(12, .bold)
         /// Card and summary metric labels.
         static let body = font(14, .regular)
         /// Header date.
