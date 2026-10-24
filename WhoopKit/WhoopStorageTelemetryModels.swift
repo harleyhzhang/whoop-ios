@@ -48,10 +48,10 @@ struct WhoopIngestionLatencyWindow: Codable, Equatable, Sendable {
     var failedCount: Int64 = 0
     var totalNanoseconds: UInt64 = 0
     var maximumNanoseconds: UInt64 = 0
-    var transactionLatencyBucketCounts = Array(repeating: Int64(0), count: 9)
+    var transactionLatencyBucketCounts = Array(repeating: Int64(0), count: Self.latencyBucketLabels.count)
     var queueWaitTotalNanoseconds: UInt64 = 0
     var queueWaitMaximumNanoseconds: UInt64 = 0
-    var queueWaitBucketCounts = Array(repeating: Int64(0), count: 9)
+    var queueWaitBucketCounts = Array(repeating: Int64(0), count: Self.latencyBucketLabels.count)
     // Slots 0...255 are frame types. Slot 256 is unknown. A fixed array avoids
     // dictionary and String allocation on the packet-ingestion hot path.
     var frameOutcomes = Array(repeating: WhoopFrameIngestionWindow(), count: 257)
@@ -148,8 +148,6 @@ struct WhoopStorageTelemetrySnapshot: Codable, Equatable, Sendable {
     let persistenceFailureCount: Int64
     let censusFailureCount: Int64
     let ingestion: WhoopIngestionLatencyWindow
-
-    var totalOnDiskBytes: Int64 { databaseBytes + walBytes + sharedMemoryBytes }
 }
 
 struct WhoopStorageFileSample: Codable, Equatable, Sendable {
