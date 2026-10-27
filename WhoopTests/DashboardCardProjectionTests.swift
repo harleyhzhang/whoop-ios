@@ -65,6 +65,31 @@ extension WhoopSleepStateTests {
             DashboardCardProjection(snapshot: snapshot, published: sleeping, referenceDate: referenceDate).selected)
     }
 
+    func testProjectionKeepsOnlyTheYearEndingOnThePublishedDay() throws {
+        let record = dailyHealthRecord(dateKey: "2026-10-27")
+        let snapshot = DashboardHistorySnapshot(
+            healthRecords: [record],
+            stepRecords: [
+                dailyStepRecord(dateKey: "2024-06-01", stepCount: 50),
+                dailyStepRecord(dateKey: "2025-10-27", stepCount: 100),
+                dailyStepRecord(dateKey: "2025-10-28", stepCount: 200),
+                dailyStepRecord(dateKey: record.dateKey, stepCount: 300),
+            ],
+            recoveryRecords: [DailyRecoveryRecord(dateKey: record.dateKey, score: 80, source: "synthetic")],
+            strainRecords: []
+        )
+        let published = PublishedDashboardDay(
+            healthRecords: snapshot.healthRecords, stepRecords: snapshot.stepRecords,
+            recoveryRecords: snapshot.recoveryRecords)
+        let referenceDate = try XCTUnwrap(published.date)
+        let projection = DashboardCardProjection(snapshot: snapshot, published: published, referenceDate: referenceDate)
+        XCTAssertEqual(projection.days.count, 365)
+        XCTAssertEqual(projection.days.first?.day, "2025-10-28")
+        XCTAssertEqual(projection.days.first?.steps, 200)
+        XCTAssertEqual(projection.days.last?.day, record.dateKey)
+        XCTAssertEqual(projection.days.compactMap(\.steps), [200, 300])
+    }
+
     func testAverageLaddersHaveFourEqualWindowsAndExcludeMissingValues() throws {
         let days = (1...31).map { day in
             HealthDay(
