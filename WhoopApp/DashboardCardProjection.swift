@@ -1,8 +1,11 @@
 import Foundation
 
-/// Disposable all-history projection over the coherent local store snapshot.
+/// Disposable rolling-year projection over the coherent local store snapshot.
 /// Empty dates stay empty, retaining an evenly spaced calendar axis.
 struct DashboardCardProjection {
+    /// Charts show at most the year ending on the reference day.
+    static let windowYears = 1
+
     let days: [HealthDay]
     let selected: HealthDay?
 
@@ -15,9 +18,12 @@ struct DashboardCardProjection {
             snapshot.recoveryRecords.map { ($0.dateKey, $0) }, uniquingKeysWith: { _, last in last })
         let strain = Dictionary(snapshot.strainRecords.map { ($0.dateKey, $0) }, uniquingKeysWith: { _, last in last })
         let keys = Set(health.keys).union(steps.keys).union(recovery.keys).union(strain.keys)
-        let first =
+        let earliest =
             keys.compactMap { DayKey.date(from: $0, timeZone: calendar.timeZone) }
             .map { calendar.startOfDay(for: $0) }.filter { $0 <= end }.min() ?? end
+        let yearAgo = calendar.date(byAdding: .year, value: -Self.windowYears, to: end)
+            .flatMap { calendar.date(byAdding: .day, value: 1, to: $0) }
+        let first = max(earliest, yearAgo ?? earliest)
         let dayCount = calendar.dateComponents([.day], from: first, to: end).day ?? 0
         days = (0...dayCount).compactMap { offset in
             guard let date = calendar.date(byAdding: .day, value: offset, to: first) else { return nil }

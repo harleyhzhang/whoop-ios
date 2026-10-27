@@ -54,8 +54,8 @@ README. Newer entries are not guaranteed to be appended here; see the Git log.
   32 pt rounded semibold digits and 20 pt units (lowercase h/m, uppercase MS/BPM).
   Neutral cards have a subtle diagonal gradient and no carets, date subtitle,
   detail sheet, range picker, or provenance/coverage row.
-- Charts default to all history, from the earliest stored metric through the
-  published day. Full history is averaged into 31 equal-time buckets, retaining
+- Charts show a rolling year ending on the published day, starting later only
+  when less than a year is stored. The window is averaged into 31 equal-time buckets, retaining
   the same thin colored strokes centered between grey grid lines. Missing
   values are excluded from averages and empty buckets remain empty. Four
   equal-time white ladders average the original daily observations; duration
