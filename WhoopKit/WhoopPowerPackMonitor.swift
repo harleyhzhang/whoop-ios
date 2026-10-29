@@ -29,6 +29,8 @@ enum WhoopPowerPackPolicy {
 @Observable
 final class WhoopPowerPackMonitor: NSObject {
     private(set) var batteryLevel: Int?
+    /// True once a battery reading arrives over a live link; cleared on disconnect.
+    private(set) var isConnected = false
 
     @ObservationIgnored private lazy var central = CBCentralManager(
         delegate: self,
@@ -78,6 +80,7 @@ final class WhoopPowerPackMonitor: NSObject {
             case .disconnecting, .disconnected:
                 self.peripheral = nil
                 batteryCharacteristic = nil
+                isConnected = false
             @unknown default:
                 self.peripheral = nil
                 batteryCharacteristic = nil
@@ -125,6 +128,7 @@ final class WhoopPowerPackMonitor: NSObject {
             return
         }
         batteryLevel = level
+        isConnected = true
         let defaults = UserDefaults.standard
         defaults.set(level, forKey: cachedBatteryLevelKey)
         defaults.set(Date(), forKey: cachedBatteryLevelDateKey)
@@ -149,6 +153,7 @@ extension WhoopPowerPackMonitor: @preconcurrency CBCentralManagerDelegate {
         } else {
             reconnectTask?.cancel()
             reconnectTask = nil
+            isConnected = false
         }
     }
 
@@ -205,6 +210,7 @@ extension WhoopPowerPackMonitor: @preconcurrency CBCentralManagerDelegate {
         )
         self.peripheral = nil
         batteryCharacteristic = nil
+        isConnected = false
         scheduleRediscovery()
     }
 
@@ -217,6 +223,7 @@ extension WhoopPowerPackMonitor: @preconcurrency CBCentralManagerDelegate {
         Self.logger.debug("PowerPack disconnected")
         self.peripheral = nil
         batteryCharacteristic = nil
+        isConnected = false
         scheduleRediscovery()
     }
 }

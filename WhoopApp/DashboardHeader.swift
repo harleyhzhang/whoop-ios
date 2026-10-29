@@ -24,6 +24,7 @@ struct DashboardHeader: View {
     let isCharging: Bool
     let isConnected: Bool
     let powerPackBatteryLevel: Int?
+    var isPowerPackConnected = true
     var openHistory: () -> Void = {}
 
     var body: some View {
@@ -72,10 +73,11 @@ struct DashboardHeader: View {
                 }
 
                 HStack(spacing: 3) {
-                    PowerPackStatusImage(batteryLevel: powerPackBatteryLevel)
+                    PowerPackStatusImage(batteryLevel: isPowerPackConnected ? powerPackBatteryLevel : nil)
                         .offset(x: 2)
 
                     WhoopBatteryPercentIcon(level: powerPackBatteryLevel, isCharging: false)
+                        .opacity(isPowerPackConnected ? 1 : Theme.Layout.staleOpacity)
                 }
             }
             .frame(minHeight: 36)

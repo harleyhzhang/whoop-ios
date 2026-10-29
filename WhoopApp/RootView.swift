@@ -135,6 +135,8 @@ struct RootView: View {
                         isCharging: isCharging,
                         isConnected: isConnected,
                         powerPackBatteryLevel: powerPackBatteryLevel,
+                        isPowerPackConnected: WhoopLaunchOverrides.powerPackBatteryLevel != nil
+                            || powerPackMonitor.isConnected,
                         openHistory: { sheet = .history(nil) }
                     )
                     if let live = log.live {
