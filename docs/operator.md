@@ -45,6 +45,12 @@ If shipping returns `needs-unlock` or `needs-verification`, run only the exact
 [migration runbook](whoop-data-migration.md#10-build-sign-install-and-preserve-migration-backups)
 for the fail-closed verification tiers.
 
+The workflow launches without foreground activation and restarts an existing
+collector in the background before suspending its fresh process for a snapshot.
+This avoids scene-update watchdog kills that would restart a writer during
+copying. Snapshot length/metadata stability, integrity, and exact preserved-row
+checks remain mandatory, and the collector is resumed or relaunched afterward.
+
 Device builds reuse `~/Library/Caches/whoop-ios/device-derived-data`. Verified
 snapshots retain one standalone database plus required sidecars; automatic
 manifest-driven retention keeps current rollback points, two newest snapshots,

@@ -58,6 +58,21 @@ def process_payload(runner: CommandRunner, scratch: Path, device: Device) -> obj
     return payload if payload is not None else {}
 
 
+def background_launch_arguments(device: Device) -> list[str]:
+    return [
+        "device",
+        "process",
+        "launch",
+        "--device",
+        device.identifier,
+        "--terminate-existing",
+        "--no-activate",
+        BUNDLE_IDENTIFIER,
+        "--timeout",
+        "60",
+    ]
+
+
 def resume_or_relaunch_application(
     runner: CommandRunner, scratch: Path, device: Device, pid: int
 ) -> None:
@@ -82,17 +97,7 @@ def resume_or_relaunch_application(
             return
         diagnostics.append(completed.stderr.strip() or completed.stdout.strip())
     _, launch = runner.devicectl_json(
-        [
-            "device",
-            "process",
-            "launch",
-            "--device",
-            device.identifier,
-            "--terminate-existing",
-            BUNDLE_IDENTIFIER,
-            "--timeout",
-            "60",
-        ],
+        background_launch_arguments(device),
         scratch,
         check=False,
     )
@@ -107,6 +112,19 @@ def suspended_application(runner: CommandRunner, scratch: Path, device: Device) 
     pid = find_process_id(process_payload(runner, scratch, device))
     suspended = False
     if pid is not None:
+        # A foreground SIGSTOP leaves scene updates unhandled: iOS kills the
+        # frozen app and Bluetooth restoration starts a new writer mid-copy.
+        # Restart without activating a scene before freezing its fresh PID.
+        runner.devicectl_json(background_launch_arguments(device), scratch)
+        # Give launch callbacks time to finish before stopping the main thread.
+        wait_for_backup_quiescence()
+        for _ in range(15):
+            pid = find_process_id(process_payload(runner, scratch, device))
+            if pid is not None:
+                break
+            time.sleep(1)
+        if pid is None:
+            raise ShippingError("WHOOP did not start in the background before backup suspension.")
         runner.devicectl_json(
             [
                 "device",
@@ -335,17 +353,7 @@ def launch_and_verify(
             manifest_path,
         )
     _, launch = runner.devicectl_json(
-        [
-            "device",
-            "process",
-            "launch",
-            "--device",
-            device.identifier,
-            "--terminate-existing",
-            BUNDLE_IDENTIFIER,
-            "--timeout",
-            "60",
-        ],
+        background_launch_arguments(device),
         scratch,
         check=False,
     )
