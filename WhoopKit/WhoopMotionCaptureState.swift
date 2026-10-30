@@ -36,6 +36,8 @@ struct WhoopMotionCaptureState: Codable {
     private(set) var rawBytesReceived = 0
     private(set) var rawStopAccepted = false
     private(set) var imuStopAccepted = false
+    private(set) var rawStartUnsupported = false
+    private(set) var imuStartUnsupported = false
     private(set) var settlingAt: Date?
     private(set) var lastLiveBufferAt: Date?
     private(set) var lastBothSensorsAt: Date?
@@ -85,6 +87,10 @@ struct WhoopMotionCaptureState: Codable {
         guard reply.result != 2 else { return }  // Pending is not successful completion.
         commandResults.append("\(reply.command):\(reply.origin):\(reply.result)")
         self.pending = nil
+        if reply.result == 3 {
+            if phase == .startingRaw { rawStartUnsupported = true }
+            if phase == .enablingIMU { imuStartUnsupported = true }
+        }
         finishCommand(accepted: reply.result == 1, now: now)
     }
 
@@ -156,7 +162,15 @@ struct WhoopMotionCaptureState: Codable {
         }
         guard phase == .settling, let settlingAt else { return }
         let lastTraffic = max(settlingAt, lastLiveBufferAt ?? settlingAt)
-        if rawStopAccepted, imuStopAccepted, now.timeIntervalSince(lastTraffic) >= 3 {
+        // Explicit UNSUPPORTED proves this start operation did not enable a
+        // producer. Failure/timeout/unknown never supply that proof. Always
+        // attempt both stops first; avoid stranding ordinary history for an
+        // unsupported optional capture facility.
+        let noObservedProducer = lastLiveBufferAt == nil
+        let stopped =
+            (rawStopAccepted && imuStopAccepted)
+            || (noObservedProducer && (rawStartUnsupported || (rawStopAccepted && imuStartUnsupported)))
+        if stopped, now.timeIntervalSince(lastTraffic) >= 3 {
             phase = .complete
         } else if now.timeIntervalSince(settlingAt) >= 10 {
             phase = .needsCleanup

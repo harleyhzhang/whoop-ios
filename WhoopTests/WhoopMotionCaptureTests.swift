@@ -52,9 +52,9 @@ final class WhoopMotionCaptureTests: XCTestCase {
         XCTAssertEqual(state.buffers.count, 2)
     }
 
-    func testUnsupportedStartStillAttemptsBothStopCommands() throws {
+    func testFailedStartStillAttemptsBothStopCommands() throws {
         var state = try state()
-        try accept(&state, at: now, result: 3)
+        try accept(&state, at: now, result: 0)
         XCTAssertEqual(state.nextCommand, .rawMotion(start: false))
         try accept(&state, at: now, result: 0)
         XCTAssertEqual(state.nextCommand, .liveIMU(enabled: false))
@@ -62,6 +62,41 @@ final class WhoopMotionCaptureTests: XCTestCase {
         state.tick(now: now.addingTimeInterval(11))
         XCTAssertEqual(state.phase, .needsCleanup)
         XCTAssertTrue(state.needsCleanup)
+    }
+
+    func testExplicitUnsupportedStartRestoresHistoryAfterBothStopAttemptsAndQuiet() throws {
+        var state = try state()
+        try accept(&state, at: now, result: 3)
+        XCTAssertEqual(state.nextCommand, .rawMotion(start: false))
+        try accept(&state, at: now, result: 3)
+        XCTAssertEqual(state.nextCommand, .liveIMU(enabled: false))
+        try accept(&state, at: now, result: 3)
+        state.tick(now: now.addingTimeInterval(3))
+        XCTAssertEqual(state.phase, .complete)
+        XCTAssertFalse(state.hasBothSensors)
+        XCTAssertTrue(state.buffers.isEmpty)
+    }
+
+    func testActualMotionContradictsUnsupportedShortcutAndStillRequiresBothStops() throws {
+        var state = try state()
+        try accept(&state, at: now, result: 3)
+        state.observe(buffer(at: now), now: now)
+        try accept(&state, at: now, result: 3)
+        try accept(&state, at: now, result: 3)
+        state.tick(now: now.addingTimeInterval(11))
+        XCTAssertEqual(state.phase, .needsCleanup)
+    }
+
+    func testUnsupportedIMUStartRequiresSuccessfulRawStop() throws {
+        for rawStopResult: UInt8 in [1, 3] {
+            var state = try state()
+            try accept(&state, at: now)
+            try accept(&state, at: now, result: 3)
+            try accept(&state, at: now, result: rawStopResult)
+            try accept(&state, at: now, result: 3)
+            state.tick(now: now.addingTimeInterval(11))
+            XCTAssertEqual(state.phase, rawStopResult == 1 ? .complete : .needsCleanup)
+        }
     }
 
     func testDeadlineStopsAndCleanCompletionNeedsBothRepliesAndQuietInterval() throws {

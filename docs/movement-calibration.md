@@ -38,9 +38,13 @@ Only temporary commands are used: START_RAW_DATA 81 `[01]`, then live IMU 106
 No persistent IMU/optical saving policy or global gyro setting is changed.
 A successful response is not proof of a live stream. Capture requires fresh,
 CRC-valid R21 accel and gyro buffers; lack of either stops the probe within
-15 seconds. Command timeouts are four seconds. Cleanup requires both successful
-stop responses and at least three seconds without fresh R21 traffic, with a
-bounded ten-second observation window.
+15 seconds. Command timeouts are four seconds. Cleanup requires successful stop responses and at least three seconds without
+fresh R21 traffic, with a bounded ten-second observation window. An explicit
+unsupported start, with no observed R21 producer, establishes that the capture
+did not enable it; both stop
+controls are still attempted, but an unsupported optional feature does not
+permanently defer ordinary history. Failure, timeout and unknown results never
+supply that proof.
 
 The cleanup obligation is saved atomically before the first device command.
 Interruption leaves it pending for the next connection to the same strap.
