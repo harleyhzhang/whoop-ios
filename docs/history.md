@@ -72,9 +72,11 @@ README. Newer entries are not guaranteed to be appended here; see the Git log.
   Cardio and muscular loads combine before nonlinear scoring. The heuristic
   uses low-step, awake set/rest-like HR patterns; it can miss lifting or confuse
   it with other activity and does not infer reps or weights.
-- Local Strain requires 90% observed coverage (full day when complete, elapsed
-  time for today's score) and at least an hour observed. Long outages are capped
-  instead of extrapolated. Civil days use recorded timestamp/UTC-offset evidence,
+- Local Strain accumulates observed load with zero contribution from missing
+  intervals, without a minimum coverage or observed-duration gate. A valid
+  scoring window with no usable HR returns zero. Coverage remains measured
+  against the full day when complete or elapsed time today. Long outages are
+  capped instead of extrapolated. Civil days use recorded timestamp/UTC-offset evidence,
   independently of wake-anchored Steps keys; conflicting travel/DST offsets stay
   missing. Official targets and raw samples are never overwritten.
 - Scoring runs on the independent dashboard reader queue. Versioned derivations,
