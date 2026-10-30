@@ -160,6 +160,8 @@ extension WhoopStore {
         let timestamp: TimeInterval
         let heartRate: Int
         let sleepState: SleepState
+        /// Last so the row's stride stays 32 bytes across a full-history replay.
+        var stepCounter: UInt16? = nil
     }
 
     struct RealtimeRRPacket: Sendable {
@@ -176,10 +178,14 @@ extension WhoopStore {
         let latestSampleIsCurrent: Bool
         /// Observed spacing of the strap's own historical record.
         let cadenceSeconds: Double
-        /// The detected sleep interval. A bounded `up` interval followed by
-        /// more sleep remains inside the same night; otherwise a false interim
-        /// state can shorten a still-running night by an hour.
+        /// Explicit asleep time, which alone decides the evidence gates. A
+        /// bounded `up` interval followed by more sleep remains inside the same
+        /// night; otherwise a false interim state can shorten a still-running
+        /// night by an hour.
         let sleepSeconds: Double
+        /// Quiet bounded `up` time that still looked like sleep; see
+        /// `WhoopQuietUpPolicy`. Added to the reported duration only.
+        let bridgedSleepSeconds: Double
         /// Observed samples over samples expected at the observed cadence.
         let sessionCoverage: Double
         /// Elapsed wake time banked after the session ended.
@@ -191,7 +197,7 @@ extension WhoopStore {
 
         var startedAt: Date { Date(timeIntervalSince1970: firstSleep.timestamp) }
         var endedAt: Date { Date(timeIntervalSince1970: lastSleep.timestamp) }
-        var durationMinutes: Double { sleepSeconds / 60.0 }
+        var durationMinutes: Double { (sleepSeconds + bridgedSleepSeconds) / 60.0 }
         var dateKey: String { DayKey.string(from: endedAt, timeZone: .autoupdatingCurrent) }
         var secondsSinceLastAsleep: Double { latest.timestamp - lastSleep.timestamp }
 
@@ -288,7 +294,7 @@ extension WhoopStore {
     ) -> [HistoricalRow] {
         let cutoff = now.addingTimeInterval(-48 * 60 * 60).timeIntervalSince1970
         let sql = """
-            SELECT sample_at, heart_rate, sleep_state
+            SELECT \(historicalRowColumns)
             FROM whoop_historical_sample
             WHERE sample_at >= ? AND sample_at <= ?
               AND peripheral_id = (
@@ -306,13 +312,21 @@ extension WhoopStore {
 
         var rows: [HistoricalRow] = []
         while sqlite3_step(statement) == SQLITE_ROW {
-            rows.append(
-                HistoricalRow(
-                    timestamp: sqlite3_column_double(statement, 0),
-                    heartRate: Int(sqlite3_column_int(statement, 1)),
-                    sleepState: SleepState(rawValue: Int(sqlite3_column_int(statement, 2)))
-                ))
+            rows.append(historicalRow(statement))
         }
         return rows
+    }
+
+    static let historicalRowColumns = "sample_at, heart_rate, sleep_state, step_motion_counter"
+
+    /// Reads one row selected with `historicalRowColumns`.
+    static func historicalRow(_ statement: OpaquePointer) -> HistoricalRow {
+        HistoricalRow(
+            timestamp: sqlite3_column_double(statement, 0),
+            heartRate: Int(sqlite3_column_int(statement, 1)),
+            sleepState: SleepState(rawValue: Int(sqlite3_column_int(statement, 2))),
+            stepCounter: sqlite3_column_type(statement, 3) == SQLITE_NULL
+                ? nil : UInt16(truncatingIfNeeded: sqlite3_column_int(statement, 3))
+        )
     }
 }

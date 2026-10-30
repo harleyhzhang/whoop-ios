@@ -9,12 +9,14 @@ extension WhoopStore {
     /// version. Without this, an app update would fix future nights but leave
     /// the handful of locally scored pre-update nights on the old duration-only
     /// formula forever merely because they fell outside the 48-hour live window.
-    func backfillLocalSleepScoresIfNeeded() {
+    /// Returns whether any night was rewritten, so Recovery can follow.
+    @discardableResult
+    func backfillLocalSleepScoresIfNeeded() -> Bool {
         guard let database,
             metadataValue(database: database, key: "local-sleep-score-backfill") != Self.localSource
-        else { return }
+        else { return false }
         let sql = """
-            SELECT sample_at, heart_rate, sleep_state
+            SELECT \(Self.historicalRowColumns)
             FROM whoop_historical_sample
             WHERE peripheral_id = (
                 SELECT peripheral_id FROM whoop_historical_sample
@@ -25,23 +27,19 @@ extension WhoopStore {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
             let statement
-        else { return }
+        else { return false }
         var rows: [HistoricalRow] = []
         while sqlite3_step(statement) == SQLITE_ROW {
-            rows.append(
-                HistoricalRow(
-                    timestamp: sqlite3_column_double(statement, 0),
-                    heartRate: Int(sqlite3_column_int(statement, 1)),
-                    sleepState: SleepState(rawValue: Int(sqlite3_column_int(statement, 2)))
-                ))
+            rows.append(Self.historicalRow(statement))
         }
         sqlite3_finalize(statement)
-        guard let latest = rows.last, execute("BEGIN IMMEDIATE") else { return }
+        guard let latest = rows.last, execute("BEGIN IMMEDIATE") else { return false }
         let ranges = WhoopBackfillPlanner.indexedSleepRanges(
             in: rows,
             timestamp: { $0.timestamp },
             isAsleep: { $0.sleepState == .asleep }
         )
+        var rewrote = false
         for range in ranges {
             let session = Array(rows[range.sessionRange])
             let group = range.asleepIndices.map { rows[$0] }
@@ -56,6 +54,8 @@ extension WhoopStore {
                 latestSampleIsCurrent: false,
                 cadenceSeconds: cadence,
                 sleepSeconds: Self.elapsedSeconds(across: group, cadence: cadence),
+                bridgedSleepSeconds: WhoopQuietUpPolicy.bridgedSleepSeconds(
+                    session: session, cadence: cadence),
                 sessionCoverage: Self.observedFraction(of: session, cadence: cadence),
                 wakeSeconds: 0
             )
@@ -68,8 +68,9 @@ extension WhoopStore {
                 )
             else {
                 execute("ROLLBACK")
-                return
+                return false
             }
+            rewrote = true
         }
         guard
             setMetadataValue(
@@ -77,8 +78,9 @@ extension WhoopStore {
             ), execute("COMMIT")
         else {
             execute("ROLLBACK")
-            return
+            return false
         }
+        return rewrote
     }
 
     func rebuildRecoveryMetricsIfNeeded(force: Bool = false) {
@@ -290,10 +292,12 @@ extension WhoopStore {
                     latestSampleIsCurrent: sampleIsCurrent,
                     cadenceSeconds: cadence,
                     // State 3 ("up") may bridge two state-2 runs into one night,
-                    // but it is not sleep. Group with the asleep rows and measure
-                    // with the asleep rows; conflating those two operations added
-                    // an hour-long up interval to a real night's duration.
+                    // but is not sleep by itself. Group with the asleep rows and
+                    // measure with them; only an `up` stretch that still looks
+                    // like sleep is added back, by `WhoopQuietUpPolicy`.
                     sleepSeconds: Self.elapsedSeconds(across: session, cadence: cadence),
+                    bridgedSleepSeconds: WhoopQuietUpPolicy.bridgedSleepSeconds(
+                        session: sessionRows, cadence: cadence),
                     sessionCoverage: Self.observedFraction(of: sessionRows, cadence: cadence),
                     wakeSeconds: Self.elapsedSeconds(across: wakeRows, cadence: cadence)
                 ))

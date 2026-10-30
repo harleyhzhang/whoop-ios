@@ -12,6 +12,7 @@
     "WhoopKit/WhoopConnectionSession.swift": 90,
     "WhoopKit/WhoopHistoricalSyncState.swift": 85,
     "WhoopKit/WhoopProtocol.swift": 88,
+    "WhoopKit/WhoopQuietUpPolicy.swift": 95,
     "WhoopKit/WhoopStorageReliability.swift": 70,
     "WhoopKit/WhoopStore.swift": 73,
     "WhoopKit/WhoopTransportPipeline.swift": 88
