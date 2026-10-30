@@ -79,8 +79,10 @@ runtime decoding ahead of the external private-file replacement boundary.
   Civil timestamps/offsets define Strain days independently of wake-based Steps.
   Dashboard reads begin on activation and publication updates refresh only
   visible UI; a background relaunch does not trigger a view-model read.
-  Missing/conflicting evidence stays missing; current-day coverage is elapsed-time
-  coverage. Private calibration remains an embedded, hash-checked asset.
+  Missing intervals add zero Strain load; coverage remains measured and does not
+  suppress a valid accumulated score. Conflicting day offsets and invalid scoring
+  inputs remain unavailable. Current-day coverage uses elapsed time. Private
+  calibration remains an embedded, hash-checked asset.
 - `WhoopStorageReliability.swift` owns typed SQLite failures, lifecycle states,
   initialization retry policy, readiness fan-out, and the injectable packet
   persistence boundary.

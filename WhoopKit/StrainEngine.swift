@@ -47,7 +47,7 @@ struct StrainEstimate: Codable, Sendable {
 /// Streaming, bounded-memory estimator for direct strap samples.
 /// The muscular classifier is a conservative heuristic, not a validated activity label.
 struct StrainAccumulator {
-    static let version = "local_strain_v1_experimental"
+    static let version = "local_strain_v2_zero_fill_experimental"
     private struct Minute {
         var seconds = 0.0
         var heartRateSeconds = 0.0
@@ -162,7 +162,13 @@ struct StrainAccumulator {
         // This is intentionally not presented as a fitted modern WHOOP muscular model.
         let referenceLoad = calibration.loadScale * expm1(10 / calibration.scoreScale)
         let muscularLoad = referenceLoad * strength.minutes / 60 * 0.35
-        let usable = coverage >= 0.9 && observedSeconds >= 60 * 60
+        // Missing intervals contribute no load; coverage describes the evidence,
+        // but never suppresses an otherwise valid accumulated score.
+        let usable =
+            validWindow && calibration.isValid
+            && maximumHeartRate.isFinite && (90...230).contains(maximumHeartRate)
+            && restingHeartRate.isFinite && restingHeartRate >= 30
+            && restingHeartRate < maximumHeartRate
         return StrainEstimate(
             day: day, score: usable ? calibration.score(load: cardiovascularLoad + muscularLoad) : nil,
             cardiovascularScore: calibration.score(load: cardiovascularLoad),

@@ -49,7 +49,7 @@ final class StrainEngineTests: XCTestCase {
         let duplicates = replay(duplicate: true)
         XCTAssertTrue(duplicates.score == lift.score && duplicates.coverage == lift.coverage)
         let gap = replay(dropRange: 1_200..<3_600)
-        XCTAssertTrue(gap.coverage < 0.7 && gap.score == nil && gap.probableStrengthSessions == 0)
+        XCTAssertTrue(gap.coverage < 0.7 && gap.score != nil && gap.probableStrengthSessions == 0)
         XCTAssertTrue(abs(replay(cadence: 1).cardiovascularScore - lift.cardiovascularScore) < 0.1)
         var invalid = StrainAccumulator(
             calibration: calibration, start: 0, end: 7_200,
@@ -58,7 +58,7 @@ final class StrainEngineTests: XCTestCase {
         invalid.append(StrainSample(timestamp: 6, heartRate: 0, stepCounter: nil, sleepState: nil))
         invalid.append(StrainSample(timestamp: 12, heartRate: 255, stepCounter: nil, sleepState: nil))
         let empty = invalid.finish(day: "synthetic")
-        XCTAssertTrue(empty.score == nil && empty.observedSeconds == 0)
+        XCTAssertTrue(empty.score == 0 && empty.observedSeconds == 0)
         invalid.append(StrainSample(timestamp: 18, heartRate: 100, stepCounter: 0, sleepState: 0))
         XCTAssertTrue(invalid.finish(day: "synthetic").observedSeconds == 0, "Finished days stay finalized")
         var invalidWindow = StrainAccumulator(
@@ -66,4 +66,47 @@ final class StrainEngineTests: XCTestCase {
             maximumHeartRate: 190, restingHeartRate: 50)
         XCTAssertTrue(invalidWindow.finish(day: "synthetic").score == nil)
     }
+
+    func testMissingIntervalsAddZeroLoadWithoutSuppressingObservedStrain() throws {
+        func estimate(end: Double, samples: Bool = true) -> StrainEstimate {
+            var engine = StrainAccumulator(
+                calibration: calibration, start: 0, end: end,
+                maximumHeartRate: 190, restingHeartRate: 50)
+            if samples {
+                for second in stride(from: 0, to: 300, by: 6) {
+                    engine.append(
+                        StrainSample(
+                            timestamp: Double(second), heartRate: 140,
+                            stepCounter: nil, sleepState: 0))
+                }
+            }
+            return engine.finish(day: "synthetic")
+        }
+        let fiveMinutes = estimate(end: 300)
+        let sparseDay = estimate(end: 86_400)
+        XCTAssertGreaterThan(try XCTUnwrap(fiveMinutes.score), 0)
+        XCTAssertEqual(sparseDay.score, fiveMinutes.score, "Missing hours add zero load, without extrapolation")
+        XCTAssertEqual(sparseDay.observedSeconds, 300)
+        XCTAssertEqual(sparseDay.coverage, 300.0 / 86_400, accuracy: 0.000_001)
+        let empty = estimate(end: 86_400, samples: false)
+        XCTAssertEqual(empty.score, 0)
+        XCTAssertEqual(empty.coverage, 0)
+        XCTAssertEqual(empty.observedSeconds, 0)
+    }
+
+    func testInvalidScoringInputsRemainUnavailable() {
+        let invalidCalibration = StrainCalibration(
+            version: "invalid", exponent: .nan, loadScale: 1, scoreScale: 4)
+        for (model, maximum, resting) in [
+            (invalidCalibration, 190.0, 50.0), (calibration, Double.nan, 50.0),
+            (calibration, 80.0, 50.0), (calibration, 190.0, Double.nan),
+            (calibration, 190.0, 20.0), (calibration, 190.0, 190.0),
+        ] {
+            var engine = StrainAccumulator(
+                calibration: model, start: 0, end: 300,
+                maximumHeartRate: maximum, restingHeartRate: resting)
+            XCTAssertNil(engine.finish(day: "synthetic").score)
+        }
+    }
+
 }
