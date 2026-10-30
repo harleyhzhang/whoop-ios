@@ -35,6 +35,21 @@ final class WhoopUITests: XCTestCase {
         )
     }
 
+    func testMovementCalibrationIsExplicitAndUnavailableWithoutRealStrap() {
+        let app = configuredApplication()
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Sleep"].firstMatch.waitForExistence(timeout: 5))
+        app.swipeUp()
+        app.descendants(matching: .any)["card.strain"].firstMatch.press(forDuration: 1)
+        app.buttons["Record movement calibration"].tap()
+        XCTAssertTrue(app.navigationBars["Movement calibration"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Start recording"].exists)
+        XCTAssertFalse(app.buttons["Start recording"].isEnabled)
+        XCTAssertTrue(app.staticTexts["Waiting for WHOOP to connect and finish syncing"].exists)
+        app.buttons["Done"].tap()
+        XCTAssertFalse(app.navigationBars["Movement calibration"].exists)
+    }
+
     func testDisconnectedDashboardStillDisplaysBatteryReadings() {
         let app = configuredApplication()
         app.launchEnvironment["WHOOP_MOCK_CONNECTED"] = "0"

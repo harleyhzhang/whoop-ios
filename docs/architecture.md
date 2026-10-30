@@ -126,6 +126,21 @@ The direction of dependency is presentation → orchestration → pure policy an
 storage. Pure policy must not import SwiftUI, CoreBluetooth, or global clocks.
 Framework APIs belong behind small adapters so decisions can be unit tested.
 
+## Bounded movement calibration
+
+`WhoopMotionCaptureState` owns the deterministic temporary-sensor lifecycle;
+`WhoopMotionCapture` journals cleanup before device writes and acts only on
+successfully persisted transport summaries. `WhoopMotionProtocol` recognizes
+R21 without replacing raw evidence. History and keepalive commands defer while
+the capture owns the command stream; normal history resumes after verified
+cleanup. The existing Strain model and cache version remain unchanged.
+
+`MotionCalibrationView` is an explicit long-press action on the Strain card.
+Session labels and raw hashes live in the private, bounded
+`motion-calibration.json` archive, which canonical shipping backs up and checks
+for preserved labels/buffers. See [movement calibration](movement-calibration.md)
+for exact limits, protocol assumptions and remaining device/model validation.
+
 ## Data flow
 
 1. CoreBluetooth delivers a packet to the probe, which snapshots its immutable

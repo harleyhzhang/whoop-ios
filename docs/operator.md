@@ -74,3 +74,12 @@ redundant folders. `--retire-unusable` includes malformed or empty legacy
 folders after schema coverage succeeds; `--purge-now` removes only recorded
 quarantine entries. Re-run `Tools/maintain_device_backups.sh` and review a clean
 `invalid=0` inventory before an immediate purge.
+
+## Brief movement calibration
+
+The Strain card's long-press menu opens the explicit bounded motion recording.
+See [movement-calibration.md](movement-calibration.md) for the smallest labeled
+sample, stop/cleanup behavior, storage bounds and read-only export. This is a
+collection prerequisite, not a promoted lifting-model change. Canonical backups
+include `motion-calibration.json`; an existing archive requires a postinstall
+snapshot so its labels and raw-buffer references can be checked for preservation.

@@ -26,8 +26,14 @@ struct WhoopTransportBatchSummary: Sendable {
     let latestHistoricalSampleAt: Date?
     let latestWristState: Bool?
     let metadataEvents: [WhoopTransportMetadataEvent]
+    let motionEvents: [(UUID, WhoopMotionProtocol.Event)]
+    let deliveredByteCount: Int
 
     init(envelopes: [WhoopPacketEnvelope]) {
+        deliveredByteCount = envelopes.reduce(0) { $0 + $1.packet.count }
+        motionEvents = envelopes.compactMap { envelope in
+            WhoopMotionProtocol.event(envelope).map { (envelope.peripheralID, $0) }
+        }
         offloadSessionID = envelopes.compactMap(\.offloadSessionID).last
         let ordinals = envelopes.compactMap(\.proprietaryOrdinal)
         firstProprietaryOrdinal = ordinals.first

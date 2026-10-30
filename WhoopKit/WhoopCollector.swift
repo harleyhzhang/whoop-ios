@@ -45,7 +45,7 @@ final class WhoopCollector: NSObject {
     @ObservationIgnored private var historicalWatchdogTask: Task<Void, Never>?
     @ObservationIgnored private var handshakeTask: Task<Void, Never>?
     @ObservationIgnored private let connectionRecovery = WhoopConnectionRecovery()
-    @ObservationIgnored private var backgroundDrainTask = UIBackgroundTaskIdentifier.invalid
+    @ObservationIgnored private let backgroundDrain = WhoopBackgroundDrain()
     @ObservationIgnored private var historicalSync = WhoopHistoricalSyncState()
     @ObservationIgnored private var lastAcknowledgedHistoricalEndData: [UInt8]?
     @ObservationIgnored private var lastHistoricalAcknowledgementAt: Date?
@@ -71,14 +71,27 @@ final class WhoopCollector: NSObject {
             }
         }
     )
-    private let knownPeripheralKey = "WhoopCollector.knownPeripheralIdentifier"
-    private let confirmedBondKey = "WhoopCollector.confirmedEncryptedBond"
-    private let cachedHeartRateKey = "WhoopCollector.cachedHeartRateBPM"
-    private let cachedHeartRateDateKey = "WhoopCollector.cachedHeartRateDate"
-    private let cachedBatteryLevelKey = "WhoopCollector.cachedBatteryLevel"
-    private let cachedBatteryLevelDateKey = "WhoopCollector.cachedBatteryLevelDate"
-    private let cachedSleepingKey = "WhoopCollector.cachedIsSleeping"
-
+    @ObservationIgnored lazy var motionCapture = WhoopMotionCapture(
+        send: { [weak self] command in
+            guard let self, self.isConnected, let peripheral = self.peripheral,
+                let characteristic = self.commandCharacteristic
+            else { return nil }
+            self.commandSequence &+= 1
+            peripheral.writeValue(
+                Data(command.frame(sequence: self.commandSequence)), for: characteristic, type: .withResponse)
+            return self.commandSequence
+        },
+        ready: { [weak self] in
+            guard let self, self.isConnected, !self.historicalSync.isActive,
+                !self.transportIsBackpressured
+            else { return nil }
+            return self.peripheral?.identifier
+        },
+        didFinish: { [weak self] in
+            self?.armRealtimeHeartRate()
+            self?.scheduleHistoricalSync(after: .seconds(1.5))
+        }
+    )
     private let whoop5Service = CBUUID(string: "FD4B0001-CCE1-4033-93CE-002D5875F58A")
     private let heartRateService = CBUUID(string: "180D")
     private let batteryService = CBUUID(string: "180F")
@@ -114,21 +127,8 @@ final class WhoopCollector: NSObject {
     func prepareForBackground() {
         connectionRecovery.submitPending()
         WhoopRuntimeDiagnostics.shared.recordEvent("background")
-        guard backgroundDrainTask == .invalid else { return }
-        backgroundDrainTask = UIApplication.shared.beginBackgroundTask(
-            withName: "Persist pending WHOOP packets"
-        ) { [weak self] in
-            Task { @MainActor in self?.finishBackgroundDrain() }
-        }
-        transportPipeline.flushAndWaitForPersistence { [weak self] in
-            Task { @MainActor in self?.finishBackgroundDrain() }
-        }
-    }
-
-    private func finishBackgroundDrain() {
-        guard backgroundDrainTask != .invalid else { return }
-        UIApplication.shared.endBackgroundTask(backgroundDrainTask)
-        backgroundDrainTask = .invalid
+        motionCapture.prepareForBackground()
+        backgroundDrain.begin { transportPipeline.flushAndWaitForPersistence($0) }
     }
 
     private func record(_ message: String) {
@@ -138,16 +138,16 @@ final class WhoopCollector: NSObject {
     private func restoreCachedTelemetry() {
         let defaults = UserDefaults.standard
         // Keep a cold start during sleep dashed instead of flashing cached values.
-        isSleeping = defaults.bool(forKey: cachedSleepingKey)
+        isSleeping = defaults.bool(forKey: WhoopCollectorKeys.cachedSleepingKey)
         batteryState = WhoopBatteryState(
             cachedLevel: WhoopBluetoothPolicy.cachedBatteryLevel(
-                defaults.object(forKey: cachedBatteryLevelKey)
+                defaults.object(forKey: WhoopCollectorKeys.cachedBatteryLevelKey)
             )
         )
-        if defaults.object(forKey: cachedHeartRateKey) != nil {
-            let bpm = defaults.integer(forKey: cachedHeartRateKey)
+        if defaults.object(forKey: WhoopCollectorKeys.cachedHeartRateKey) != nil {
+            let bpm = defaults.integer(forKey: WhoopCollectorKeys.cachedHeartRateKey)
             if bpm > 0 {
-                lastHeartRateReceivedAt = defaults.object(forKey: cachedHeartRateDateKey) as? Date
+                lastHeartRateReceivedAt = defaults.object(forKey: WhoopCollectorKeys.cachedHeartRateDateKey) as? Date
             }
         }
 
@@ -185,7 +185,7 @@ final class WhoopCollector: NSObject {
                 self.provisionalSleep.apply(snapshot)
                 if self.isSleeping != snapshot.isSleeping {
                     self.isSleeping = snapshot.isSleeping
-                    UserDefaults.standard.set(snapshot.isSleeping, forKey: self.cachedSleepingKey)
+                    UserDefaults.standard.set(snapshot.isSleeping, forKey: WhoopCollectorKeys.cachedSleepingKey)
                 }
                 if let record = snapshot.finalizedRecord,
                     record.sleepID != self.lastFinalizedSleepID
@@ -212,16 +212,16 @@ final class WhoopCollector: NSObject {
             return
         }
         let defaults = UserDefaults.standard
-        defaults.set(bpm, forKey: cachedHeartRateKey)
-        defaults.set(receivedAt, forKey: cachedHeartRateDateKey)
+        defaults.set(bpm, forKey: WhoopCollectorKeys.cachedHeartRateKey)
+        defaults.set(receivedAt, forKey: WhoopCollectorKeys.cachedHeartRateDateKey)
         lastTelemetryCacheWriteAt = receivedAt
     }
 
     private func applyBatteryObservation(_ observation: BatteryObservation) {
         batteryState.observe(observation)
         guard let level = observation.level else { return }
-        UserDefaults.standard.set(level, forKey: cachedBatteryLevelKey)
-        UserDefaults.standard.set(Date(), forKey: cachedBatteryLevelDateKey)
+        UserDefaults.standard.set(level, forKey: WhoopCollectorKeys.cachedBatteryLevelKey)
+        UserDefaults.standard.set(Date(), forKey: WhoopCollectorKeys.cachedBatteryLevelDateKey)
         WhoopNotificationManager.shared.observeBattery(
             BatteryObservation(level: level, status: batteryStatus)
         )
@@ -244,6 +244,7 @@ final class WhoopCollector: NSObject {
         _ result: WhoopPacketBatchPersistenceResult,
         summary: WhoopTransportBatchSummary
     ) {
+        motionCapture.persisted(summary.motionEvents, success: result.success, byteCount: summary.deliveredByteCount)
         guard result.success else {
             if let failure = result.failure {
                 record(failure.localizedDescription)
@@ -347,7 +348,7 @@ final class WhoopCollector: NSObject {
         commandSequence = 1
         canAttemptHandshake = false
         handshakePhase = .waitingForDevice
-        if let savedIdentifier = UserDefaults.standard.string(forKey: knownPeripheralKey),
+        if let savedIdentifier = UserDefaults.standard.string(forKey: WhoopCollectorKeys.knownPeripheralKey),
             let uuid = UUID(uuidString: savedIdentifier),
             let known = central.retrievePeripherals(withIdentifiers: [uuid]).first
         {
@@ -369,7 +370,7 @@ final class WhoopCollector: NSObject {
         guard peripheral == nil else { return }
         peripheral = candidate
         _ = connectionSession.select(candidate.identifier)
-        UserDefaults.standard.set(candidate.identifier.uuidString, forKey: knownPeripheralKey)
+        UserDefaults.standard.set(candidate.identifier.uuidString, forKey: WhoopCollectorKeys.knownPeripheralKey)
         central.stopScan()
         deviceName = candidate.name ?? "WHOOP"
         record("Connecting to \(deviceName) [\(candidate.identifier.uuidString)] (\(description))")
@@ -413,6 +414,7 @@ final class WhoopCollector: NSObject {
     }
 
     private func resetConnectionSession() {
+        motionCapture.disconnected()
         if let historicalSessionID = historicalSync.reset() {
             transportPipeline.flushAndWaitForPersistence { [store] in
                 store.abandonHistoricalOffload(
@@ -466,6 +468,7 @@ final class WhoopCollector: NSObject {
             record("Subscribing to standard Heart Rate Measurement 2A37")
             peripheral.setNotifyValue(true, for: heartRateCharacteristic)
         }
+        motionCapture.connected(peripheral.identifier)
         armRealtimeHeartRate()
         scheduleHistoricalSync(after: .seconds(1.5))
     }
@@ -488,7 +491,7 @@ final class WhoopCollector: NSObject {
     }
 
     private func beginHistoricalSync() {
-        guard !transportIsBackpressured,
+        guard !motionCapture.blocksHistory, !transportIsBackpressured,
             !historicalSync.isActive,
             let peripheral,
             peripheral.state == .connected,
@@ -605,7 +608,7 @@ final class WhoopCollector: NSObject {
     }
 
     private func armRealtimeHeartRate() {
-        guard let peripheral,
+        guard !motionCapture.blocksHistory, let peripheral,
             peripheral.state == .connected,
             let commandCharacteristic
         else { return }
@@ -648,7 +651,7 @@ final class WhoopCollector: NSObject {
     }
 
     private func scheduleAutomaticHandshakeIfTrusted() {
-        guard UserDefaults.standard.bool(forKey: confirmedBondKey) else { return }
+        guard UserDefaults.standard.bool(forKey: WhoopCollectorKeys.confirmedBondKey) else { return }
         let expectedSession = connectionSession.token()
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
@@ -714,7 +717,7 @@ extension WhoopCollector: @preconcurrency CBCentralManagerDelegate {
         _ = connectionSession.select(restored.identifier)
         restored.delegate = self
         deviceName = restored.name ?? "WHOOP"
-        UserDefaults.standard.set(restored.identifier.uuidString, forKey: knownPeripheralKey)
+        UserDefaults.standard.set(restored.identifier.uuidString, forKey: WhoopCollectorKeys.knownPeripheralKey)
         WhoopRuntimeDiagnostics.shared.recordEvent("bluetooth restored")
         record("CoreBluetooth restored WHOOP [\(restored.identifier.uuidString)] in state \(restored.state.rawValue)")
         // The powered-on callback resumes this adopted peripheral. Starting a
@@ -864,7 +867,7 @@ extension WhoopCollector: @preconcurrency CBPeripheralDelegate {
             central.cancelPeripheralConnection(peripheral)
         } else {
             handshakePhase = .acknowledged
-            UserDefaults.standard.set(true, forKey: confirmedBondKey)
+            UserDefaults.standard.set(true, forKey: WhoopCollectorKeys.confirmedBondKey)
             record("CLIENT_HELLO acknowledged; encrypted bond established")
             subscribeAfterHandshake()
         }

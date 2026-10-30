@@ -351,10 +351,12 @@ def test_backup_validation_hashes_sqlite_and_detects_data_loss(tmp_path: Path) -
         {"formatVersion": 1, "snapshots": [], "pendingIngestion": {}},
     )
 
+    write_json(raw / "motion-calibration.json", {"schemaVersion": 1, "sessions": []})
     preinstall = core.validate_backup(raw, expected_schema=10, exact_schema=True)
     assert preinstall.quick_check == "ok"
     assert preinstall.foreign_key_violations == 0
     assert preinstall.table_counts == counts
+    assert "motion-calibration.json" in preinstall.hashes
     assert "storage-telemetry-v1.json" in preinstall.hashes
     assert not raw.exists()
     assert not any("migration-backups" in name for name in preinstall.hashes)
@@ -1046,3 +1048,32 @@ def test_storage_does_not_hide_invalid_or_empty_capacity(tmp_path: Path, value: 
         environment.device_available_storage(
             StorageRunner(output=value), tmp_path, core.choose_device(device_payload())
         )
+
+
+def test_motion_calibration_preservation_allows_cleanup_but_never_lost_labels_or_buffers(
+    tmp_path: Path,
+) -> None:
+    before = tmp_path / "before"
+    after = tmp_path / "after"
+    before.mkdir()
+    after.mkdir()
+    session = {
+        "id": "synthetic",
+        "label": "Lifting",
+        "buffers": [{"sha256": "synthetic"}],
+        "phase": "needsCleanup",
+    }
+    write_json(before / "motion-calibration.json", {"schemaVersion": 1, "sessions": [session]})
+    updated = {**session, "phase": "complete"}
+    write_json(after / "motion-calibration.json", {"schemaVersion": 1, "sessions": [updated]})
+    pre = core.BackupResult(str(before), "", 11, "ok", 0, {}, {"motion-calibration.json": "test"})
+    post = replace(pre, path=str(after))
+    core.assert_motion_calibration_preserved(pre, post)
+    write_json(
+        after / "motion-calibration.json",
+        {"schemaVersion": 1, "sessions": [{**updated, "buffers": []}]},
+    )
+    with pytest.raises(core.IntegrityError, match="evidence"):
+        core.assert_motion_calibration_preserved(pre, post)
+    with pytest.raises(core.IntegrityError, match="lost the motion"):
+        core.assert_motion_calibration_preserved(pre, replace(post, hashes={}))

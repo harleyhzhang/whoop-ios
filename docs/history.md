@@ -3,6 +3,13 @@
 A running log of verified capabilities and design decisions, moved out of the
 README. Newer entries are not guaranteed to be appended here; see the Git log.
 
+- October 30: added an explicitly started, labeled accel/gyro capture with time, byte and
+  buffer limits; durable cleanup across interruption; conservative R21 parsing;
+  and a read-only raw-axis export. Canonical backups retain the calibration
+  archive and reject lost labels or buffers. Strain math is unchanged: this
+  collects the missing evidence for a lifting-model repair, not a validated
+  replacement model. See [movement calibration](movement-calibration.md).
+
 - The SwiftUI dashboard and interaction design are installed on the paired iPhone.
 - The app can reconnect to the paired WHOOP 5, establish its encrypted
   link, subscribe to all known live notification channels, and construct the
