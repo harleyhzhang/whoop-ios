@@ -111,6 +111,9 @@ runtime decoding ahead of the external private-file replacement boundary.
   the normal deployment-health reporter verifies the recovered store.
 - `WhoopBackfillPlanner.swift` owns bounded recovery history and the single-pass
   sleep-range index used by model backfills.
+- `WhoopQuietUpPolicy.swift` decides which strap `up` stretches inside a night
+  still look like sleep (sleep-level heart rate, no walking burst) and adds
+  only those to reported duration; evidence gates stay on explicit sleep.
 - `WhoopStore.swift` remains the persistence façade while schema migration,
   seed import, ingestion, step/sleep/recovery materialization, and diagnostics
   move behind focused collaborators one vertical slice at a time.

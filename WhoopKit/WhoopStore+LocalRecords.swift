@@ -102,7 +102,7 @@ extension WhoopStore {
     /// archived WHOOP row and is authoritative.
     static let bundledSleepScoreModel = SleepScoreModelBundle.load()
     static let bundledRecoveryScoreModel = RecoveryScoreModelBundle.load()
-    static let localSource = "\(bundledSleepScoreModel?.version ?? "whoop5_local_v5_fallback")_materialized_4"
+    static let localSource = "\(bundledSleepScoreModel?.version ?? "whoop5_local_v5_fallback")_materialized_5"
     static let localSourcePrefix = "whoop5_local"
 
     /// A deterministic, coefficient-only safety net for development builds

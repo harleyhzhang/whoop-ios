@@ -74,9 +74,9 @@ extension WhoopStore {
         if databaseURLOverride == nil {
             importBundledHistory()
             importBundledOfficialMetrics()
-            backfillLocalSleepScoresIfNeeded()
+            let rescoredSleep = backfillLocalSleepScoresIfNeeded()
             rebuildWakeAnchoredStepDaysIfNeeded()
-            rebuildRecoveryMetricsIfNeeded()
+            rebuildRecoveryMetricsIfNeeded(force: rescoredSleep)
         }
         if runBackgroundDecoding {
             backfillVersion26PPG()

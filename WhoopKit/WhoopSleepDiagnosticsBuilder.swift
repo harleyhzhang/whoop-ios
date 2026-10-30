@@ -51,6 +51,8 @@ struct WhoopSleepDiagnosticsBuilder {
             let sessionCadence = WhoopStore.cadenceSeconds(of: inSession)
             let wakeRows = rows.filter { $0.timestamp > last.timestamp && $0.sleepState != .asleep }
             let duration = WhoopStore.elapsedSeconds(across: group, cadence: sessionCadence)
+            let bridged = WhoopQuietUpPolicy.bridgedSleepSeconds(
+                session: inSession, cadence: sessionCadence)
             let coverage = WhoopStore.observedFraction(of: inSession, cadence: sessionCadence)
             let density = min(1.0, Double(inSession.count) / max(1.0, span / sessionCadence))
             let wake = WhoopStore.elapsedSeconds(across: wakeRows, cadence: sessionCadence)
@@ -78,6 +80,7 @@ struct WhoopSleepDiagnosticsBuilder {
                 latestSampleIsCurrent: latestSampleIsCurrent,
                 cadenceSeconds: sessionCadence,
                 sleepSeconds: duration,
+                bridgedSleepSeconds: bridged,
                 sessionCoverage: coverage,
                 wakeSeconds: wake
             )
@@ -97,7 +100,7 @@ struct WhoopSleepDiagnosticsBuilder {
             sessions.append(
                 WhoopSleepSessionDiagnostics(
                     startedAt: stamp(first.timestamp), endedAt: stamp(last.timestamp),
-                    spanMinutes: (span / 60).rounded(), durationMinutes: (duration / 60).rounded(),
+                    spanMinutes: (span / 60).rounded(), durationMinutes: candidate.durationMinutes.rounded(),
                     sampleCount: inSession.count, coverage: coverage, sampleDensity: density,
                     bankedWakeMinutes: (wake / 60).rounded(),
                     minutesSinceLastAsleep: (since / 60).rounded(),
