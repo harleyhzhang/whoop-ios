@@ -7,6 +7,7 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
+import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -755,8 +756,82 @@ def test_suspension_quiesces_then_always_resumes_after_failure(
         raise RuntimeError("copy failed")
 
     actions = [call[2] for call in runner.device_calls if call[:2] == ["device", "process"]]
-    assert actions == ["suspend", "resume"]
-    assert waits == [True]
+    assert actions == ["launch", "suspend", "resume"]
+    assert waits == [True, True]
+
+
+class BackgroundRestartRunner(RecordingRunner):
+    def __init__(self, restarted_pid: int | None) -> None:
+        super().__init__()
+        self.restarted_pid = restarted_pid
+        self.launched = False
+
+    def devicectl_json(
+        self,
+        arguments: list[str],
+        scratch: Path,
+        *,
+        check: bool = True,
+        timeout: int = 60,
+    ) -> tuple[object | None, subprocess.CompletedProcess[str]]:
+        payload, completed = super().devicectl_json(
+            arguments, scratch, check=check, timeout=timeout
+        )
+        if arguments[:3] == ["device", "process", "launch"]:
+            self.launched = True
+        if "processes" in arguments and self.launched:
+            running = (
+                [] if self.restarted_pid is None else [{"name": "WHOOP", "pid": self.restarted_pid}]
+            )
+            payload = {"result": {"runningProcesses": running}}
+        return payload, completed
+
+
+def test_backup_backgrounds_app_before_suspending_its_new_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = BackgroundRestartRunner(8765)
+    device = core.Device("CORE-1", "UDID-1", "IP", "iPhone", "27.0", "24A1", "")
+    monkeypatch.setattr(device_shipping, "wait_for_backup_quiescence", lambda: None)
+    with device_shipping.suspended_application(runner, tmp_path, device):
+        calls = [call for call in runner.device_calls if call[:2] == ["device", "process"]]
+        assert [call[2] for call in calls] == ["launch", "suspend"]
+        assert "--no-activate" in calls[0] and "--terminate-existing" in calls[0]
+        assert calls[1][calls[1].index("--pid") + 1] == "8765"
+    assert runner.device_calls[-1][runner.device_calls[-1].index("--pid") + 1] == "8765"
+
+
+def test_backup_does_not_copy_when_background_restart_has_no_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = BackgroundRestartRunner(None)
+    device = core.Device("CORE-1", "UDID-1", "IP", "iPhone", "27.0", "24A1", "")
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+    with (
+        pytest.raises(core.ShippingError, match="did not start in the background"),
+        device_shipping.suspended_application(runner, tmp_path, device),
+    ):
+        pytest.fail("An unquiesced app must never be copied")
+    assert not any("suspend" in call or "resume" in call for call in runner.device_calls)
+
+
+def test_install_verification_launches_without_foreground_activation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = RecordingRunner()
+    device = core.Device("CORE-1", "UDID-1", "IP", "iPhone", "27.0", "24A1", "")
+    monkeypatch.setattr(device_shipping, "device_is_locked", lambda *_: False)
+    monkeypatch.setattr(device_shipping, "device_file_stamps", lambda *_: {})
+    monkeypatch.setattr(device_shipping, "file_stamps_advanced", lambda *_: True)
+    assert (
+        device_shipping.launch_and_verify(runner, tmp_path, device, {}, tmp_path / "manifest.json")
+        == 4321
+    )
+    launch = next(call for call in runner.device_calls if "launch" in call)
+    assert "--no-activate" in launch and "--terminate-existing" in launch
 
 
 class ResumeFailureRunner(RecordingRunner):
@@ -787,7 +862,8 @@ def test_suspension_retries_resume_then_relaunches(
         pass
 
     actions = [call[2] for call in runner.device_calls if call[:2] == ["device", "process"]]
-    assert actions == ["suspend", "resume", "resume", "launch"]
+    assert actions == ["launch", "suspend", "resume", "resume", "launch"]
+    assert all("--no-activate" in call for call in runner.device_calls if "launch" in call)
 
 
 class BaselineRunner(RecordingRunner):
