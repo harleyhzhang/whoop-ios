@@ -2,8 +2,8 @@ import Foundation
 import Observation
 import UIKit
 
-/// Session metadata only. Full sensor frames use the existing durable raw-packet
-/// store and are linked by SHA256, peripheral, sensor time and receipt time.
+/// Session metadata only. Original notifications remain in the durable raw-packet
+/// store; reconstructed frames link their hashes, characteristic and source hashes.
 final class WhoopMotionCaptureJournal {
     struct Document: Codable {
         var schemaVersion = 1
@@ -34,6 +34,13 @@ final class WhoopMotionCaptureJournal {
     func load() throws -> WhoopMotionCaptureState? {
         let document = try document()
         return document.sessions.first { $0.id == document.pendingSessionID }
+    }
+
+    func recentCompleted(now: Date) throws -> WhoopMotionCaptureState? {
+        guard let state = try document().sessions.last, state.phase == .complete,
+            (0...600).contains(now.timeIntervalSince(state.endedAt ?? .distantPast))
+        else { return nil }
+        return state
     }
 
     func save(_ state: WhoopMotionCaptureState) throws {
@@ -71,6 +78,7 @@ final class WhoopMotionCapture {
     @ObservationIgnored private var monotonicDeadline: ContinuousClock.Instant?
     @ObservationIgnored private var backgroundTask = UIBackgroundTaskIdentifier.invalid
     @ObservationIgnored private var connectedPeripheralID: UUID?
+    @ObservationIgnored private var reassembler = WhoopMotionReassembler()
 
     var blocksHistory: Bool { state?.needsCleanup == true }
     var canStart: Bool { !blocksHistory && errorMessage == nil && ready() != nil }
@@ -81,7 +89,7 @@ final class WhoopMotionCapture {
             return ready() == nil ? "Waiting for WHOOP to connect and finish syncing" : "Ready for a brief recording"
         }
         switch state.phase {
-        case .startingRaw, .enablingIMU, .awaitingSamples: return "Checking accel and gyro…"
+        case .readingClock, .startingRaw, .enablingIMU, .awaitingSamples: return "Checking accel and gyro…"
         case .recording: return "Recording accel and gyro"
         case .stoppingRaw, .disablingIMU, .settling: return "Stopping sensors…"
         case .needsCleanup: return "Connect WHOOP to finish stopping sensors"
@@ -105,7 +113,7 @@ final class WhoopMotionCapture {
         self.isForeground = isForeground
         self.automaticTicks = automaticTicks
         do {
-            state = try journal?.load()
+            state = try journal?.load() ?? journal?.recentCompleted(now: clock())
             if state?.needsCleanup == true { state?.disconnected(now: clock()) }
         } catch {
             errorMessage = "Capture journal cannot be read; recording is unavailable"
@@ -129,6 +137,7 @@ final class WhoopMotionCapture {
             errorMessage = "Recording could not be saved; sensors were not started"
             return
         }
+        reassembler.reset()
         state = next
         monotonicDeadline = ContinuousClock.now.advanced(by: .seconds(duration))
         connectedPeripheralID = peripheralID
@@ -170,6 +179,7 @@ final class WhoopMotionCapture {
     }
 
     func disconnected() {
+        reassembler.reset()
         connectedPeripheralID = nil
         guard blocksHistory else { return }
         state?.disconnected(now: clock())
@@ -177,6 +187,55 @@ final class WhoopMotionCapture {
         timer?.cancel()
         timer = nil
         endBackgroundTask()
+    }
+
+    func persisted(_ summary: WhoopTransportBatchSummary, success: Bool) {
+        persistedFragments(summary.motionFragments, success: success, byteCount: summary.deliveredByteCount)
+    }
+
+    /// Called only after the source notification transaction commits. No frame
+    /// interpretation or history repair may outrun raw provenance durability.
+    func persistedFragments(_ fragments: [WhoopMotionFragment], success: Bool, byteCount: Int = 0) {
+        guard let current = state,
+            blocksHistory
+                || (current.acceptsHistoryRepair && clock().timeIntervalSince(current.endedAt ?? .distantPast) <= 600)
+        else { return }
+        guard success else {
+            if blocksHistory { stop(reason: "Packet storage failed") }
+            reassembler.reset()
+            return
+        }
+        var events: [(UUID, WhoopMotionProtocol.Event)] = []
+        for fragment in fragments where fragment.peripheralID == current.peripheralID {
+            let result = reassembler.ingest(fragment)
+            if result.liveIMUHeader {
+                state?.observeProducerTraffic(now: clock())
+                if blocksHistory { startTimer() }
+            }
+            for frame in result.frames {
+                let envelope = WhoopPacketEnvelope.proprietary(
+                    packet: frame.packet,
+                    peripheralID: fragment.peripheralID, characteristicUUID: fragment.characteristicUUID,
+                    offloadSessionID: nil, deliveredAt: fragment.deliveredAt, proprietaryOrdinal: 0)
+                guard var event = WhoopMotionProtocol.event(envelope) else { continue }
+                if case .buffer(var buffer) = event {
+                    buffer.sourcePacketHashes = frame.sourceHashes
+                    event = .buffer(buffer)
+                }
+                events.append((fragment.peripheralID, event))
+            }
+        }
+        if blocksHistory {
+            persisted(events, success: true, byteCount: byteCount)
+        } else {
+            // Delayed history repairs only the recorded, clock-correlated
+            // interval. This never sends a command or resumes sensing.
+            let previousCount = state?.buffers.count
+            for (_, event) in events {
+                if case .buffer(let buffer) = event { state?.observe(buffer, now: clock()) }
+            }
+            if state?.buffers.count != previousCount { persist() }
+        }
     }
 
     func persisted(_ events: [(UUID, WhoopMotionProtocol.Event)], success: Bool, byteCount: Int = 0) {

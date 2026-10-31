@@ -27,9 +27,15 @@ struct WhoopTransportBatchSummary: Sendable {
     let latestWristState: Bool?
     let metadataEvents: [WhoopTransportMetadataEvent]
     let motionEvents: [(UUID, WhoopMotionProtocol.Event)]
+    let motionFragments: [WhoopMotionFragment]
     let deliveredByteCount: Int
 
     init(envelopes: [WhoopPacketEnvelope]) {
+        motionFragments = envelopes.filter { $0.proprietaryOrdinal != nil }.map {
+            WhoopMotionFragment(
+                packet: $0.packet, peripheralID: $0.peripheralID,
+                characteristicUUID: $0.characteristicUUID, deliveredAt: $0.deliveredAt)
+        }
         deliveredByteCount = envelopes.reduce(0) { $0 + $1.packet.count }
         motionEvents = envelopes.compactMap { envelope in
             WhoopMotionProtocol.event(envelope).map { (envelope.peripheralID, $0) }

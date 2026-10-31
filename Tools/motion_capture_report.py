@@ -18,6 +18,8 @@ import zlib
 from pathlib import Path
 from typing import cast
 
+from motion_frames import NotificationFrames
+
 APPLE_REFERENCE_EPOCH = 978307200
 MAXIMUM_JOURNAL_BYTES = 20 * 1024 * 1024
 
@@ -104,29 +106,87 @@ def export_session(
             raise ValueError("Invalid buffer reference")
         references[item["sha256"]] = item
     result: dict[str, dict[str, object]] = {}
+
+    def finite_number(value: object) -> float:
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+        ):
+            raise ValueError("Invalid numeric provenance")
+        return float(value)
+
+    last_receipt = max(
+        [finite_number(item.get("receivedAt", deadline + 15)) for item in references.values()]
+        or [float(deadline + 15)]
+    )
+    if not math.isfinite(last_receipt) or last_receipt > deadline + 600:
+        raise ValueError("Invalid repair receipt interval")
     connection = sqlite3.connect(database.resolve().as_uri() + "?mode=ro&immutable=1", uri=True)
     try:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(whoop_raw_packet)")}
+        order = "delivery_sequence" if "delivery_sequence" in columns else "received_at, rowid"
         rows = connection.execute(
             "SELECT received_at, characteristic_uuid, payload FROM whoop_raw_packet "
             "WHERE peripheral_id = ? AND received_at >= ? AND received_at <= ? "
-            "AND length(payload) = 1244 ORDER BY received_at",
+            f"ORDER BY {order} LIMIT 100001",
             (
                 session["peripheralID"],
                 started + APPLE_REFERENCE_EPOCH - 2,
-                deadline + APPLE_REFERENCE_EPOCH + 15,
+                last_receipt + APPLE_REFERENCE_EPOCH + 2,
             ),
         )
-        for received_at, characteristic, payload in rows:
-            digest = hashlib.sha256(payload).hexdigest()
-            if digest not in references or digest in result:
-                continue
-            decoded = decode_buffer(payload)
-            decoded.update(received_at_unix=received_at, characteristic_uuid=characteristic)
-            result[digest] = decoded
+        assembler = NotificationFrames()
+        total_bytes = 0
+        for index, (received_at, characteristic, payload) in enumerate(rows):
+            total_bytes += len(payload)
+            if index >= 100000 or total_bytes > 32 * 1024 * 1024:
+                raise ValueError("Motion export source window exceeds bound")
+            for packet, source_hashes in assembler.feed(characteristic, payload, received_at):
+                digest = hashlib.sha256(packet).hexdigest()
+                if digest not in references or digest in result:
+                    continue
+                reference = references[digest]
+                expected_hashes = reference.get("sourcePacketHashes")
+                if expected_hashes is not None and expected_hashes != source_hashes:
+                    raise ValueError("Source notification provenance does not match")
+                expected_characteristic = reference.get("characteristicUUID")
+                if (
+                    expected_characteristic is not None
+                    and expected_characteristic != characteristic
+                ):
+                    raise ValueError("Source characteristic does not match")
+                decoded = decode_buffer(packet)
+                decoded.update(
+                    received_at_unix=received_at,
+                    characteristic_uuid=characteristic,
+                    source_packet_sha256=source_hashes,
+                )
+                result[digest] = decoded
     finally:
         connection.close()
     if result.keys() != references.keys():
         raise ValueError("Referenced raw buffers are missing from this snapshot")
+    clock = session.get("clockReference")
+    if clock is not None:
+        if not isinstance(clock, dict):
+            raise ValueError("Invalid clock reference")
+        device, sent, received = (
+            finite_number(clock.get(key)) for key in ("deviceAt", "sentAt", "receivedAt")
+        )
+        offset = (sent + received) / 2 - device
+        uncertainty = (received - sent) / 2 + 0.02
+        if not 0 <= received - sent <= 2 or abs(offset) > 86400:
+            raise ValueError("Unbounded clock reference")
+        for decoded in result.values():
+            aligned = finite_number(decoded["sensor_at_unix"]) + offset
+            upper = finite_number(session.get("endedAt", deadline)) + APPLE_REFERENCE_EPOCH
+            if (
+                aligned - uncertainty < started + APPLE_REFERENCE_EPOCH - 1
+                or aligned + uncertainty > upper
+            ):
+                raise ValueError("Buffer falls outside the clock-correlated label interval")
+            decoded.update(aligned_sensor_at_unix=aligned, clock_uncertainty_seconds=uncertainty)
     return {
         "session": cast(dict[str, object], session),
         "buffers": [result[key] for key in references],
