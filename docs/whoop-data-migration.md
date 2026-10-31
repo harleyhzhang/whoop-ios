@@ -899,6 +899,26 @@ SELECT key, value FROM archive_metadata ORDER BY key;
 SQL
 ```
 
+### Explicit on-device rollback shipping option
+
+`Tools/ship_phone.sh --commit <merged-sha> --backup-policy on-device-migration`
+is an opt-in alternative to new full pre/post host copies. It uses the existing
+fail-closed SQLite online-backup before schema changes, retains the last trusted
+off-phone restore point, separately exports the small completed calibration
+journal, and requires a fresh commit-bound receipt for the local rollback,
+installed schema/integrity, official archive and nondecreasing table counts.
+No raw timestamp/data rewrite, uninstall, live-file-copy coherence bypass or
+persistent collector pause is involved. Default shipping stays full-offphone.
+
+This option deliberately has **local-only newest-data coverage** until the next
+external backup. It does not prove exact equality of every pre/post raw row on
+the Mac. Explicit operator selection of that protection difference is required;
+a generic wish to reduce verification is not selection. Its manifest/state
+record the prior off-phone coverage time and local-only receipt separately.
+If the target rollback file already exists, space is insufficient, cleanup is
+pending, archives differ or the receipt is missing/stale, fail closed. Follow
+only the new transaction's printed resume; never reinstall to work around it.
+
 Then verify behavior, not only row counts:
 
 - the app launches without a sample-data fallback;

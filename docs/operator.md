@@ -45,6 +45,31 @@ If shipping returns `needs-unlock` or `needs-verification`, run only the exact
 [migration runbook](whoop-data-migration.md#10-build-sign-install-and-preserve-migration-backups)
 for the fail-closed verification tiers.
 
+An explicitly selected migration alternative is:
+
+```bash
+Tools/ship_phone.sh --commit <merged-sha> --backup-policy on-device-migration
+```
+
+This avoids both whole-database wireless transfers and collector suspension.
+The app already creates and validates a full, consistent SQLite rollback **on
+this phone before migration**. The option requires a recent validated existing
+off-phone backup, enough phone space, a known installed build, no preexisting
+rollback for this target upgrade, a completed calibration journal exported
+before/after with exact matching bytes, and a fresh commit/schema/official-archive
+health receipt attesting the new local rollback and retained table counts.
+Failure to obtain that receipt leaves a resumable installation; it never
+uninstalls. Policy is bound into the manifest and printed resume command.
+
+**Protection differs:** the most recent observations are backed up only on the
+phone until a later external/replica refresh. Device loss or storage failure can
+lose those newer observations. This is not a fresh off-phone snapshot or an
+exact row-by-row host comparison. Choose it only with the operator's explicit
+acceptance of that coverage difference. Default `full-offphone` retains the
+existing full-copy preservation path. The old off-phone checkpoint is retained
+and its coverage time is not advanced by the local-only route. Physical USB is
+optional; both modes support wireless.
+
 The workflow launches without foreground activation and restarts an existing
 collector in the background before suspending its fresh process for a snapshot.
 This avoids scene-update watchdog kills that would restart a writer during

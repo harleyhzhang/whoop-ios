@@ -130,6 +130,9 @@ class DeploymentHealthReport:
     foreign_key_violations: int
     table_counts: dict[str, int]
     official_archive_sha256: str
+    migration_rollbacks: tuple[dict[str, object], ...] = ()
+    strain_backfill_json: str | None = None
+    strain_estimates_json: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -354,6 +357,21 @@ def validate_deployment_health_report(
         key: required_int(counts_value, key, "deployment health table counts")
         for key in counts_value
     }
+    rollbacks = payload.get("migrationRollbacks", [])
+    if not isinstance(rollbacks, list):
+        raise IntegrityError("Migration rollback evidence must be a list.")
+    strain_summary = payload.get("strainBackfillJSON")
+    if strain_summary is not None and not isinstance(strain_summary, str):
+        raise IntegrityError("Strain summary must be encoded JSON text.")
+    strain_values = payload.get("strainEstimatesJSON")
+    if strain_values is not None and (
+        not isinstance(strain_values, dict)
+        or any(
+            not isinstance(key, str) or not isinstance(value, str)
+            for key, value in strain_values.items()
+        )
+    ):
+        raise IntegrityError("Strain estimates must be encoded JSON text by key.")
     return DeploymentHealthReport(
         source_commit=source_commit,
         generated_at=generated_at,
@@ -362,6 +380,9 @@ def validate_deployment_health_report(
         foreign_key_violations=foreign_keys,
         table_counts=counts,
         official_archive_sha256=archive_hash,
+        migration_rollbacks=tuple(object_dict(item, "rollback report") for item in rollbacks),
+        strain_backfill_json=strain_summary,
+        strain_estimates_json=cast(dict[str, str] | None, strain_values),
     )
 
 

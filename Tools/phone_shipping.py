@@ -10,6 +10,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
+import phone_local_rollback as local_rollback
 from backup_retention import (
     apply_retention,
     plan_retention,
@@ -240,10 +241,26 @@ def complete_after_install(
     preinstall: BackupResult | None = None
     postinstall: BackupResult | None = None
     health_report: DeploymentHealthReport | None = None
-    if mode in {"protected", "migration"}:
+    local_policy = manifest.get("backupPolicy", local_rollback.FULL_POLICY) == local_rollback.POLICY
+    if mode in {"protected", "migration"} and not local_policy:
         preinstall = backup_from_manifest(manifest.get("preinstallBackup"))
         validate_backup_result(preinstall)
-    if (
+    if local_policy:
+        evidence = object_dict(manifest.get("localRollback"), "local rollback evidence")
+        health_report = fetch_deployment_health_report(
+            runner,
+            scratch,
+            doctor_result.device,
+            commit,
+            project_schema_version(repo_root),
+            doctor_result.assets.hashes["whoop-official-archive.sqlite3"],
+        )
+        receipt = local_rollback.validate_receipt(
+            evidence, health_report, required_string(manifest, "createdAt", "manifest")
+        )
+        local_rollback.finish(doctor_result.device, evidence)
+        manifest["localRollbackReceipt"] = receipt
+    elif (
         mode == "protected"
         and preinstall is not None
         and "motion-calibration.json" not in preinstall.hashes
@@ -290,6 +307,15 @@ def complete_after_install(
         postinstall,
         health_report,
     )
+    if local_policy:
+        state["backupPolicy"] = local_rollback.POLICY
+        state["dataPreservationVerification"] = (
+            "on-phone-migration-rollback-and-small-archive-attestation"
+        )
+        state["localMigrationRollback"] = manifest["localRollbackReceipt"]
+        state["offphoneCoverage"] = manifest["localRollback"]
+    else:
+        state["backupPolicy"] = local_rollback.FULL_POLICY
     atomic_write_json(state_path, state)
     try:
         retention_plan = plan_retention(backup_root, state_path)
@@ -306,7 +332,8 @@ def complete_after_install(
         manifest["deploymentHealth"] = asdict(health_report)
     atomic_write_json(manifest_path, manifest)
     print(f"status=installed\nmode={mode}\ncommit={commit}\nprocess={pid}")
-    print(f"dataPreservation=verified-{mode}\nstate={state_path}")
+    protection = "on-phone-rollback-only-newest-data" if local_policy else f"verified-{mode}"
+    print(f"dataPreservation={protection}\nstate={state_path}")
 
 
 def complete_or_request_resume(
@@ -429,6 +456,14 @@ def _run_ship_locked(
             }:
                 raise ShippingError("The shipping manifest is not awaiting verification.")
             mode = required_string(manifest, "mode", "shipping manifest")
+            policy = manifest.get("backupPolicy", local_rollback.FULL_POLICY)
+            if getattr(args, "backup_policy", None) not in (None, policy):
+                raise ShippingError("Resume backup policy differs from the original transaction.")
+            args.backup_policy = policy
+            if policy not in (local_rollback.FULL_POLICY, local_rollback.POLICY) or (
+                policy == local_rollback.POLICY and mode != "migration"
+            ):
+                raise ShippingError("Invalid backup policy for this resume transaction.")
             if mode == "full":
                 mode = "migration"
                 manifest["mode"] = mode
@@ -491,6 +526,7 @@ def _run_ship_locked(
 
         classification = classify_install(runner, repo_root, commit, state_path)
         mode = classification["mode"]
+        policy = getattr(args, "backup_policy", None) or local_rollback.FULL_POLICY
         print(
             f"installMode={mode}\nbase={classification.get('base', 'unknown')}\n"
             f"reason={classification.get('reason', 'unknown')}"
@@ -498,6 +534,13 @@ def _run_ship_locked(
         if mode == "none":
             print(f"status=already-installed\ncommit={commit}")
             return
+        if policy == local_rollback.POLICY and mode != "migration":
+            raise ShippingError(
+                "On-device rollback is only available for an actual schema migration."
+            )
+        print(f"backupPolicy={policy}")
+        if policy == local_rollback.POLICY:
+            print("newestDataCoverage=on-phone-only-until-next-external-backup")
         doctor_result = doctor(
             runner,
             repo_root,
@@ -541,7 +584,22 @@ def _run_ship_locked(
             except (OSError, ShippingError) as error:
                 print(f"warning: device build-cache cleanup requires attention: {error}")
         preinstall: BackupResult | None = None
-        if mode in {"protected", "migration"}:
+        local_evidence: dict[str, object] | None = None
+        if policy == local_rollback.POLICY:
+            old_state = read_state(state_path)
+            if old_state.get("installedBuild") != doctor_result.app.build:
+                raise IntegrityError(
+                    "Installed build differs from the trusted baseline; refusing local-only coverage."
+                )
+            local_evidence = local_rollback.prepare(
+                doctor_result.device,
+                old_state,
+                backup_root,
+                commit,
+                project_schema_version(repo_root),
+                doctor_result.device_available_bytes,
+            )
+        elif mode in {"protected", "migration"}:
             preinstall = take_backup(
                 runner,
                 scratch,
@@ -580,6 +638,9 @@ def _run_ship_locked(
             backup_root,
             staged_app_path,
         )
+        manifest["backupPolicy"] = policy
+        if local_evidence is not None:
+            manifest["localRollback"] = local_evidence
         atomic_write_json(manifest_path, manifest)
         install_and_transition(
             runner,
@@ -707,6 +768,11 @@ def build_parser() -> argparse.ArgumentParser:
     ship_parser.add_argument("--derived-data")
     ship_parser.add_argument("--dry-run", action="store_true")
     ship_parser.add_argument("--resume")
+    ship_parser.add_argument(
+        "--backup-policy",
+        choices=(local_rollback.FULL_POLICY, local_rollback.POLICY),
+        help="Explicitly choose on-phone-only newest-data rollback instead of fresh full off-phone copies.",
+    )
 
     plan_parser = subparsers.add_parser(
         "plan", help="classify a merged checkpoint without requiring an iPhone"
@@ -748,6 +814,8 @@ def main() -> int:
                 "--resume",
                 str(error.manifest),
             ]
+            if getattr(args, "backup_policy", None):
+                resume_arguments.extend(["--backup-policy", args.backup_policy])
             print(f"Resume with: {shlex.join(resume_arguments)}", file=sys.stderr)
         return RESUME_EXIT_CODE
     except DeviceUnavailable as error:

@@ -348,3 +348,15 @@ read-only clock reference aligns labels without changing the strap clock or raw
 timestamps. Matching delayed history can repair the latest recording for ten
 minutes without restarting capture. Fragmented live traffic also participates in
 stop verification. Strain scoring and model coefficients remain unchanged.
+
+
+## 2026-10-31 — Explicit local-only migration rollback option
+
+Added an opt-in canonical shipping policy using the app's existing validated
+on-phone SQLite migration rollback and a retained recent off-phone checkpoint.
+It avoids live 6 GB pre/post transfers and SIGSTOP scene watchdogs, separately
+preserves the completed calibration journal, and binds local snapshot/schema/
+commit/archive evidence to resumable installation. Newest data remain protected
+only on phone until a later external backup; full-offphone remains the default.
+Small deployment metadata includes current versioned Strain backfill evidence;
+no model, raw data, UI or sensor policy changed.
