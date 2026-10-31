@@ -909,9 +909,14 @@ Then verify behavior, not only row counts:
   in two columns (one for accessibility sizes); HRV collection, storage, and
   Recovery inputs continue while its dashboard chart is hidden;
 - Steps and Recovery keep official/local precedence and independent versions;
-- Strain keeps historical official targets and computes later days from direct
-  HR plus the rough muscular policy. Its versioned components, input revision,
-  calibration and coverage remain in metadata, while its UI label is just Strain;
+- Strain preserves actual official scores, including zero, and computes other
+  eligible dates from recorded cardiovascular HR exposure only. No inferred
+  lifting or muscular multiplier remains. Missing intervals add zero; invalid
+  windows and conflicting recorded offsets stay unknown. Startup atomically
+  backfills a new engine-version namespace while retaining old estimates,
+  input revisions, calibration and coverage. Its UI label remains Strain;
+- experimental recording controls and sensor-start commands are absent, while
+  saved calibration evidence and OFF-only legacy cleanup remain intact;
 - every chart shows one month with evenly centered vertical metric strokes and
   four average ladders; missing dates stay empty and there is no range/caret UI;
 - the installed sidecar hash matches `sourceDatabaseSHA256` in the official

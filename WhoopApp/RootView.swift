@@ -126,9 +126,6 @@ struct RootView: View {
                             ForEach([HealthMetric.steps, .duration, .rhr, .sleep, .recovery, .strain]) { metric in
                                 MetricCard(metric: metric, selected: projection.selected, days: projection.days)
                                     .accessibilityIdentifier("card.\(metric.rawValue)")
-                                    .modifier(
-                                        MotionCalibrationModifier(metric: metric, capture: whoopCollector.motionCapture)
-                                    )
                             }
                         }
                     }

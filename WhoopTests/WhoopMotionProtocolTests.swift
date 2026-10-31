@@ -91,8 +91,6 @@ final class WhoopMotionProtocolTests: XCTestCase {
             return XCTFail("Clock reply")
         }
         XCTAssertEqual(reply.deviceClock, Date(timeIntervalSince1970: 1_800_000_000))
-        XCTAssertEqual(WhoopCommand.readMotionClock.opcode, 147)
-        XCTAssertEqual(WhoopCommand.readMotionClock.payload, [1])
     }
 
 }

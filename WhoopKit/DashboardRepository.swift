@@ -9,8 +9,7 @@ struct DashboardRepository {
     func loadSnapshot(database: OpaquePointer) throws -> DashboardHistorySnapshot {
         let health = try loadDailyHealthRecords(database: database)
         let strain = try strainRepository.load(
-            database: database, health: health,
-            model: WhoopStrainModel.load())
+            database: database, model: WhoopStrainModel.load())
         return DashboardHistorySnapshot(
             healthRecords: health,
             stepRecords: try loadDailyStepRecords(database: database),

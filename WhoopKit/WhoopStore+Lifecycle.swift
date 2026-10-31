@@ -82,6 +82,7 @@ extension WhoopStore {
             backfillVersion26PPG()
             backfillVersion18Motion()
         }
+        if databaseURLOverride == nil { refreshLocalStrainProjection() }
     }
 
     func openDatabase() -> Result<URL, WhoopStorageFailure> {
