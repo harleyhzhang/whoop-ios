@@ -129,6 +129,21 @@ final class WhoopMotionCaptureTests: XCTestCase {
         XCTAssertTrue(state.buffers.isEmpty)
     }
 
+    func testEmptyR21BuffersStillPreventFalseQuietStopWithoutAddingCoverage() throws {
+        var state = try state()
+        state.stop(reason: "User", now: now)
+        try accept(&state, at: now)
+        try accept(&state, at: now)
+        for second in 1...10 {
+            let date = now.addingTimeInterval(Double(second))
+            state.observe(buffer(at: date, accel: 0, gyro: 0), now: date)
+            state.tick(now: date)
+        }
+        XCTAssertEqual(state.phase, .needsCleanup)
+        XCTAssertTrue(state.buffers.isEmpty)
+        XCTAssertFalse(state.hasBothSensors)
+    }
+
     func testNoSensorsOrStalledSensorsStopPromptly() throws {
         var missing = try state()
         try accept(&missing, at: now)

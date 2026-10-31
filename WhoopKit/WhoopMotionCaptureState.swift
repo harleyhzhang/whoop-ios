@@ -124,10 +124,12 @@ struct WhoopMotionCaptureState: Codable {
         // Only fresh, timestamped data from the labeled interval is credited.
         // Replayed history, duplicate buffers and clock skew never add coverage.
         guard abs(buffer.receivedAt.timeIntervalSince(buffer.sensorAt)) <= 2,
-            buffer.sensorAt >= startedAt.addingTimeInterval(-1),
-            buffer.accelerometerCount > 0 || buffer.gyroscopeCount > 0
+            buffer.sensorAt >= startedAt.addingTimeInterval(-1)
         else { return }
+        // Even an empty valid buffer is live producer traffic and prevents a
+        // false quiet-stop confirmation; it never adds sample coverage.
         lastLiveBufferAt = now
+        guard buffer.accelerometerCount > 0 || buffer.gyroscopeCount > 0 else { return }
         if buffer.accelerometerCount > 0, buffer.gyroscopeCount > 0 { lastBothSensorsAt = now }
         guard isCollecting, buffer.sensorAt <= deadline,
             !buffers.contains(where: { $0.sensorAt == buffer.sensorAt })
