@@ -12,15 +12,19 @@ struct WhoopDeploymentHealthReport: Codable, Equatable, Sendable {
     let foreignKeyViolations: Int
     let tableCounts: [String: Int]
     let officialArchiveSHA256: String
+    var migrationRollbacks: [WhoopMigrationRollbackReport] = []
+    var strainBackfillJSON: String?
+    var strainEstimatesJSON: [String: String] = [:]
 }
 
 enum WhoopDeploymentHealthReporter {
+    private static let reportQueue = DispatchQueue(label: "whoop.deployment-health", qos: .utility)
     static let fileName = "deployment-health-v1.json"
     private static let logger = Logger(
         subsystem: "whoop",
         category: "DeploymentHealth"
     )
-    private static let preservedTables = [
+    static let preservedTables = [
         "whoop_raw_packet",
         "whoop_historical_sample",
         "whoop_packet_replay",
@@ -36,20 +40,20 @@ enum WhoopDeploymentHealthReporter {
         "whoop_daily_step_metric",
     ]
 
-    static func start() {
+    static func start(force: Bool = false) {
         guard
             let sourceCommit = Bundle.main.object(forInfoDictionaryKey: "WHOOPSourceCommit") as? String,
             sourceCommit.range(of: "^[0-9a-fA-F]{40}$", options: .regularExpression) != nil
         else { return }
-        WhoopStore.shared.publishDeploymentHealthReport(sourceCommit: sourceCommit)
+        WhoopStore.shared.publishDeploymentHealthReport(sourceCommit: sourceCommit, force: force)
     }
 
-    static func publish(databaseURL: URL, sourceCommit: String) {
+    static func publish(databaseURL: URL, sourceCommit: String, force: Bool = false) {
         let directory = databaseURL.deletingLastPathComponent()
         let archiveURL = directory.appendingPathComponent("whoop-official-archive.sqlite3")
         let reportURL = directory.appendingPathComponent(fileName)
-        DispatchQueue.global(qos: .utility).async {
-            if let current = currentReport(at: reportURL),
+        reportQueue.async {
+            if !force, let current = currentReport(at: reportURL),
                 current.sourceCommit == sourceCommit.lowercased(),
                 current.quickCheck == "ok",
                 current.foreignKeyViolations == 0
@@ -111,6 +115,7 @@ enum WhoopDeploymentHealthReporter {
         for table in preservedTables where existingTables.contains(table) {
             tableCounts[table] = try integer(database, sql: "SELECT COUNT(*) FROM \"\(table)\"")
         }
+        let strain = try strainEvidence(database: database)
         return WhoopDeploymentHealthReport(
             formatVersion: 1,
             sourceCommit: sourceCommit.lowercased(),
@@ -119,7 +124,9 @@ enum WhoopDeploymentHealthReporter {
             quickCheck: quickCheck,
             foreignKeyViolations: foreignKeyViolations,
             tableCounts: tableCounts,
-            officialArchiveSHA256: try sha256(archiveURL)
+            officialArchiveSHA256: try sha256(archiveURL),
+            migrationRollbacks: try rollbackReports(databaseURL: databaseURL, targetSchema: schemaVersion),
+            strainBackfillJSON: strain.0, strainEstimatesJSON: strain.1
         )
     }
 
@@ -194,12 +201,12 @@ enum WhoopDeploymentHealthReporter {
 }
 
 extension WhoopStore {
-    func publishDeploymentHealthReport(sourceCommit: String) {
+    func publishDeploymentHealthReport(sourceCommit: String, force: Bool = false) {
         readiness.whenResolved { result in
             guard case .success(let databaseURL) = result else { return }
             WhoopDeploymentHealthReporter.publish(
                 databaseURL: databaseURL,
-                sourceCommit: sourceCommit
+                sourceCommit: sourceCommit, force: force
             )
         }
     }

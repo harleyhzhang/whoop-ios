@@ -121,3 +121,18 @@ def test_only_missing_optional_files_are_ignored(
     else:
         with pytest.raises(ShippingError):
             container.stat("db", required=required)
+
+
+def test_only_named_migration_rollback_can_use_nested_afc_path() -> None:
+    assert (
+        afc.AppContainer.path("migration-backups/sleep-v11-before-v12.sqlite3")
+        == b"Library/Application Support/Sleep/migration-backups/sleep-v11-before-v12.sqlite3"
+    )
+    for name in [
+        "migration-backups/../sleep.sqlite3",
+        "migration-backups/other.sqlite3",
+        "../sleep-v11-before-v12.sqlite3",
+        "migration-backups/sleep-v11-before-v12.sqlite3/extra",
+    ]:
+        with pytest.raises(ShippingError):
+            afc.AppContainer.path(name)

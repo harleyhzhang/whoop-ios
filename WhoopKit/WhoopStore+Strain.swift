@@ -16,7 +16,15 @@ extension WhoopStore {
     /// scores, old engine versions, calibration archives and raw rows stay intact.
     @discardableResult
     func persistStrainDerivations(_ derivations: [String: String]) -> Bool {
-        guard !derivations.isEmpty, let database, execute("BEGIN IMMEDIATE") else { return false }
+        guard !derivations.isEmpty, let database else { return false }
+        let summaryKey = "local-strain-backfill." + StrainAccumulator.version
+        var firstProjection = false
+        if derivations[summaryKey] != nil,
+            case .noRow? = try? metadataValue(database: database, key: summaryKey)
+        {
+            firstProjection = true
+        }
+        guard execute("BEGIN IMMEDIATE") else { return false }
         for key in derivations.keys.sorted() {
             guard let value = derivations[key],
                 setMetadataValue(database: database, key: key, value: value)
@@ -28,6 +36,9 @@ extension WhoopStore {
         guard execute("COMMIT") else {
             execute("ROLLBACK")
             return false
+        }
+        if firstProjection {
+            WhoopDeploymentHealthReporter.start(force: true)
         }
         return true
     }
