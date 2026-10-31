@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes as c
 import os
 import plistlib
+import re
 import shutil
 from pathlib import Path
 from types import TracebackType
@@ -143,7 +144,10 @@ class AppContainer:
 
     @staticmethod
     def path(name: str) -> bytes:
-        if Path(name).name != name:
+        rollback = re.fullmatch(
+            r"migration-backups/sleep-v[1-9][0-9]*-before-v[1-9][0-9]*\.sqlite3", name
+        )
+        if Path(name).name != name and rollback is None:
             raise ShippingError("Backup accepts only file names within the Sleep directory.")
         return f"Library/Application Support/Sleep/{name}".encode()
 
