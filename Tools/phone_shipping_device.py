@@ -36,6 +36,7 @@ BACKUP_OPTIONAL_FILES = (
     "sleep.sqlite3-wal",
     "sleep.sqlite3-shm",
     "storage-telemetry-v1.json",
+    "motion-calibration.json",
 )
 
 

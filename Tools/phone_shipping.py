@@ -243,8 +243,11 @@ def complete_after_install(
     if mode in {"protected", "migration"}:
         preinstall = backup_from_manifest(manifest.get("preinstallBackup"))
         validate_backup_result(preinstall)
-    if mode == "protected":
-        assert preinstall is not None
+    if (
+        mode == "protected"
+        and preinstall is not None
+        and "motion-calibration.json" not in preinstall.hashes
+    ):
         health_report = fetch_deployment_health_report(
             runner,
             scratch,
@@ -254,7 +257,7 @@ def complete_after_install(
             doctor_result.assets.hashes["whoop-official-archive.sqlite3"],
         )
         assert_health_preserved(preinstall, health_report)
-    elif mode == "migration":
+    elif mode in {"protected", "migration"}:
         assert preinstall is not None
         postinstall = take_backup(
             runner,

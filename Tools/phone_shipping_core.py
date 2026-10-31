@@ -267,6 +267,45 @@ def assert_preserved(preinstall: BackupResult, postinstall: BackupResult) -> Non
                 f"Postinstall {table} count decreased from {before_count} to {after_count}."
             )
 
+    assert_motion_calibration_preserved(preinstall, postinstall)
+
+
+def assert_motion_calibration_preserved(
+    preinstall: BackupResult, postinstall: BackupResult
+) -> None:
+    name = "motion-calibration.json"
+    if name not in preinstall.hashes:
+        return
+    if name not in postinstall.hashes:
+        raise IntegrityError("Postinstall lost the motion calibration archive.")
+    before = object_dict(load_json(Path(preinstall.path) / name, name), name)
+    after = object_dict(load_json(Path(postinstall.path) / name, name), name)
+    previous = before.get("sessions")
+    current = after.get("sessions")
+    if not isinstance(previous, list) or not isinstance(current, list):
+        raise IntegrityError("Motion calibration session lists are invalid.")
+    stable_keys = (
+        "id",
+        "peripheralID",
+        "label",
+        "notes",
+        "sourceCommit",
+        "startedAt",
+        "deadline",
+        "buffers",
+    )
+    for item in previous:
+        session = object_dict(item, "motion calibration session")
+        matches = [
+            value
+            for value in current
+            if isinstance(value, dict) and value.get("id") == session.get("id")
+        ]
+        if len(matches) != 1 or any(matches[0].get(key) != session.get(key) for key in stable_keys):
+            raise IntegrityError(
+                "Postinstall changed or lost recorded motion calibration evidence."
+            )
+
 
 def validate_deployment_health_report(
     path: Path,
@@ -1033,6 +1072,20 @@ def validate_backup(
         retained_telemetry = raw_root.parent / "storage-telemetry-v1.json"
         os.replace(telemetry_sidecars[0], retained_telemetry)
         retained_paths.append(retained_telemetry)
+    calibration_sidecars = list(raw_root.rglob("motion-calibration.json"))
+    if len(calibration_sidecars) > 1:
+        raise ShippingError("Multiple motion calibration archives found in backup.")
+    if calibration_sidecars:
+        calibration = object_dict(
+            load_json(calibration_sidecars[0], "motion calibration"), "motion calibration"
+        )
+        if calibration.get("schemaVersion") != 1 or not isinstance(
+            calibration.get("sessions"), list
+        ):
+            raise ShippingError("The backed-up motion calibration archive is invalid.")
+        retained_calibration = raw_root.parent / "motion-calibration.json"
+        os.replace(calibration_sidecars[0], retained_calibration)
+        retained_paths.append(retained_calibration)
     hashes = {path.name: sha256(path) for path in retained_paths}
     checksum_path = raw_root.parent / "SHA256SUMS.json"
     atomic_write_json(checksum_path, hashes)

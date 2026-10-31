@@ -50,6 +50,8 @@ struct WhoopHistoricalMetadata: Equatable {
 /// testable, while production call sites can only construct known commands.
 enum WhoopCommand: Equatable {
     case clientHello
+    case rawMotion(start: Bool)
+    case liveIMU(enabled: Bool)
     case requestHistory
     case acknowledgeHistoryChunk([UInt8])
     case realtimeSensors(enabled: Bool)
@@ -58,6 +60,8 @@ enum WhoopCommand: Equatable {
     var opcode: UInt8 {
         switch self {
         case .clientHello: 0x91
+        case .rawMotion(let start): start ? 81 : 82
+        case .liveIMU: 106
         case .requestHistory: 22
         case .acknowledgeHistoryChunk: 23
         case .realtimeSensors: 0x3F
@@ -68,6 +72,8 @@ enum WhoopCommand: Equatable {
     var payload: [UInt8] {
         switch self {
         case .clientHello: [0x01]
+        case .rawMotion: [0x01]
+        case .liveIMU(let enabled): [0x01, enabled ? 0x01 : 0x00]
         case .requestHistory: [0x00]
         case .acknowledgeHistoryChunk(let endData): [0x01] + endData
         case .realtimeSensors(let enabled), .realtimeHeartRate(let enabled):
