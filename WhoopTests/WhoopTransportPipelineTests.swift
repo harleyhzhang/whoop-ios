@@ -365,6 +365,7 @@ final class WhoopTransportPipelineTests: XCTestCase {
             XCTAssertEqual(scalarInt(database, "SELECT COUNT(*) FROM whoop_historical_sample"), 2)
             XCTAssertEqual(scalarInt(database, "SELECT COUNT(*) FROM whoop_raw_packet"), 5)
             XCTAssertEqual(scalarInt(database, "SELECT COUNT(*) FROM whoop_frame_source"), 4)
+            XCTAssertEqual(scalarInt(database, "SELECT COUNT(*) FROM whoop_decode_failure"), 0)
             XCTAssertEqual(scalarInt(database, "SELECT COUNT(*) FROM whoop_packet_replay WHERE duplicate_count=1"), 1)
             XCTAssertEqual(scalarInt(database, "SELECT COUNT(*) FROM pragma_foreign_key_check"), 0)
             let sourceLengths = try SQLiteRead.rows(

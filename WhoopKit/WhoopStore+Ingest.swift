@@ -268,6 +268,7 @@ extension WhoopStore {
         }
         guard
             !envelope.acceptsControlEvents
+                || envelope.provenance?.notificationID != nil
                 || decodePacketIfNeeded(
                     database: database,
                     packetID: packetID,
