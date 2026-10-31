@@ -1,81 +1,37 @@
-# Brief movement calibration
+# Retained movement calibration evidence
 
-The current experimental Strain model uses heart rate, step counters and sleep
-state. It has no validated accelerometer/gyroscope lifting model. This capture
-path collects evidence for that repair; recording does not change Strain or
-claim WHOOP-equivalent muscular load.
+The experimental recording UI and sensor-start commands were retired October 31
+at the user's request to finish from existing evidence without more experiments.
+No lifting classifier or muscular-load number is promoted: walking and rest
+controls establish motion capture, not a defensible lifting-load calibration.
+Final local Strain is recorded cardiovascular exposure with missing HR zero.
+Actual official scores keep precedence and their original source.
 
-## Record a labeled sample
+## Preservation and legacy cleanup
 
-1. Long-press the Strain card and choose **Record movement calibration**.
-2. Choose **Lifting**, **Walking**, or **Rest**, then the automatic stop time.
-   For lifting, enter the actual exercise, reps and weight in the notes.
-3. Keep WHOOP worn and the recording screen open. Start just before the activity,
-   then stop when finished. Wait for **Recording saved · sensors stopped**.
+Existing `motion-calibration.json`, labels, notes, original timestamps, source
+hashes and raw notification rows are retained. The app does not create new
+sessions, repair old labels or add later buffers to those archives. Read-only
+exports remain available. The archive remains bounded to its existing schema
+limits (32 sessions, 1,200 buffers per session, 20 MiB) without deleting evidence.
 
-Start with one representative lifting set including its rest interval, plus
-one minute each of ordinary walking and seated rest. These are initial labeled
-examples, not sufficient evidence of general accuracy. Repeat only where the
-first recordings expose a specific missing distinction. Session times, activity
-labels and actual exercise/reps/load are required to evaluate lifting detection
-and any load estimate; daily gym checkmarks cannot identify individual sets.
+A pending legacy recording recovers on the same strap using only STOP_RAW_DATA
+82 `[01]` and live IMU OFF 106 `[01,00]`. No start, clock-setting, persistent
+sensor policy or optical configuration is sent. Both stop attempts occur even
+if one is rejected or times out. Cleanup requires accepted stops and three
+seconds without live traffic, bounded by a ten-second observation window;
+the prior explicit-unsupported/no-observed-producer exception is retained.
+Unknown stops remain pending across backgrounding, disconnect and relaunch.
+Normal history defers until cleanup finishes. Firmware timeout while disconnected
+is not established. No new high-rate streaming is requested.
 
-The app waits for the existing history offload to finish before starting. Raw
-packet persistence continues throughout. Leaving the screen, backgrounding,
-loss of the connection, failed persistence, missing sensors or a stalled stream
-ends collection. A read-only command-147 clock check precedes sensor writes;
-an unsupported, invalid or slow clock reply prevents starting. Raw device times
-remain unchanged; the label uses the measured offset and round-trip uncertainty.
-No clock-setting command is sent. Capture never automatically resumes after reconnect.
-
-## Bounds and cleanup
-
-Sessions are limited to 10 minutes, 10 MiB of incoming packet bytes (plus the
-bounded in-flight transport batch), and 1,200 distinct sensor-time buffers. The
-local archive holds at most 32 sessions / 20 MiB and never silently deletes an
-old recording. Raw frames use existing SQLite storage, retention and replica
-policy; the session archive is included in canonical phone backups.
-
-Only temporary commands are used: START_RAW_DATA 81 `[01]`, then live IMU 106
-`[01,01]`; stopping always attempts STOP_RAW_DATA 82 `[01]` and 106 `[01,00]`.
-No persistent IMU/optical saving policy or global gyro setting is changed.
-A successful response is not proof of a live stream. Capture requires fresh,
-CRC-valid R21 accel and gyro buffers; lack of either stops the probe within
-30 seconds. Command timeouts are four seconds. Cleanup requires successful stop responses and at least three seconds without
-fresh R21 traffic, with a bounded ten-second observation window. An explicit
-unsupported start, with no observed R21 producer, establishes that the capture
-did not enable it; both stop
-controls are still attempted, but an unsupported optional feature does not
-permanently defer ordinary history. Failure, timeout and unknown results never
-supply that proof.
-
-BLE notifications can split a frame or contain multiple frames. Capture-only
-reassembly consumes already committed original notifications, keeps streams
-separate by peripheral/characteristic, validates both CRCs and links source
-notification hashes. It retains at most four 4 KiB stream buffers, clears them
-on disconnect or gaps longer than two seconds and never changes raw rows or
-ordinary metric decoding. Invalid partial notifications are never compacted as
-whole-frame retries merely because an arbitrary continuation byte looks like a
-packet type. Even a partial valid live-IMU header keeps cleanup
-uncertain. Live producer traffic after completion reopens OFF-only cleanup.
-
-After verified stopping, normal history can repair the latest recording for up
-to ten minutes, including after relaunch. Only sensor times wholly inside the
-clock-correlated labeled interval count; delayed arrival does not become a new
-activity or restart sensors. Keep the app open briefly after stopping for its
-normal history offload. The 1,200-buffer limit still applies. A missing clock
-reference in an older recording does not authorize assigning delayed data a label.
-
-The cleanup obligation is saved atomically before the first device command.
-Interruption leaves it pending for the next connection to the same strap.
-Background cleanup uses an iOS background task. A device-side timeout after a
-process kill or lost Bluetooth link has **not** been established; the client
-cannot guarantee firmware cleanup while disconnected. An unverified stop stays
-visible and journaled rather than being reported as success.
-
-R21 is roughly 1.2 kB per full buffer; accompanying optical traffic may increase
-that substantially. Battery cost on the paired strap has not been measured.
-There is no routine or all-day raw streaming.
+The existing R21 decoder/reassembler still accepts only CRC-valid format-1
+1,244-byte buffers, with independent accel/gyro counts up to 100. Reassembly
+uses already committed original notifications and preserves source hashes,
+peripheral and characteristic. Even a partial live header invalidates a quiet
+stop result. Streams are bounded and cleared on disconnect or long gaps. None
+of these protocol observations validates exercise recognition, physical units,
+per-sample timing, repetition count, external weight or a muscular-load score.
 
 ## Evidence and export
 
@@ -98,9 +54,8 @@ uv run --frozen python Tools/motion_capture_report.py \
 The exporter validates frame shape and both CRCs, reconstructs split frames and matches exact frame/source-notification hashes,
 characteristic and peripheral, and preserves independent signed raw XYZ axes. It does not
 invent per-sample timestamps, physical units, sample rate, exercise labels,
-reps or load. Configuration, signal quality, sample cadence and actual device
-start/stop behavior must be checked on the paired firmware before fitting or
-promoting a replacement model. Keep private exports out of Git.
+reps or load. The retained archive is evidence only; no further user experiment or model
+promotion is pending. Keep private exports out of Git.
 
 Protocol basis: the reference implementation's
 [sensor layouts](https://github.com/ryanbr/noop/blob/main/docs/PROTOCOL_SENSORS.md),

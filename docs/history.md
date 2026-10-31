@@ -3,6 +3,14 @@
 A running log of verified capabilities and design decisions, moved out of the
 README. Newer entries are not guaranteed to be appended here; see the Git log.
 
+- October 31: retired unvalidated lifting classification and muscular-load
+  scaling. The final local estimate uses the existing private cardiovascular
+  curve, bounded recorded-HR exposure and zero for missing intervals. Actual
+  official values, including zero, remain preferred. Startup backfills the
+  v3 projection atomically in a new versioned metadata namespace, retaining
+  old estimates and all source evidence. Removed experimental recording UI and
+  sensor-start commands; OFF-only legacy cleanup and archived evidence remain.
+
 - October 30: added an explicitly started, labeled accel/gyro capture with time, byte and
   buffer limits; durable cleanup across interruption; conservative R21 parsing;
   and a read-only raw-axis export. Canonical backups retain the calibration
@@ -71,27 +79,23 @@ README. Newer entries are not guaranteed to be appended here; see the Git log.
   rules remain in force. Every headline belongs to one coherent published day;
   an unresolved sleep suppresses current headlines, and a later missed-sleep
   step day shows movement without carrying old sleep/recovery forward.
-- Strain prefers retained positive official scores on historical dates. Later
-  dates integrate direct HR with the experimental local cardiovascular curve
-  plus the user-selected rough muscular heuristic. The private calibration is
-  `whoop-strain-model.json`; Release phone builds require it and validate its
-  parameters and embedded hash alongside the existing five private assets.
-  Cardio and muscular loads combine before nonlinear scoring. The heuristic
-  uses low-step, awake set/rest-like HR patterns; it can miss lifting or confuse
-  it with other activity and does not infer reps or weights.
-- Local Strain accumulates observed load with zero contribution from missing
-  intervals, without a minimum coverage or observed-duration gate. A valid
-  scoring window with no usable HR returns zero. Coverage remains measured
-  against the full day when complete or elapsed time today. Long outages are
-  capped instead of extrapolated. Civil days use recorded timestamp/UTC-offset evidence,
-  independently of wake-anchored Steps keys; conflicting travel/DST offsets stay
-  missing. Official targets and raw samples are never overwritten.
-- Scoring runs on the independent dashboard reader queue. Versioned derivations,
-  component scores, coverage, input revision, and calibration persist through
-  the single writer in the existing metadata table, with no schema change.
-  Cached days invalidate for backfill and input changes. Foreground refreshes
-  and publication events update the rings/cards automatically; background BLE
-  collection and encrypted replication retain their existing lifecycle.
+- Strain prefers actual retained official scores, including zero. Other eligible
+  dates integrate observed HR with the private cardiovascular calibration in
+  `whoop-strain-model.json`. Release phone builds require and validate this
+  asset alongside the other private models. The prior lifting classifier and
+  engineering muscular-load multiplier are retired; there is no inferred
+  workout, reps, weight or muscular-load score.
+- Missing intervals contribute zero, without a coverage/duration gate. A valid
+  window with no usable HR returns zero. Each observation supports at most six
+  seconds; longer gaps reset HR smoothing. Coverage uses the full complete day
+  or elapsed current day. Civil dates follow recorded timestamp/offset evidence,
+  independently of wake-based Steps. Invalid parameters/windows and conflicting
+  offsets remain unknown; missing calibration is not replaced with a guess.
+- Startup and dashboard reads refresh the independent-reader projection. The
+  single writer atomically publishes estimates and a sorted backfill summary
+  in existing metadata, with engine/calibration provenance and input revisions.
+  New engine cache keys preserve prior versions. Identical inputs and scoring
+  time yield no repeated writes. Official targets and raw rows never change.
 - The visible label is simply **Strain** on the ring and card. Model provenance
   stays in the data. Values are local derivations, not an exact WHOOP formula.
 - The app has no haptics. Passive collection and background Bluetooth events

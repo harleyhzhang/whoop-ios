@@ -77,8 +77,16 @@ runtime decoding ahead of the external private-file replacement boundary.
   slices. Slice summaries persist alongside estimates, so relaunches also avoid
   rescanning unchanged history. First use builds the summaries once.
   Civil timestamps/offsets define Strain days independently of wake-based Steps.
-  Dashboard reads begin on activation and publication updates refresh only
-  visible UI; a background relaunch does not trigger a view-model read.
+  Startup maintenance explicitly refreshes the projection, including background
+  launches; view-model reads still follow activation and visible publication.
+  The writer commits all changed estimates and their versioned backfill summary
+  in one transaction. New engine versions append a separate cache namespace;
+  old estimates, official values and raw observations remain intact.
+  The v3 scorer uses the existing private cardiovascular calibration only;
+  no inferred lifting or muscular-load contribution is applied. Actual official
+  values, including zero, take precedence. Each HR observation supports at most
+  six seconds, with smoothing reset across longer gaps. RHR is not an input to
+  this curve and is not an eligibility gate.
   Missing intervals add zero Strain load; coverage remains measured and does not
   suppress a valid accumulated score. Conflicting day offsets and invalid scoring
   inputs remain unavailable. Current-day coverage uses elapsed time. Private
@@ -126,20 +134,17 @@ The direction of dependency is presentation → orchestration → pure policy an
 storage. Pure policy must not import SwiftUI, CoreBluetooth, or global clocks.
 Framework APIs belong behind small adapters so decisions can be unit tested.
 
-## Bounded movement calibration
+## Retained movement evidence and OFF-only recovery
 
-`WhoopMotionCaptureState` owns the deterministic temporary-sensor lifecycle;
-`WhoopMotionCapture` journals cleanup before device writes and acts only on
-successfully persisted transport summaries. `WhoopMotionProtocol` recognizes
-R21 without replacing raw evidence. History and keepalive commands defer while
-the capture owns the command stream; normal history resumes after verified
-cleanup. The existing Strain model and cache version remain unchanged.
-
-`MotionCalibrationView` is an explicit long-press action on the Strain card.
-Session labels and raw hashes live in the private, bounded
-`motion-calibration.json` archive, which canonical shipping backs up and checks
-for preserved labels/buffers. See [movement calibration](movement-calibration.md)
-for exact limits, protocol assumptions and remaining device/model validation.
+Experimental calibration controls and sensor-start commands are retired. The
+available labeled controls do not validate a lifting classifier or load score.
+`WhoopMotionCaptureState` decodes existing archives without relabeling evidence;
+`WhoopMotionCapture` can only recover a pending legacy producer with raw STOP
+82 and IMU OFF 106. History defers until that cleanup is verified. The preserved
+R21 decoder and committed-notification reassembly retain protocol provenance
+and partial-live-header protection. No new recording or high-rate streaming is
+started. Existing `motion-calibration.json` archives and raw rows remain in
+canonical backups. See [retained movement evidence](movement-calibration.md).
 
 ## Data flow
 

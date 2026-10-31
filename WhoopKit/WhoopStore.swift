@@ -305,10 +305,7 @@ final class WhoopStore: Sendable, WhoopPacketPersisting {
                 dashboardReader.loadSnapshot(at: url) { [self] result in
                     if case .success(let snapshot) = result, !snapshot.strainDerivations.isEmpty {
                         queue.async { [self] in
-                            guard let database else { return }
-                            for (key, value) in snapshot.strainDerivations {
-                                _ = setMetadataValue(database: database, key: key, value: value)
-                            }
+                            _ = persistStrainDerivations(snapshot.strainDerivations)
                         }
                     }
                     completion(result)

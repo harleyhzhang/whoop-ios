@@ -43,7 +43,10 @@ final class DashboardSnapshotCache: @unchecked Sendable {
             healthRecords: document.healthRecords,
             stepRecords: document.stepRecords,
             recoveryRecords: document.recoveryRecords,
-            strainRecords: document.strainRecords
+            strainRecords: document.strainRecords.filter { record in
+                guard let estimate = record.estimate else { return true }
+                return estimate.version.hasPrefix("\(StrainAccumulator.version)/")
+            }
         )
         return launchSnapshot
     }

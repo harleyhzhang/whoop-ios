@@ -81,12 +81,6 @@ final class WhoopCollector: NSObject {
                 Data(command.frame(sequence: self.commandSequence)), for: characteristic, type: .withResponse)
             return self.commandSequence
         },
-        ready: { [weak self] in
-            guard let self, self.isConnected, !self.historicalSync.isActive,
-                !self.transportIsBackpressured
-            else { return nil }
-            return self.peripheral?.identifier
-        },
         didFinish: { [weak self] in
             self?.armRealtimeHeartRate()
             self?.scheduleHistoricalSync(after: .seconds(1.5))

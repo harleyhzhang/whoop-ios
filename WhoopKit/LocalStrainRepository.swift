@@ -34,6 +34,14 @@ final class LocalStrainRepository {
         let records: [DailyStrainRecord]
         let derivations: [String: String]
     }
+    private struct BackfillSummary: Codable {
+        let engineVersion: String
+        let calibrationVersion: String
+        let peripheralID: String
+        let officialDates: [String]
+        let derivedDates: [String]
+        let unscorableRecordedDates: [String]
+    }
     private struct CachedDay: Codable {
         let signature: String
         let estimate: StrainEstimate
@@ -53,13 +61,12 @@ final class LocalStrainRepository {
     private var cachedPeripheral: String?
 
     func load(
-        database: OpaquePointer, health: [DailyHealthRecord],
-        model: WhoopStrainModel?, now: Date = .now
+        database: OpaquePointer, model: WhoopStrainModel?, now: Date = .now
     ) throws -> Result {
         var records: [String: DailyStrainRecord] = [:]
         try query(
             database,
-            "SELECT date_key, official_day_strain FROM whoop_official_daily_metric WHERE official_day_strain > 0"
+            "SELECT date_key, official_day_strain FROM whoop_official_daily_metric WHERE official_day_strain IS NOT NULL"
         ) { row in
             guard let day = text(row, 0) else { return }
             let score = sqlite3_column_double(row, 1)
@@ -150,10 +157,7 @@ final class LocalStrainRepository {
             // Never silently assign samples to the wrong civil day.
             guard day.firstOffset == day.lastOffset,
                 let zone = TimeZone(secondsFromGMT: day.firstOffset),
-                let date = DayKey.date(from: day.day, timeZone: zone),
-                let rhr = health.last(where: { $0.dateKey <= day.day && $0.restingHeartRateBPM != nil })?
-                    .restingHeartRateBPM,
-                rhr.isFinite, rhr >= 30, rhr < model.maximumHeartRate
+                let date = DayKey.date(from: day.day, timeZone: zone)
             else { continue }
             var calendar = Calendar(identifier: .gregorian)
             calendar.timeZone = zone
@@ -169,8 +173,8 @@ final class LocalStrainRepository {
             let lastUTC = Int(floor((tomorrow.timeIntervalSince1970 - 1) / 86400))
             let inputRevision = (firstUTC...lastUTC).map { "\($0):\(revisions[$0] ?? 0)" }.joined(separator: ",")
             let signature =
-                "utc-revision-v1|\(StrainAccumulator.version)|\(modelJSON)|\(rhr)|\(peripheral)|\(inputRevision)|\(start)|\(end)"
-            let key = "local-strain.\(day.day).\(peripheral).\(model.calibration.version)"
+                "utc-revision-v1|\(StrainAccumulator.version)|\(modelJSON)|\(peripheral)|\(inputRevision)|\(start)|\(end)"
+            let key = "local-strain.\(day.day).\(peripheral).\(model.calibration.version).\(StrainAccumulator.version)"
             var cached: CachedDay?
             try query(database, "SELECT value FROM whoop_store_metadata WHERE key = ?", strings: [key]) { row in
                 if let value = text(row, 0) {
@@ -183,11 +187,11 @@ final class LocalStrainRepository {
             } else {
                 var accumulator = StrainAccumulator(
                     calibration: model.calibration,
-                    start: start, end: end, maximumHeartRate: model.maximumHeartRate, restingHeartRate: rhr)
+                    start: start, end: end, maximumHeartRate: model.maximumHeartRate)
                 try query(
                     database,
                     """
-                    SELECT sample_at, heart_rate, step_motion_counter, sleep_state
+                    SELECT sample_at, heart_rate
                     FROM whoop_historical_sample WHERE peripheral_id = ? AND sample_at >= ? AND sample_at < ?
                     ORDER BY sample_at, ordinal
                     """, strings: [peripheral], numbers: [start, tomorrow.timeIntervalSince1970]
@@ -195,11 +199,8 @@ final class LocalStrainRepository {
                     accumulator.append(
                         StrainSample(
                             timestamp: sqlite3_column_double(row, 0),
-                            heartRate: sqlite3_column_double(row, 1),
-                            stepCounter: sqlite3_column_type(row, 2) == SQLITE_NULL
-                                ? nil : Int(sqlite3_column_int(row, 2)),
-                            sleepState: sqlite3_column_type(row, 3) == SQLITE_NULL
-                                ? nil : Int(sqlite3_column_int(row, 3))))
+                            heartRate: sqlite3_column_type(row, 1) == SQLITE_NULL ? .nan : sqlite3_column_double(row, 1)
+                        ))
                 }
                 estimate = accumulator.finish(day: day.day)
                 let encoded = try encoder.encode(CachedDay(signature: signature, estimate: estimate))
@@ -211,6 +212,19 @@ final class LocalStrainRepository {
                     source: estimate.source, estimate: estimate)
             }
         }
+        let summary = BackfillSummary(
+            engineVersion: StrainAccumulator.version, calibrationVersion: model.calibration.version,
+            peripheralID: peripheral,
+            officialDates: records.values.filter { $0.estimate == nil }.map(\.dateKey).sorted(),
+            derivedDates: records.values.filter { $0.estimate != nil }.map(\.dateKey).sorted(),
+            unscorableRecordedDates: inputDays.keys.filter { records[$0] == nil }.sorted())
+        let summaryKey = "local-strain-backfill.\(StrainAccumulator.version)"
+        let summaryJSON = String(decoding: try encoder.encode(summary), as: UTF8.self)
+        var storedSummary: String?
+        try query(database, "SELECT value FROM whoop_store_metadata WHERE key = ?", strings: [summaryKey]) { row in
+            storedSummary = text(row, 0)
+        }
+        if storedSummary != summaryJSON { derivations[summaryKey] = summaryJSON }
         return Result(records: sorted(records), derivations: derivations)
     }
 

@@ -83,6 +83,35 @@ final class HealthHistoryModelTests: XCTestCase {
         XCTAssertEqual(relaunched?.healthRecords.map(\.sleepScore), [91])
     }
 
+    func testColdCacheDropsRetiredEstimatesButKeepsOfficialAndOtherHistory() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("cache.json")
+        let old = StrainEstimate(
+            day: "2026-09-10", score: 15, cardiovascularScore: 10,
+            coverage: 1, observedSeconds: 86400, version: "local_strain_v2_zero_fill_experimental/synthetic",
+            source: "retired")
+        let current = StrainEstimate(
+            day: "2026-09-11", score: 10, cardiovascularScore: 10,
+            coverage: 1, observedSeconds: 86400, version: "\(StrainAccumulator.version)/synthetic",
+            source: "direct_hr_cardiovascular")
+        let original = Self.snapshot(sleepScore: 88)
+        let snapshot = DashboardHistorySnapshot(
+            healthRecords: original.healthRecords, stepRecords: original.stepRecords,
+            recoveryRecords: original.recoveryRecords,
+            strainRecords: original.strainRecords + [
+                DailyStrainRecord(dateKey: old.day, score: 15, source: old.source, estimate: old),
+                DailyStrainRecord(dateKey: current.day, score: 10, source: current.source, estimate: current),
+            ], strainDerivations: [:])
+        let written = expectation(description: "cache written")
+        DashboardSnapshotCache(url: url).save(snapshot) { written.fulfill() }
+        await fulfillment(of: [written], timeout: 2)
+        let cached = try XCTUnwrap(DashboardSnapshotCache(url: url).cachedSnapshot())
+        XCTAssertEqual(cached.healthRecords.map(\.sleepScore), [88])
+        XCTAssertEqual(cached.strainRecords.map(\.dateKey), ["2026-09-09", "2026-09-11"])
+    }
+
     private static func snapshot(sleepScore: Double) -> DashboardHistorySnapshot {
         DashboardHistorySnapshot(
             healthRecords: [

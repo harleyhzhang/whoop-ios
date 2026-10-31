@@ -1,8 +1,10 @@
 import Foundation
+import OSLog
 import Observation
 import UIKit
 
-/// Session metadata only. Original notifications remain in the durable raw-packet
+/// Preserved legacy session metadata. No new recordings are created. Original
+/// notifications remain in the durable raw-packet
 /// store; reconstructed frames link their hashes, characteristic and source hashes.
 final class WhoopMotionCaptureJournal {
     struct Document: Codable {
@@ -62,88 +64,43 @@ final class WhoopMotionCaptureJournal {
     }
 }
 
+/// Retired calibration's OFF-only recovery. There is no recording entry point.
 @MainActor
 @Observable
 final class WhoopMotionCapture {
     private(set) var state: WhoopMotionCaptureState?
-    private(set) var errorMessage: String?
     @ObservationIgnored private let journal: WhoopMotionCaptureJournal?
     @ObservationIgnored private let send: (WhoopCommand) -> UInt8?
-    @ObservationIgnored private let ready: () -> UUID?
     @ObservationIgnored private let didFinish: () -> Void
     @ObservationIgnored private let clock: () -> Date
-    @ObservationIgnored private let isForeground: () -> Bool
     @ObservationIgnored private let automaticTicks: Bool
     @ObservationIgnored private var timer: Task<Void, Never>?
-    @ObservationIgnored private var monotonicDeadline: ContinuousClock.Instant?
     @ObservationIgnored private var backgroundTask = UIBackgroundTaskIdentifier.invalid
     @ObservationIgnored private var connectedPeripheralID: UUID?
     @ObservationIgnored private var reassembler = WhoopMotionReassembler()
 
     var blocksHistory: Bool { state?.needsCleanup == true }
-    var canStart: Bool { !blocksHistory && errorMessage == nil && ready() != nil }
-
-    var status: String {
-        if let errorMessage { return errorMessage }
-        guard let state else {
-            return ready() == nil ? "Waiting for WHOOP to connect and finish syncing" : "Ready for a brief recording"
-        }
-        switch state.phase {
-        case .readingClock, .startingRaw, .enablingIMU, .awaitingSamples: return "Checking accel and gyro…"
-        case .recording: return "Recording accel and gyro"
-        case .stoppingRaw, .disablingIMU, .settling: return "Stopping sensors…"
-        case .needsCleanup: return "Connect WHOOP to finish stopping sensors"
-        case .complete: return state.hasBothSensors ? "Recording saved · sensors stopped" : state.reason
-        }
-    }
-
     init(
         journal: WhoopMotionCaptureJournal? = WhoopStore.databaseDirectory().map {
             WhoopMotionCaptureJournal(directory: $0)
-        }, send: @escaping (WhoopCommand) -> UInt8?, ready: @escaping () -> UUID?,
+        }, send: @escaping (WhoopCommand) -> UInt8?,
         didFinish: @escaping () -> Void, clock: @escaping () -> Date = { .now },
-        isForeground: @escaping () -> Bool = { UIApplication.shared.applicationState == .active },
         automaticTicks: Bool = true
     ) {
         self.journal = journal
         self.send = send
-        self.ready = ready
         self.didFinish = didFinish
         self.clock = clock
-        self.isForeground = isForeground
         self.automaticTicks = automaticTicks
         do {
             state = try journal?.load() ?? journal?.recentCompleted(now: clock())
             if state?.needsCleanup == true { state?.disconnected(now: clock()) }
         } catch {
-            errorMessage = "Capture journal cannot be read; recording is unavailable"
+            Logger().error("Legacy motion journal cannot be read; original archive retained")
         }
-        if journal == nil { errorMessage = "Capture storage is unavailable" }
     }
 
     deinit { timer?.cancel() }
-
-    func start(label: WhoopMotionCaptureState.Label, notes: String, duration: TimeInterval) {
-        guard canStart, isForeground(),
-            let peripheralID = ready(),
-            let next = WhoopMotionCaptureState(
-                peripheralID: peripheralID, label: label, notes: notes, duration: duration,
-                sourceCommit: Bundle.main.object(forInfoDictionaryKey: "WHOOPSourceCommit") as? String ?? "unknown",
-                now: clock()
-            )
-        else { return }
-        // Journal the cleanup obligation BEFORE the first device write.
-        do { try journal?.save(next) } catch {
-            errorMessage = "Recording could not be saved; sensors were not started"
-            return
-        }
-        reassembler.reset()
-        state = next
-        monotonicDeadline = ContinuousClock.now.advanced(by: .seconds(duration))
-        connectedPeripheralID = peripheralID
-        startTimer()
-        drive()
-    }
 
     func stop(reason: String = "Stopped by user") {
         guard blocksHistory else { return }
@@ -190,15 +147,15 @@ final class WhoopMotionCapture {
     }
 
     func persisted(_ summary: WhoopTransportBatchSummary, success: Bool) {
-        persistedFragments(summary.motionFragments, success: success, byteCount: summary.deliveredByteCount)
+        persistedFragments(summary.motionFragments, success: success)
     }
 
     /// Called only after the source notification transaction commits. No frame
     /// interpretation or history repair may outrun raw provenance durability.
-    func persistedFragments(_ fragments: [WhoopMotionFragment], success: Bool, byteCount: Int = 0) {
+    func persistedFragments(_ fragments: [WhoopMotionFragment], success: Bool) {
         guard let current = state,
             blocksHistory
-                || (current.acceptsHistoryRepair && clock().timeIntervalSince(current.endedAt ?? .distantPast) <= 600)
+                || (0...600).contains(clock().timeIntervalSince(current.endedAt ?? .distantPast))
         else { return }
         guard success else {
             if blocksHistory { stop(reason: "Packet storage failed") }
@@ -225,31 +182,21 @@ final class WhoopMotionCapture {
                 events.append((fragment.peripheralID, event))
             }
         }
-        if blocksHistory {
-            persisted(events, success: true, byteCount: byteCount)
-        } else {
-            // Delayed history repairs only the recorded, clock-correlated
-            // interval. This never sends a command or resumes sensing.
-            let previousCount = state?.buffers.count
-            for (_, event) in events {
-                if case .buffer(let buffer) = event { state?.observe(buffer, now: clock()) }
-            }
-            if state?.buffers.count != previousCount { persist() }
-        }
+        if blocksHistory { persisted(events, success: true) }
     }
 
-    func persisted(_ events: [(UUID, WhoopMotionProtocol.Event)], success: Bool, byteCount: Int = 0) {
+    func persisted(_ events: [(UUID, WhoopMotionProtocol.Event)], success: Bool) {
         guard blocksHistory else { return }
         guard success else {
             stop(reason: "Packet storage failed")
             return
         }
-        state?.observeRawBytes(byteCount, now: clock())
         for (peripheralID, event) in events where peripheralID == connectedPeripheralID {
             guard peripheralID == state?.peripheralID else { continue }
             switch event {
             case .reply(let reply): state?.reply(reply, now: clock())
-            case .buffer(let buffer): state?.observe(buffer, now: clock())
+            case .buffer(let buffer):
+                if buffer.realtime == true { state?.observeProducerTraffic(now: clock()) }
             }
         }
         saveAndDrive()
@@ -272,9 +219,6 @@ final class WhoopMotionCapture {
     }
 
     func tick() {
-        if let monotonicDeadline, ContinuousClock.now >= monotonicDeadline, state?.isCollecting == true {
-            state?.stop(reason: "Time limit reached", now: clock())
-        }
         state?.tick(now: clock())
         saveAndDrive()
     }
@@ -282,7 +226,7 @@ final class WhoopMotionCapture {
     private func persist() {
         guard let state else { return }
         do { try journal?.save(state) } catch {
-            errorMessage = "Capture storage failed; stopping sensors"
+            Logger().error("Legacy cleanup state could not be saved; OFF attempts continue")
             self.state?.stop(reason: "Capture journal write failed", now: clock())
         }
     }
