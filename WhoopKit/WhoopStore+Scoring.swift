@@ -13,7 +13,8 @@ extension WhoopStore {
     @discardableResult
     func backfillLocalSleepScoresIfNeeded() -> Bool {
         guard let database,
-            metadataValue(database: database, key: "local-sleep-score-backfill") != Self.localSource
+            let marker = try? metadataValue(database: database, key: "local-sleep-score-backfill"),
+            marker != .value(Self.localSource)
         else { return false }
         let sql = """
             SELECT \(Self.historicalRowColumns)
@@ -24,70 +25,68 @@ extension WhoopStore {
             )
             ORDER BY sample_at ASC
             """
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-            let statement
-        else { return false }
-        var rows: [HistoricalRow] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            rows.append(Self.historicalRow(statement))
-        }
-        sqlite3_finalize(statement)
+        guard let rows = try? SQLiteRead.rows(database, sql: sql, map: Self.historicalRow) else { return false }
         guard let latest = rows.last, execute("BEGIN IMMEDIATE") else { return false }
         let ranges = WhoopBackfillPlanner.indexedSleepRanges(
             in: rows,
             timestamp: { $0.timestamp },
             isAsleep: { $0.sleepState == .asleep }
         )
-        var rewrote = false
-        for range in ranges {
-            let session = Array(rows[range.sessionRange])
-            let group = range.asleepIndices.map { rows[$0] }
-            guard let first = group.first, let last = group.last else { continue }
-            let cadence = Self.cadenceSeconds(of: session)
-            let candidate = SleepCandidate(
-                sessionRows: session,
-                asleepRows: group,
-                firstSleep: first,
-                lastSleep: last,
-                latest: latest,
-                latestSampleIsCurrent: false,
-                cadenceSeconds: cadence,
-                sleepSeconds: Self.elapsedSeconds(across: group, cadence: cadence),
-                bridgedSleepSeconds: WhoopQuietUpPolicy.bridgedSleepSeconds(
-                    session: session, cadence: cadence),
-                sessionCoverage: Self.observedFraction(of: session, cadence: cadence),
-                wakeSeconds: 0
-            )
-            guard candidate.meetsEvidenceGates,
-                Self.shouldDerive(candidate: candidate, database: database)
-            else { continue }
-            guard
-                updateLocalSleepScore(
-                    derivedRecord(for: candidate, now: .now), database: database
+        do {
+            var rewrote = false
+            for range in ranges {
+                let session = Array(rows[range.sessionRange])
+                let group = range.asleepIndices.map { rows[$0] }
+                guard let first = group.first, let last = group.last else { continue }
+                let cadence = Self.cadenceSeconds(of: session)
+                let candidate = SleepCandidate(
+                    sessionRows: session,
+                    asleepRows: group,
+                    firstSleep: first,
+                    lastSleep: last,
+                    latest: latest,
+                    latestSampleIsCurrent: false,
+                    cadenceSeconds: cadence,
+                    sleepSeconds: Self.elapsedSeconds(across: group, cadence: cadence),
+                    bridgedSleepSeconds: WhoopQuietUpPolicy.bridgedSleepSeconds(
+                        session: session, cadence: cadence),
+                    sessionCoverage: Self.observedFraction(of: session, cadence: cadence),
+                    wakeSeconds: 0
                 )
+                guard candidate.meetsEvidenceGates,
+                    try Self.shouldDerive(candidate: candidate, database: database)
+                else { continue }
+                guard
+                    updateLocalSleepScore(
+                        try derivedRecord(for: candidate, now: .now), database: database
+                    )
+                else {
+                    execute("ROLLBACK")
+                    return false
+                }
+                rewrote = true
+            }
+            guard
+                setMetadataValue(
+                    database: database, key: "local-sleep-score-backfill", value: Self.localSource
+                ), execute("COMMIT")
             else {
                 execute("ROLLBACK")
                 return false
             }
-            rewrote = true
-        }
-        guard
-            setMetadataValue(
-                database: database, key: "local-sleep-score-backfill", value: Self.localSource
-            ), execute("COMMIT")
-        else {
+            return rewrote
+        } catch {
             execute("ROLLBACK")
             return false
         }
-        return rewrote
     }
 
     func rebuildRecoveryMetricsIfNeeded(force: Bool = false) {
         guard let database, let model = Self.bundledRecoveryScoreModel else { return }
-        if !force,
-            metadataValue(database: database, key: "local-recovery-score-backfill") == model.version
-        {
+        guard let recoveryMarker = try? metadataValue(database: database, key: "local-recovery-score-backfill") else {
+            return
+        }
+        if !force, recoveryMarker == .value(model.version) {
             return
         }
         guard let (records, stepsByDate) = recoveryInputs(database: database),
@@ -259,8 +258,8 @@ extension WhoopStore {
 
     /// `historyThrough` exists for replaying a retained database at a past
     /// instant; live analysis reads everything the strap has delivered.
-    func analyze(now: Date, historyThrough: Date? = nil) -> SleepAnalysis {
-        let rows = recentHistoricalRows(now: now, through: historyThrough)
+    func analyze(now: Date, historyThrough: Date? = nil) throws -> SleepAnalysis {
+        let rows = try recentHistoricalRows(now: now, through: historyThrough)
         guard let latest = rows.last else { return .noData }
         let latestDate = Date(timeIntervalSince1970: latest.timestamp)
         let sampleIsCurrent = abs(now.timeIntervalSince(latestDate)) <= 30 * 60
@@ -316,7 +315,23 @@ extension WhoopStore {
         includeProvisional: Bool = false,
         historyThrough: Date? = nil
     ) -> WhoopSleepSnapshot {
-        switch analyze(now: now, historyThrough: historyThrough) {
+        do {
+            return try analyzeLatestSleepThrowing(
+                now: now, allowAutomaticFinalization: allowAutomaticFinalization,
+                includeProvisional: includeProvisional, historyThrough: historyThrough)
+        } catch {
+            Self.logger.error(
+                "Sleep read failed; retaining published metrics: \(error.localizedDescription, privacy: .public)")
+            return WhoopSleepSnapshot(
+                isSleeping: false, sampleAt: nil, finalizedRecord: nil, evaluatedProvisional: false)
+        }
+    }
+
+    private func analyzeLatestSleepThrowing(
+        now: Date, allowAutomaticFinalization: Bool,
+        includeProvisional: Bool, historyThrough: Date?
+    ) throws -> WhoopSleepSnapshot {
+        switch try analyze(now: now, historyThrough: historyThrough) {
         case .noData:
             return WhoopSleepSnapshot(
                 isSleeping: false,
@@ -331,7 +346,7 @@ extension WhoopStore {
                 sampleAt: sampleAt,
                 finalizedRecord: nil,
                 provisional: includeProvisional
-                    ? provisionalDay(for: candidate, isSleeping: true, now: now) : nil,
+                    ? try provisionalDay(for: candidate, isSleeping: true, now: now) : nil,
                 evaluatedProvisional: includeProvisional
             )
 
@@ -357,8 +372,8 @@ extension WhoopStore {
                 && candidate.meetsEvidenceGates
                 && candidate.meetsAutomaticWakeGate
             {
-                guard Self.shouldDerive(candidate: candidate, database: database) else { continue }
-                let record = derivedRecord(for: candidate, now: now)
+                guard try Self.shouldDerive(candidate: candidate, database: database) else { continue }
+                let record = try derivedRecord(for: candidate, now: now)
                 guard record.hasCompletePrimarySleepMetrics else { continue }
                 publishable.append(record)
             }
@@ -380,7 +395,7 @@ extension WhoopStore {
                 sampleAt: sampleAt,
                 finalizedRecord: newest,
                 provisional: includeProvisional
-                    ? provisionalDay(for: candidates.last, isSleeping: false, now: now) : nil,
+                    ? try provisionalDay(for: candidates.last, isSleeping: false, now: now) : nil,
                 evaluatedProvisional: includeProvisional
             )
         }

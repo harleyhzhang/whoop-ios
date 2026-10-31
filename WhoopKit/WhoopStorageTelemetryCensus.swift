@@ -162,23 +162,18 @@ enum WhoopStorageTelemetryCensus {
     }
 
     private static func scalarInt(_ database: OpaquePointer, sql: String) -> Int64? {
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-            let statement
-        else { return nil }
-        defer { sqlite3_finalize(statement) }
-        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
-        return sqlite3_column_int64(statement, 0)
+        try? SQLiteRead.requiredInteger(database, sql: sql)
     }
 
     private static func pair(_ database: OpaquePointer, sql: String) -> (Int64, Int64)? {
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-            let statement
+        guard
+            let pairs = try? SQLiteRead.rows(
+                database, sql: sql,
+                map: {
+                    (sqlite3_column_int64($0, 0), sqlite3_column_int64($0, 1))
+                }), pairs.count == 1
         else { return nil }
-        defer { sqlite3_finalize(statement) }
-        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
-        return (sqlite3_column_int64(statement, 0), sqlite3_column_int64(statement, 1))
+        return pairs.first
     }
 
     private static func groupedCounts(_ database: OpaquePointer, sql: String) -> [String: Int64]? {

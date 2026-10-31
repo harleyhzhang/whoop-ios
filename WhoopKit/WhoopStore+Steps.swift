@@ -27,9 +27,9 @@ extension WhoopStore {
 
     func rebuildWakeAnchoredStepDaysIfNeeded() {
         guard let database,
-            metadataValue(database: database, key: "wake-anchored-step-days") != "3"
+            let marker = try? metadataValue(database: database, key: "wake-anchored-step-days"), marker != .value("3")
         else { return }
-        let boundaries = publishedWakeBoundaries(database: database)
+        guard let boundaries = try? publishedWakeBoundaries(database: database) else { return }
         guard !boundaries.isEmpty, execute("BEGIN IMMEDIATE") else { return }
         guard execute("DELETE FROM whoop_daily_step_metric"),
             execute(WhoopStepDayMigration.civilFallbackSQL)
@@ -79,7 +79,7 @@ extension WhoopStore {
         // This helper normally runs inside the caller's transaction. Do not
         // retain a boundary that could disappear if a later write rolls back.
         defer { cachedPublishedWakeBoundaries = nil }
-        let boundaries = publishedWakeBoundaries(database: database)
+        guard let boundaries = try? publishedWakeBoundaries(database: database) else { return false }
         let upperBound =
             boundaries
             .filter { $0.wokeAt > wokeAt }
@@ -177,18 +177,15 @@ extension WhoopStore {
               AND (? IS NULL OR sample_at < ?)
               AND step_date_key IS NOT NULL
             """
-        return withCachedStatement(database: database, sql: sql) { statement in
-            sqlite3_bind_double(statement, 1, lowerBound)
-            bind(upperBound, to: 2, in: statement)
-            bind(upperBound, to: 3, in: statement)
-            var dateKeys: Set<String> = []
-            var result = sqlite3_step(statement)
-            while result == SQLITE_ROW {
-                if let dateKey = textColumn(statement, 0) { dateKeys.insert(dateKey) }
-                result = sqlite3_step(statement)
-            }
-            return result == SQLITE_DONE ? dateKeys : nil
-        } ?? nil
+        guard
+            let rows = try? SQLiteRead.rows(
+                database, sql: sql,
+                bindings: [
+                    .real(lowerBound), upperBound.map(SQLiteRead.Binding.real) ?? .null,
+                    upperBound.map(SQLiteRead.Binding.real) ?? .null,
+                ], map: { textColumn($0, 0) })
+        else { return nil }
+        return Set(rows.compactMap { $0 })
     }
 
     func assignStepSamples(
@@ -253,27 +250,23 @@ extension WhoopStore {
             """
 
         for dateKey in dateKeys.sorted() {
-            let grouped: [String: [WhoopStepCounterSample]]? =
-                withCachedStatement(
-                    database: database, sql: selectSQL
-                ) { select in
-                    bind(dateKey, to: 1, in: select)
-                    var byPeripheral: [String: [WhoopStepCounterSample]] = [:]
-                    var result = sqlite3_step(select)
-                    while result == SQLITE_ROW {
-                        if let peripheralID = textColumn(select, 0) {
-                            byPeripheral[peripheralID, default: []].append(
-                                WhoopStepCounterSample(
-                                    timestamp: sqlite3_column_double(select, 1),
-                                    counter: UInt16(truncatingIfNeeded: sqlite3_column_int(select, 2))
-                                )
-                            )
-                        }
-                        result = sqlite3_step(select)
-                    }
-                    return result == SQLITE_DONE ? byPeripheral : nil
-                } ?? nil
-            guard let byPeripheral = grouped else { return false }
+            guard
+                let rows = try? SQLiteRead.rows(
+                    database, sql: selectSQL, bindings: [.text(dateKey)],
+                    map: { select -> (String, WhoopStepCounterSample)? in
+                        guard let peripheralID = textColumn(select, 0) else { return nil }
+                        return (
+                            peripheralID,
+                            WhoopStepCounterSample(
+                                timestamp: sqlite3_column_double(select, 1),
+                                counter: UInt16(truncatingIfNeeded: sqlite3_column_int(select, 2)))
+                        )
+                    })
+            else { return false }
+            var byPeripheral: [String: [WhoopStepCounterSample]] = [:]
+            for (peripheralID, sample) in rows.compactMap({ $0 }) {
+                byPeripheral[peripheralID, default: []].append(sample)
+            }
             let candidates = byPeripheral.map { peripheralID, samples in
                 (peripheralID, WhoopStepDaySummary.summarize(samples))
             }
@@ -332,16 +325,9 @@ extension WhoopStore {
         }
     }
 
-    func metadataValue(database: OpaquePointer, key: String) -> String? {
-        let sql = "SELECT value FROM whoop_store_metadata WHERE key = ?"
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-            let statement
-        else { return nil }
-        defer { sqlite3_finalize(statement) }
-        bind(key, to: 1, in: statement)
-        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
-        return textColumn(statement, 0)
+    func metadataValue(database: OpaquePointer, key: String) throws -> SQLiteRead.Scalar<String> {
+        try SQLiteRead.text(
+            database, sql: "SELECT value FROM whoop_store_metadata WHERE key = ?", bindings: [.text(key)])
     }
 
     func setMetadataValue(database: OpaquePointer, key: String, value: String) -> Bool {

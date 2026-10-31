@@ -24,6 +24,7 @@ enum WhoopDeploymentHealthReporter {
         "whoop_raw_packet",
         "whoop_historical_sample",
         "whoop_packet_replay",
+        "whoop_frame_source",
         "whoop_ppg_packet",
         "whoop_offload_session",
         "whoop_api_source_record",
@@ -154,13 +155,7 @@ enum WhoopDeploymentHealthReporter {
     }
 
     private static func integer(_ database: OpaquePointer, sql: String) throws -> Int {
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-            let statement
-        else { throw ReporterError.queryFailed(sql) }
-        defer { sqlite3_finalize(statement) }
-        guard sqlite3_step(statement) == SQLITE_ROW else { throw ReporterError.queryFailed(sql) }
-        return Int(sqlite3_column_int64(statement, 0))
+        Int(try SQLiteRead.requiredInteger(database, sql: sql))
     }
 
     private static func rowCount(_ database: OpaquePointer, sql: String) throws -> Int {

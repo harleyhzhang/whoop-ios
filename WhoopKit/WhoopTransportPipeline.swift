@@ -5,6 +5,7 @@ struct WhoopTransportUISnapshot: Sendable {
     let heartRate: Int?
     let heartRateReceivedAt: Date?
     let batteryObservation: BatteryObservation?
+    var connectionToken: WhoopConnectionSession.Token? = nil
 }
 
 struct WhoopTransportPressureSnapshot: Equatable, Sendable {
@@ -29,15 +30,23 @@ struct WhoopTransportBatchSummary: Sendable {
     let motionEvents: [(UUID, WhoopMotionProtocol.Event)]
     let motionFragments: [WhoopMotionFragment]
     let deliveredByteCount: Int
+    let connectionToken: WhoopConnectionSession.Token?
+    let clockEnvelopes: [WhoopPacketEnvelope]
 
     init(envelopes: [WhoopPacketEnvelope]) {
-        motionFragments = envelopes.filter { $0.proprietaryOrdinal != nil }.map {
+        let authoritative = envelopes.filter(\.acceptsControlEvents)
+        clockEnvelopes = authoritative.filter { $0.integrityIsValid && [36, 48].contains($0.packet[8]) }
+        connectionToken = authoritative.compactMap(\.connectionToken).last
+        motionFragments = authoritative.filter {
+            $0.proprietaryOrdinal != nil && $0.provenance?.isReconstructed != true
+        }.map {
             WhoopMotionFragment(
                 packet: $0.packet, peripheralID: $0.peripheralID,
                 characteristicUUID: $0.characteristicUUID, deliveredAt: $0.deliveredAt)
         }
-        deliveredByteCount = envelopes.reduce(0) { $0 + $1.packet.count }
-        motionEvents = envelopes.compactMap { envelope in
+        deliveredByteCount = envelopes.filter { $0.provenance?.isReconstructed != true }
+            .reduce(0) { $0 + $1.packet.count }
+        motionEvents = authoritative.compactMap { envelope in
             WhoopMotionProtocol.event(envelope).map { (envelope.peripheralID, $0) }
         }
         offloadSessionID = envelopes.compactMap(\.offloadSessionID).last
@@ -135,6 +144,8 @@ final class WhoopTransportPipeline: @unchecked Sendable {
     private var drainWaiters: [@Sendable () -> Void] = []
     private var lastUISnapshotAt: Date?
     private var pendingUI = PendingUI()
+    private var connectionToken: WhoopConnectionSession.Token?
+    private var reassembler = WhoopFrameReassembler()
     private var latestBatteryLevel: Int?
     private var latestBatteryStatus = BatteryStatus.unavailable
 
@@ -189,33 +200,81 @@ final class WhoopTransportPipeline: @unchecked Sendable {
         }
     }
 
+    func setConnection(_ token: WhoopConnectionSession.Token?) {
+        queue.async { [self] in
+            flushPending()
+            connectionToken = token
+            pendingUI = PendingUI()
+            uiPublishGeneration &+= 1
+            reassembler.reset()
+        }
+    }
+
     func submitProprietary(
-        packet: Data,
-        peripheralID: UUID,
-        characteristicUUID: String,
-        offloadSessionID: String?,
-        deliveredAt: Date
+        packet: Data, peripheralID: UUID, characteristicUUID: String,
+        offloadSessionID: String?, deliveredAt: Date,
+        connectionToken token: WhoopConnectionSession.Token? = nil,
+        receivedUptime: TimeInterval = ProcessInfo.processInfo.systemUptime
     ) {
         queue.async { [self] in
             proprietaryPacketCount += 1
-            let effectiveSessionID =
-                offloadSessionID == lastCompletedOffloadSessionID ? nil : offloadSessionID
-            let envelope = WhoopPacketEnvelope.proprietary(
-                packet: packet,
-                peripheralID: peripheralID,
-                characteristicUUID: characteristicUUID,
-                offloadSessionID: effectiveSessionID,
-                deliveredAt: deliveredAt,
-                proprietaryOrdinal: proprietaryPacketCount
-            )
-            if envelope.metadata?.type == .historyComplete {
-                lastCompletedOffloadSessionID = effectiveSessionID
-            } else if envelope.metadata?.type == .historyStart {
-                lastCompletedOffloadSessionID = nil
+            let isCurrent = token == connectionToken && (token == nil || token?.peripheralID == peripheralID)
+            let sourceID = "n" + UUID().uuidString
+            let result =
+                isCurrent
+                ? reassembler.ingest(
+                    WhoopFrameFragment(
+                        packetID: sourceID, packet: packet, peripheralID: peripheralID,
+                        characteristicUUID: characteristicUUID, generation: token?.generation ?? 0,
+                        deliveredAt: deliveredAt)) : WhoopFrameReassembler.Result()
+            if result.frames.count == 1, let frame = result.frames.first,
+                frame.sources.count == 1, let source = frame.sources.first,
+                source.packetID == sourceID, source.offset == 0, source.length == packet.count
+            {
+                enqueueCompletedFrame(
+                    frame.packet, peripheralID: peripheralID,
+                    characteristicUUID: characteristicUUID, offloadSessionID: offloadSessionID,
+                    deliveredAt: deliveredAt, token: token, uptime: receivedUptime, provenance: nil)
+                return
             }
-            publishHeartRate(envelope.realtime, deliveredAt: deliveredAt)
-            enqueue(envelope)
+            // Preserve the exact delivered bytes before any reconstructed
+            // envelope. FIFO persistence and source FKs protect ACK ordering.
+            var raw = WhoopPacketEnvelope.proprietary(
+                packet: packet, peripheralID: peripheralID,
+                characteristicUUID: characteristicUUID, offloadSessionID: offloadSessionID,
+                deliveredAt: deliveredAt, proprietaryOrdinal: proprietaryPacketCount,
+                connectionToken: token, provenance: .notification(packetID: sourceID))
+            if !isCurrent { raw = raw.withoutSemanticEvents() }
+            enqueue(raw)
+            for frame in result.frames {
+                enqueueCompletedFrame(
+                    frame.packet, peripheralID: peripheralID,
+                    characteristicUUID: characteristicUUID, offloadSessionID: offloadSessionID,
+                    deliveredAt: deliveredAt, token: token, uptime: receivedUptime,
+                    provenance: .reconstructed(frame.sources))
+            }
         }
+    }
+
+    private func enqueueCompletedFrame(
+        _ packet: Data, peripheralID: UUID, characteristicUUID: String,
+        offloadSessionID: String?, deliveredAt: Date, token: WhoopConnectionSession.Token?, uptime: TimeInterval,
+        provenance: WhoopFrameProvenance?
+    ) {
+        let effectiveSessionID = offloadSessionID == lastCompletedOffloadSessionID ? nil : offloadSessionID
+        var envelope = WhoopPacketEnvelope.proprietary(
+            packet: packet, peripheralID: peripheralID,
+            characteristicUUID: characteristicUUID, offloadSessionID: effectiveSessionID,
+            deliveredAt: deliveredAt, proprietaryOrdinal: proprietaryPacketCount,
+            connectionToken: token, provenance: provenance)
+        envelope.receivedUptime = uptime
+        if envelope.metadata?.type == .historyComplete {
+            lastCompletedOffloadSessionID = effectiveSessionID
+        } else if envelope.metadata?.type == .historyStart {
+            lastCompletedOffloadSessionID = nil
+        }
+        publishHeartRate(envelope.realtime, deliveredAt: deliveredAt)
+        enqueue(envelope)
     }
 
     func submitBatteryLevel(_ data: Data, deliveredAt: Date) {
@@ -483,7 +542,8 @@ final class WhoopTransportPipeline: @unchecked Sendable {
         let snapshot = WhoopTransportUISnapshot(
             heartRate: pendingUI.heartRate,
             heartRateReceivedAt: pendingUI.heartRateReceivedAt,
-            batteryObservation: pendingUI.batteryObservation
+            batteryObservation: pendingUI.batteryObservation,
+            connectionToken: connectionToken
         )
         pendingUI = PendingUI()
         lastUISnapshotAt = now

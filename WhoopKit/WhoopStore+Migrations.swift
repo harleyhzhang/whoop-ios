@@ -11,7 +11,8 @@ extension WhoopStore {
             current <= targetSchemaVersion
         else { return false }
         guard current < targetSchemaVersion else {
-            return current < 11 || WhoopStrainInputIndex.isInstalled(in: database)
+            return (current < 11 || WhoopStrainInputIndex.isInstalled(in: database))
+                && (current < 12 || WhoopFrameProvenance.isInstalled(in: database))
         }
         for version in (Int(current) + 1)...targetSchemaVersion {
             do {
@@ -492,6 +493,8 @@ extension WhoopStore {
                 && execute("DROP TABLE whoop_decode_result")
         case 11:
             return execute(WhoopStrainInputIndex.schema)
+        case 12:
+            return execute(WhoopFrameProvenance.schema)
         default:
             return false
         }

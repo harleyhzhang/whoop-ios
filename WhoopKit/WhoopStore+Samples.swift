@@ -62,15 +62,11 @@ extension WhoopStore {
         packetID: String,
         sample: WhoopDecodedHistorical
     ) -> Bool {
-        let utcOffsetSeconds = nearestRecordedUTCOffset(
-            database: database,
-            sampleAt: sample.sampleAt
-        )
-        let stepDateKey = physiologicalStepDateKey(
-            for: sample.sampleAt,
-            utcOffsetSeconds: utcOffsetSeconds,
-            database: database
-        )
+        guard let utcOffsetSeconds = try? nearestRecordedUTCOffset(database: database, sampleAt: sample.sampleAt),
+            let stepDateKey = try? physiologicalStepDateKey(
+                for: sample.sampleAt,
+                utcOffsetSeconds: utcOffsetSeconds, database: database)
+        else { return false }
         let sql = """
             INSERT INTO whoop_historical_sample
             (sample_at, source_packet_id, peripheral_id, protocol_version, ordinal,
@@ -115,7 +111,10 @@ extension WhoopStore {
 
     func backfillHistoricalSamplesIfNeeded() {
         guard let database else { return }
-        let count = Int((try? scalarInt(database, sql: "SELECT COUNT(*) FROM whoop_historical_sample")) ?? 0)
+        guard let rawCount = try? scalarInt(database, sql: "SELECT COUNT(*) FROM whoop_historical_sample") else {
+            return
+        }
+        let count = Int(rawCount)
         guard count == 0 else { return }
         let sql = """
             SELECT id, payload
@@ -284,14 +283,14 @@ extension WhoopStore {
     /// separate from finalization lets automatic timing and evidence gates decide
     /// when a coherent night is ready to publish.
     /// The 48-hour window every sleep decision is made from.
-    func recentHistoricalRows(now: Date, through: Date? = nil) -> [HistoricalRow] {
-        guard let database else { return [] }
-        return Self.recentHistoricalRows(database: database, now: now, through: through)
+    func recentHistoricalRows(now: Date, through: Date? = nil) throws -> [HistoricalRow] {
+        guard let database else { throw StoreError.databaseUnavailable }
+        return try Self.recentHistoricalRows(database: database, now: now, through: through)
     }
 
     static func recentHistoricalRows(
         database: OpaquePointer, now: Date, through: Date? = nil
-    ) -> [HistoricalRow] {
+    ) throws -> [HistoricalRow] {
         let cutoff = now.addingTimeInterval(-48 * 60 * 60).timeIntervalSince1970
         let sql = """
             SELECT \(historicalRowColumns)
@@ -302,19 +301,10 @@ extension WhoopStore {
               )
             ORDER BY sample_at ASC
             """
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-            let statement
-        else { return [] }
-        defer { sqlite3_finalize(statement) }
-        sqlite3_bind_double(statement, 1, cutoff)
-        sqlite3_bind_double(statement, 2, through?.timeIntervalSince1970 ?? .greatestFiniteMagnitude)
-
-        var rows: [HistoricalRow] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            rows.append(historicalRow(statement))
-        }
-        return rows
+        return try SQLiteRead.rows(
+            database, sql: sql,
+            bindings: [.real(cutoff), .real(through?.timeIntervalSince1970 ?? .greatestFiniteMagnitude)],
+            map: historicalRow)
     }
 
     static let historicalRowColumns = "sample_at, heart_rate, sleep_state, step_motion_counter"

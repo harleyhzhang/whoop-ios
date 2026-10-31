@@ -236,10 +236,38 @@ dead code against a reviewed baseline. The file-size gate scans both app source
 trees and tests; inherited oversized coordinators may only shrink from their
 explicit baselines.
 
-Capture-only `WhoopMotionReassembler` reconstructs CRC-valid format-1 frames from
-committed source notifications, separated by peripheral/characteristic and bounded
-by bytes, stream count and gap. It does not rewrite raw rows or change ordinary
-metric ingest. A correlated read-only clock response records label alignment and
-uncertainty. Delayed history repair is bounded to the latest recorded interval,
-retains source hashes and cannot resume sensing. The private exporter uses the
-same stream boundaries and verifies both reconstructed frames and their sources.
+
+## Complete frames, complete reads, and clock authority
+
+Ordinary proprietary ingestion uses `WhoopFrameReassembler` before semantic
+routing. It validates both header CRC16 and frame CRC32, drains multiple frames,
+and separates streams by peripheral, characteristic and connection generation.
+Limits are 4 KiB per incomplete frame, 16 KiB per notification, eight streams,
+256 fragments and a two-second inter-fragment gap. Corruption resynchronizes
+only to a complete CRC-valid successor; disconnects discard partial state.
+Original notifications remain immutable raw rows. Schema 12 adds
+`whoop_frame_source`: completed reconstructed frames link to exact byte ranges,
+SHA-256 hashes and generation of their source notifications. The writer verifies
+all slices and the reconstructed bytes in the frame transaction; missing sources
+roll back. FIFO transactions, retry compaction and history failure propagation
+preserve durable-all-sources-before-ACK. Capture's OFF-only recovery shares the
+same parser and receives original notifications, avoiding duplicate replay.
+
+`SQLiteRead` owns strict prepare, parameter-count/bind checks, terminal
+`SQLITE_DONE`, finalization and scalar empty/NULL/zero distinctions. Sleep/raw
+backfills, recent history, HRV, recorded offsets, wake boundaries, scalar and
+metadata reads use complete results. A failed read cannot advance a completion
+marker or publish a prefix as a complete metric. Existing streaming transactions
+retain explicit terminal checks; no archive-retention policy changes.
+
+`WhoopDeviceClock` and its CoreBluetooth probe independently acquire read-only
+command 147, with no clock SET or sensor-start commands. References require the
+current peripheral/generation, matching command origin, successful result,
+monotonic/wall-time agreement and RTT <= 1 second. References expire after five
+minutes; normal refresh is four minutes, unsupported/failed retries at most once
+per minute. An append-only versioned metadata entry retains the raw-reply hash,
+offset, RTT and uncertainty. Wrist events use a conservative projected freshness
+bound including RTT, event quantization and drift, and reject out-of-order or
+delayed events. Missing/expired references leave wrist freshness unknown. Raw
+history timestamps and stored dates are untouched; reference offsets are never
+bulk-applied to historical data.

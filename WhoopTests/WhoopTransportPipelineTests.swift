@@ -334,6 +334,103 @@ final class WhoopTransportPipelineTests: XCTestCase {
         }
     }
 
+    func testSplitAndCoalescedFramesPreserveSourcesAndDeduplicateDecodedRetries() throws {
+        for batchSize in [1, 128] {
+            let fixture = try makeStoreFixture()
+            defer {
+                fixture.store.shutdownForTesting()
+                try? FileManager.default.removeItem(at: fixture.directory)
+            }
+            let recorder = TransportCallbackRecorder()
+            let pipeline = WhoopTransportPipeline(
+                store: fixture.store, maximumBatchSize: batchSize, idleFlushDelay: 60,
+                didPublishUI: { _ in }, didPersist: { result, summary in recorder.recordPersistence(result, summary) })
+            let token = WhoopConnectionSession.Token(generation: 1, peripheralID: fixture.peripheralID)
+            pipeline.setConnection(token)
+            let first = historicalFrame(timestamp: 1_800_000_000, stepCounter: 1)
+            let second = historicalFrame(timestamp: 1_800_000_001, stepCounter: 2)
+            let deliveries = [Data(first.prefix(62)), Data(first.suffix(62)), first + second]
+            for (index, packet) in deliveries.enumerated() {
+                pipeline.submitProprietary(
+                    packet: packet, peripheralID: fixture.peripheralID,
+                    characteristicUUID: "notify", offloadSessionID: nil,
+                    deliveredAt: Date(timeIntervalSince1970: 1_800_000_010 + Double(index) / 100),
+                    connectionToken: token)
+            }
+            pipeline.flushAndWaitForPersistence { recorder.recordDrain() }
+            XCTAssertEqual(recorder.drainSemaphore.wait(timeout: .now() + 5), .success)
+            XCTAssertTrue(recorder.snapshot().persistenceSuccesses.allSatisfy { $0 })
+            let database = try openReadOnlyDatabase(fixture.databaseURL)
+            defer { sqlite3_close(database) }
+            XCTAssertEqual(scalarInt(database, "SELECT COUNT(*) FROM whoop_historical_sample"), 2)
+            XCTAssertEqual(scalarInt(database, "SELECT COUNT(*) FROM whoop_raw_packet"), 5)
+            XCTAssertEqual(scalarInt(database, "SELECT COUNT(*) FROM whoop_frame_source"), 4)
+            XCTAssertEqual(scalarInt(database, "SELECT COUNT(*) FROM whoop_packet_replay WHERE duplicate_count=1"), 1)
+            XCTAssertEqual(scalarInt(database, "SELECT COUNT(*) FROM pragma_foreign_key_check"), 0)
+            let sourceLengths = try SQLiteRead.rows(
+                database,
+                sql: "SELECT length(payload) FROM whoop_raw_packet WHERE id LIKE 'n%' ORDER BY length(payload)",
+                map: { sqlite3_column_int($0, 0) })
+            XCTAssertEqual(sourceLengths, [62, 62, 248])
+        }
+    }
+
+    func testMissingReconstructionSourceRollsBackBeforeHistoryBoundary() async throws {
+        let fixture = try makeStoreFixture()
+        defer {
+            fixture.store.shutdownForTesting()
+            try? FileManager.default.removeItem(at: fixture.directory)
+        }
+        var envelope = WhoopPacketEnvelope.proprietary(
+            packet: WhoopTestFrameFactory.historicalMetadata(type: 3, length: 16),
+            peripheralID: fixture.peripheralID, characteristicUUID: "notify", offloadSessionID: nil,
+            deliveredAt: .now, proprietaryOrdinal: 1)
+        envelope.provenance = .reconstructed([
+            WhoopFrameSource(packetID: "missing", sha256: "missing", offset: 0, length: 16)
+        ])
+        let result = await appendBatch([envelope], store: fixture.store)
+        XCTAssertFalse(result.success)
+        let database = try openReadOnlyDatabase(fixture.databaseURL)
+        defer { sqlite3_close(database) }
+        XCTAssertEqual(scalarInt(database, "SELECT COUNT(*) FROM whoop_raw_packet"), 0)
+        XCTAssertEqual(scalarInt(database, "SELECT COUNT(*) FROM whoop_frame_source"), 0)
+        XCTAssertEqual(scalarInt(database, "SELECT COUNT(*) FROM whoop_packet_replay"), 0)
+    }
+
+    func testReconnectDropsPartialAndStaleMetadataRemainsOnlyRaw() throws {
+        let fixture = try makeStoreFixture()
+        defer {
+            fixture.store.shutdownForTesting()
+            try? FileManager.default.removeItem(at: fixture.directory)
+        }
+        let recorder = TransportCallbackRecorder()
+        let pipeline = WhoopTransportPipeline(
+            store: fixture.store, idleFlushDelay: 60,
+            didPublishUI: { _ in }, didPersist: { result, summary in recorder.recordPersistence(result, summary) })
+        let old = WhoopConnectionSession.Token(generation: 1, peripheralID: fixture.peripheralID)
+        let new = WhoopConnectionSession.Token(generation: 2, peripheralID: fixture.peripheralID)
+        let packet = historicalFrame(timestamp: 1_800_000_000, stepCounter: 1)
+        pipeline.setConnection(old)
+        pipeline.submitProprietary(
+            packet: packet.prefix(62), peripheralID: fixture.peripheralID,
+            characteristicUUID: "notify", offloadSessionID: nil, deliveredAt: .now, connectionToken: old)
+        pipeline.setConnection(new)
+        pipeline.submitProprietary(
+            packet: packet.suffix(62), peripheralID: fixture.peripheralID,
+            characteristicUUID: "notify", offloadSessionID: nil, deliveredAt: .now, connectionToken: new)
+        pipeline.submitProprietary(
+            packet: WhoopTestFrameFactory.historicalMetadata(type: 3, length: 16),
+            peripheralID: fixture.peripheralID, characteristicUUID: "notify", offloadSessionID: nil,
+            deliveredAt: .now, connectionToken: old)
+        pipeline.flushAndWaitForPersistence { recorder.recordDrain() }
+        XCTAssertEqual(recorder.drainSemaphore.wait(timeout: .now() + 5), .success)
+        let database = try openReadOnlyDatabase(fixture.databaseURL)
+        defer { sqlite3_close(database) }
+        XCTAssertEqual(scalarInt(database, "SELECT COUNT(*) FROM whoop_historical_sample"), 0)
+        XCTAssertEqual(scalarInt(database, "SELECT COUNT(*) FROM whoop_frame_source"), 0)
+        XCTAssertEqual(scalarInt(database, "SELECT COUNT(*) FROM whoop_raw_packet"), 3)
+    }
+
     private func historicalFrame(timestamp: UInt32, stepCounter: UInt16) -> Data {
         var bytes = WhoopTestFrameFactory.frame(length: 124, type: 47, version: 18)
         bytes[15] = UInt8(truncatingIfNeeded: timestamp)

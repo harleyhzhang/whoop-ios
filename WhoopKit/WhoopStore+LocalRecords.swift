@@ -138,7 +138,8 @@ extension WhoopStore {
         _ record: DailyHealthRecord,
         database: OpaquePointer
     ) -> Bool {
-        let previousWakeAt = storedWakeAt(dateKey: record.dateKey, database: database)
+        let previousWakeAt: Date?
+        do { previousWakeAt = try storedWakeAt(dateKey: record.dateKey, database: database) } catch { return false }
         let sql = """
             INSERT INTO daily_health_metric
             (date_key, sleep_score, sleep_duration_minutes, hrv_rmssd_milliseconds,
@@ -201,15 +202,12 @@ extension WhoopStore {
         )
     }
 
-    func storedWakeAt(dateKey: String, database: OpaquePointer) -> Date? {
-        let sql = "SELECT sleep_end_at FROM daily_health_metric WHERE date_key = ? LIMIT 1"
-        return withCachedStatement(database: database, sql: sql) { statement in
-            bind(dateKey, to: 1, in: statement)
-            guard sqlite3_step(statement) == SQLITE_ROW,
-                let raw = textColumn(statement, 0)
-            else { return nil }
-            return Self.parseISO8601(raw)
-        } ?? nil
+    func storedWakeAt(dateKey: String, database: OpaquePointer) throws -> Date? {
+        let value = try SQLiteRead.text(
+            database,
+            sql: "SELECT sleep_end_at FROM daily_health_metric WHERE date_key = ? LIMIT 1", bindings: [.text(dateKey)])
+        guard case .value(let raw) = value else { return nil }
+        return Self.parseISO8601(raw)
     }
 
     /// Score-model backfills must not erase a previously valid HRV or RHR if

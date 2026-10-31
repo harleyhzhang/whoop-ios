@@ -17,6 +17,10 @@ struct WhoopPacketEnvelope: Sendable {
     let deduplicateTransportRetries: Bool
     let deliveredAt: Date
     let proprietaryOrdinal: Int?
+    var acceptsControlEvents = true
+    var receivedUptime: TimeInterval? = nil
+    var connectionToken: WhoopConnectionSession.Token? = nil
+    var provenance: WhoopFrameProvenance? = nil
 
     func replacingOffloadSessionID(_ offloadSessionID: String?) -> WhoopPacketEnvelope {
         WhoopPacketEnvelope(
@@ -33,8 +37,26 @@ struct WhoopPacketEnvelope: Sendable {
             offloadSessionID: offloadSessionID,
             deduplicateTransportRetries: deduplicateTransportRetries,
             deliveredAt: deliveredAt,
-            proprietaryOrdinal: proprietaryOrdinal
+            proprietaryOrdinal: proprietaryOrdinal,
+            acceptsControlEvents: acceptsControlEvents,
+            receivedUptime: receivedUptime,
+            connectionToken: connectionToken,
+            provenance: provenance
         )
+    }
+
+    /// Stale connection deliveries remain raw evidence, never current control
+    /// events or samples interpreted with the new link's authority.
+    func withoutSemanticEvents() -> WhoopPacketEnvelope {
+        var envelope = WhoopPacketEnvelope(
+            packet: packet, peripheralID: peripheralID,
+            characteristicUUID: characteristicUUID, frameType: frameType,
+            integrityIsValid: integrityIsValid, realtime: nil, historical: nil, ppg: nil,
+            metadata: nil, freshWristState: nil, offloadSessionID: nil,
+            deduplicateTransportRetries: false, deliveredAt: deliveredAt,
+            proprietaryOrdinal: proprietaryOrdinal, connectionToken: connectionToken, provenance: provenance)
+        envelope.acceptsControlEvents = false
+        return envelope
     }
 
     static func standardHeartRate(
@@ -43,6 +65,7 @@ struct WhoopPacketEnvelope: Sendable {
         characteristicUUID: String,
         deliveredAt: Date
     ) -> WhoopPacketEnvelope? {
+        let packet = Data(packet)
         guard let realtime = WhoopDecodedRealtime.decodeStandardHeartRate(packet) else {
             return nil
         }
@@ -71,8 +94,11 @@ struct WhoopPacketEnvelope: Sendable {
         offloadSessionID: String?,
         deliveredAt: Date,
         proprietaryOrdinal: Int,
-        wristFreshnessWindow: TimeInterval = 45
+        wristFreshnessWindow: TimeInterval = 45,
+        connectionToken: WhoopConnectionSession.Token? = nil,
+        provenance: WhoopFrameProvenance? = nil
     ) -> WhoopPacketEnvelope {
+        let packet = Data(packet)
         let bytes = [UInt8](packet)
         let frameType = bytes.count > 8 ? FrameType(rawValue: bytes[8]) : nil
         let integrityIsValid = WhoopFrameIntegrity.isValid(bytes)
@@ -109,7 +135,9 @@ struct WhoopPacketEnvelope: Sendable {
             offloadSessionID: offloadSessionID,
             deduplicateTransportRetries: integrityIsValid && frameType?.isReplayProne == true,
             deliveredAt: deliveredAt,
-            proprietaryOrdinal: proprietaryOrdinal
+            proprietaryOrdinal: proprietaryOrdinal,
+            connectionToken: connectionToken,
+            provenance: provenance
         )
     }
 

@@ -57,6 +57,6 @@ final class WhoopDiagnosticsReader: @unchecked Sendable {
             throw WhoopStorageFailure.sqlite(operation: .read, database: handle, resultCode: sqlite3_errcode(handle))
         }
         defer { sqlite3_exec(handle, "ROLLBACK", nil, nil, nil) }
-        return WhoopSleepDiagnosticsBuilder(database: handle).build(now: now)
+        return try WhoopSleepDiagnosticsBuilder(database: handle).build(now: now)
     }
 }

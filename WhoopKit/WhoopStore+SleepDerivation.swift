@@ -9,11 +9,11 @@ extension WhoopStore {
         for candidate: SleepCandidate,
         now: Date,
         dateKey: String? = nil
-    ) -> DailyHealthRecord {
+    ) throws -> DailyHealthRecord {
         let dateKey = dateKey ?? candidate.dateKey
         let durationMinutes = candidate.durationMinutes
         let restingHR = restingHeartRate(rows: candidate.asleepRows, cadence: candidate.cadenceSeconds)
-        let hrv = nightlyRMSSD(for: candidate)
+        let hrv = try nightlyRMSSD(for: candidate)
         let elapsedMinutes = max(
             durationMinutes,
             (candidate.lastSleep.timestamp - candidate.firstSleep.timestamp + candidate.cadenceSeconds) / 60
@@ -28,7 +28,7 @@ extension WhoopStore {
         )
         let features = SleepScoreFeatureBuilder.features(
             current: current,
-            history: scoreHistory(before: dateKey)
+            history: try scoreHistory(before: dateKey)
         )
         let timingAgreement = features.last ?? 100
         let modelPrediction = Self.bundledSleepScoreModel?.prediction(features)
@@ -63,8 +63,8 @@ extension WhoopStore {
         )
     }
 
-    func scoreHistory(before dateKey: String) -> [SleepScoreNight] {
-        guard let database else { return [] }
+    func scoreHistory(before dateKey: String) throws -> [SleepScoreNight] {
+        guard let database else { throw StoreError.databaseUnavailable }
         let sql = """
             SELECT date_key, sleep_duration_minutes, sleep_efficiency_percentage,
                    sleep_start_minute, sleep_end_minute
@@ -77,25 +77,16 @@ extension WhoopStore {
             ORDER BY date_key DESC
             LIMIT 10
             """
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-            let statement
-        else { return [] }
-        defer { sqlite3_finalize(statement) }
-        bind(dateKey, to: 1, in: statement)
-        var nights: [SleepScoreNight] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            guard let key = textColumn(statement, 0) else { continue }
-            nights.append(
-                SleepScoreNight(
-                    dateKey: key,
-                    durationMinutes: sqlite3_column_double(statement, 1),
-                    efficiencyPercentage: sqlite3_column_double(statement, 2),
-                    startMinute: sqlite3_column_double(statement, 3),
-                    endMinute: sqlite3_column_double(statement, 4)
-                ))
+        let selected: [SleepScoreNight?] = try SQLiteRead.rows(database, sql: sql, bindings: [.text(dateKey)]) {
+            statement in
+            guard let key = textColumn(statement, 0) else { return nil }
+            return SleepScoreNight(
+                dateKey: key, durationMinutes: sqlite3_column_double(statement, 1),
+                efficiencyPercentage: sqlite3_column_double(statement, 2),
+                startMinute: sqlite3_column_double(statement, 3),
+                endMinute: sqlite3_column_double(statement, 4))
         }
-        return nights
+        return selected.compactMap { $0 }
     }
 
     /// Whether a night still needs deriving. Older local model versions are
@@ -103,31 +94,24 @@ extension WhoopStore {
     /// correctly makes a metric smaller. Within one model version, a later
     /// offload remains grow-only so a partial reconstruction cannot shrink a
     /// settled record. Archived WHOOP rows remain authoritative.
-    static func shouldDerive(candidate: SleepCandidate, database: OpaquePointer) -> Bool {
+    static func shouldDerive(candidate: SleepCandidate, database: OpaquePointer) throws -> Bool {
         let sql = """
             SELECT source, sleep_score, sleep_duration_minutes,
                    hrv_rmssd_milliseconds, resting_heart_rate_bpm
             FROM daily_health_metric WHERE date_key = ? LIMIT 1
             """
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-            let statement
-        else { return false }
-        defer { sqlite3_finalize(statement) }
-        _ = candidate.dateKey.withCString { sqlite3_bind_text(statement, 1, $0, -1, transient) }
-        guard sqlite3_step(statement) == SQLITE_ROW else { return true }
-        guard let source = sqlite3_column_text(statement, 0).map({ String(cString: $0) }),
-            source.hasPrefix(Self.localSourcePrefix)
-        else { return false }
-        if source != Self.localSource { return true }
-        if (1...4).contains(where: { sqlite3_column_type(statement, Int32($0)) == SQLITE_NULL }) {
-            return true
+        let decisions: [Bool] = try SQLiteRead.rows(database, sql: sql, bindings: [.text(candidate.dateKey)]) {
+            statement in
+            guard let source = sqlite3_column_text(statement, 0).map({ String(cString: $0) }),
+                source.hasPrefix(Self.localSourcePrefix)
+            else { return false }
+            if source != Self.localSource { return true }
+            if (1...4).contains(where: { sqlite3_column_type(statement, Int32($0)) == SQLITE_NULL }) { return true }
+            return shouldReplaceLocalSleep(
+                existingDurationMinutes: sqlite3_column_double(statement, 2),
+                candidateDurationMinutes: candidate.durationMinutes)
         }
-        let existingDuration = sqlite3_column_double(statement, 2)
-        return Self.shouldReplaceLocalSleep(
-            existingDurationMinutes: existingDuration,
-            candidateDurationMinutes: candidate.durationMinutes
-        )
+        return decisions.first ?? true
     }
 
     /// A one-minute tolerance avoids rewriting a settled record for harmless
@@ -155,18 +139,17 @@ extension WhoopStore {
     func completedOffloadCoversLatestHistory(database: OpaquePointer) -> Bool {
         // Walk the delivery index backward to the newest actual history packet.
         // MAX over the joined archive scanned every retained sample per offload.
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, Self.completedOffloadCoverageQuery, -1, &statement, nil) == SQLITE_OK,
-            let statement
+        guard
+            let decisions = try? SQLiteRead.rows(
+                database, sql: Self.completedOffloadCoverageQuery,
+                map: { statement in
+                    guard sqlite3_column_type(statement, 0) != SQLITE_NULL,
+                        sqlite3_column_type(statement, 1) != SQLITE_NULL
+                    else { return false }
+                    return sqlite3_column_int64(statement, 1) >= sqlite3_column_int64(statement, 0)
+                }), decisions.count == 1
         else { return false }
-        defer { sqlite3_finalize(statement) }
-        guard sqlite3_step(statement) == SQLITE_ROW,
-            sqlite3_column_type(statement, 0) != SQLITE_NULL,
-            sqlite3_column_type(statement, 1) != SQLITE_NULL
-        else { return false }
-        let newestSampleSequence = sqlite3_column_int64(statement, 0)
-        let newestCompletionSequence = sqlite3_column_int64(statement, 1)
-        return newestCompletionSequence >= newestSampleSequence
+        return decisions.first == true
     }
 
     /// Lowest five-minute mean heart rate across the night. The minimum sample
@@ -195,9 +178,9 @@ extension WhoopStore {
     /// though the strap later supplies a dense, timestamped R-R history. Keeping
     /// every historical row as a packet preserves both its boundary and sample
     /// timestamp, so the same continuity and artifact rules apply to both paths.
-    func nightlyRMSSD(for candidate: SleepCandidate) -> Double? {
-        guard let database else { return nil }
-        let standardPackets = realtimeRRPackets(
+    func nightlyRMSSD(for candidate: SleepCandidate) throws -> Double? {
+        guard let database else { throw StoreError.databaseUnavailable }
+        let standardPackets = try realtimeRRPackets(
             database: database,
             from: candidate.firstSleep.timestamp - 30,
             through: candidate.lastSleep.timestamp + 30,
@@ -213,7 +196,7 @@ extension WhoopStore {
         if let value = Self.rmssdFromRealtimePackets(asleepStandardPackets) {
             return value
         }
-        let proprietaryPackets = realtimeRRPackets(
+        let proprietaryPackets = try realtimeRRPackets(
             database: database,
             from: candidate.firstSleep.timestamp - 30,
             through: candidate.lastSleep.timestamp + 30,
@@ -225,7 +208,7 @@ extension WhoopStore {
         if let value = Self.rmssdFromRealtimePackets(asleepProprietaryPackets) {
             return value
         }
-        let historicalPackets = historicalRRPackets(
+        let historicalPackets = try historicalRRPackets(
             database: database,
             from: candidate.firstSleep.timestamp - 30,
             through: candidate.lastSleep.timestamp + 30
@@ -241,7 +224,7 @@ extension WhoopStore {
         from start: TimeInterval,
         through end: TimeInterval,
         source: String
-    ) -> [RealtimeRRPacket] {
+    ) throws -> [RealtimeRRPacket] {
         let timeColumn = source == "standard_2a37" ? "received_at" : "device_timestamp"
         let sql = """
             SELECT \(timeColumn), rr_intervals_json
@@ -251,34 +234,22 @@ extension WhoopStore {
               AND rr_intervals_json != '[]'
             ORDER BY \(timeColumn), received_at
             """
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-            let statement
-        else { return [] }
-        defer { sqlite3_finalize(statement) }
-        bind(source, to: 1, in: statement)
-        sqlite3_bind_double(statement, 2, start)
-        sqlite3_bind_double(statement, 3, end)
-        var packets: [RealtimeRRPacket] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
+        let selected: [RealtimeRRPacket?] = try SQLiteRead.rows(
+            database, sql: sql, bindings: [.text(source), .real(start), .real(end)]
+        ) { statement in
             let text = textColumn(statement, 1) ?? "[]"
             let intervals = (try? JSONDecoder().decode([Double].self, from: Data(text.utf8))) ?? []
-            if !intervals.isEmpty {
-                packets.append(
-                    RealtimeRRPacket(
-                        timestamp: sqlite3_column_double(statement, 0),
-                        intervals: intervals
-                    ))
-            }
+            guard !intervals.isEmpty else { return nil }
+            return RealtimeRRPacket(timestamp: sqlite3_column_double(statement, 0), intervals: intervals)
         }
-        return packets
+        return selected.compactMap { $0 }
     }
 
     func historicalRRPackets(
         database: OpaquePointer,
         from start: TimeInterval,
         through end: TimeInterval
-    ) -> [RealtimeRRPacket] {
+    ) throws -> [RealtimeRRPacket] {
         let sql = """
             SELECT sample_at, rr_intervals_json
             FROM whoop_historical_sample
@@ -288,25 +259,14 @@ extension WhoopStore {
               AND rr_intervals_json != '[]'
             ORDER BY sample_at, ordinal
             """
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-            let statement
-        else { return [] }
-        defer { sqlite3_finalize(statement) }
-        sqlite3_bind_double(statement, 1, start)
-        sqlite3_bind_double(statement, 2, end)
-        var packets: [RealtimeRRPacket] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
+        let selected: [RealtimeRRPacket?] = try SQLiteRead.rows(
+            database, sql: sql, bindings: [.real(start), .real(end)]
+        ) { statement in
             let text = textColumn(statement, 1) ?? "[]"
             let intervals = (try? JSONDecoder().decode([Double].self, from: Data(text.utf8))) ?? []
-            if !intervals.isEmpty {
-                packets.append(
-                    RealtimeRRPacket(
-                        timestamp: sqlite3_column_double(statement, 0),
-                        intervals: intervals
-                    ))
-            }
+            guard !intervals.isEmpty else { return nil }
+            return RealtimeRRPacket(timestamp: sqlite3_column_double(statement, 0), intervals: intervals)
         }
-        return packets
+        return selected.compactMap { $0 }
     }
 }

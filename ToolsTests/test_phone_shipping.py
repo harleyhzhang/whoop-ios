@@ -546,7 +546,7 @@ def test_exact_commit_must_be_clean_checked_out_and_merged(
 
 def test_real_schema_constant_and_commit_bound_build_number() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    assert environment.project_schema_version(repo_root) == 11
+    assert environment.project_schema_version(repo_root) == 12
     assert environment.shipping_build_number("a" * 40) == str(int("a" * 12, 16))
 
 
@@ -1077,3 +1077,26 @@ def test_motion_calibration_preservation_allows_cleanup_but_never_lost_labels_or
         core.assert_motion_calibration_preserved(pre, post)
     with pytest.raises(core.IntegrityError, match="lost the motion"):
         core.assert_motion_calibration_preserved(pre, replace(post, hashes={}))
+
+
+def test_reconstructed_source_edges_are_exactly_preserved(tmp_path: Path) -> None:
+    before_path = tmp_path / "before.sqlite3"
+    after_path = tmp_path / "after.sqlite3"
+    for path, offset in ((before_path, 0), (after_path, 1)):
+        with sqlite3.connect(path) as connection:
+            connection.execute(
+                "CREATE TABLE whoop_frame_source (frame_packet_id TEXT PRIMARY KEY, "
+                "source_packet_id TEXT, source_offset INTEGER, source_length INTEGER)"
+            )
+            connection.execute(
+                "INSERT INTO whoop_frame_source VALUES ('frame', 'notification', ?, 62)",
+                (offset,),
+            )
+    before = core.BackupResult(
+        str(tmp_path), str(before_path), 12, "ok", 0, {"whoop_frame_source": 1}, {}
+    )
+    after = core.BackupResult(
+        str(tmp_path), str(after_path), 12, "ok", 0, {"whoop_frame_source": 1}, {}
+    )
+    with pytest.raises(core.IntegrityError, match="changed preinstall evidence"):
+        core.assert_database_rows_preserved(before, after)

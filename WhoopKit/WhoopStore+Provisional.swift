@@ -19,7 +19,7 @@ extension WhoopStore {
         isSleeping: Bool,
         now: Date,
         timeZone: TimeZone = .autoupdatingCurrent
-    ) -> WhoopProvisionalDay? {
+    ) throws -> WhoopProvisionalDay? {
         guard let database, let candidate else { return nil }
         let summary = WhoopProvisionalSleepCandidate(
             firstAsleep: candidate.firstSleep.timestamp,
@@ -34,7 +34,7 @@ extension WhoopStore {
                 summary, isSleeping: isSleeping, now: now.timeIntervalSince1970,
                 publishedSleepID: published.sleepID, timeZone: timeZone)
         else { return nil }
-        let derived = derivedRecord(for: candidate, now: now, dateKey: dateKey)
+        let derived = try derivedRecord(for: candidate, now: now, dateKey: dateKey)
         let health =
             WhoopProvisionalSleepPolicy.showsScores(sleepSeconds: candidate.sleepSeconds)
             ? derived : derived.withholdingModelScores()
@@ -49,20 +49,14 @@ extension WhoopStore {
 
     /// Nil is a failed read, which shows nothing rather than guessing.
     private func publishedSleepID(dateKey: String, database: OpaquePointer) -> PublishedSleep? {
-        var statement: OpaquePointer?
         guard
-            sqlite3_prepare_v2(
-                database, "SELECT COALESCE(sleep_id, '') FROM daily_health_metric WHERE date_key = ?", -1,
-                &statement, nil) == SQLITE_OK,
-            let statement
+            let rows = try? SQLiteRead.rows(
+                database,
+                sql: "SELECT COALESCE(sleep_id, '') FROM daily_health_metric WHERE date_key = ?",
+                bindings: [.text(dateKey)], map: { textColumn($0, 0) ?? "" })
         else { return nil }
-        defer { sqlite3_finalize(statement) }
-        bind(dateKey, to: 1, in: statement)
-        switch sqlite3_step(statement) {
-        case SQLITE_ROW: return .sleep(id: textColumn(statement, 0) ?? "")
-        case SQLITE_DONE: return PublishedSleep.none
-        default: return nil
-        }
+        if let id = rows.first { return .sleep(id: id) }
+        return PublishedSleep.none
     }
 
     /// Publication re-buckets samples from the wake onward into the new day and
