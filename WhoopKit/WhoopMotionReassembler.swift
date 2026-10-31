@@ -19,7 +19,6 @@ struct WhoopMotionReassembler {
         var liveIMUHeader = false
     }
     private var shared = WhoopFrameReassembler(maximumStreams: 4)
-    var bufferedByteCount: Int { shared.bufferedByteCount }
     mutating func reset() { shared.reset() }
     mutating func ingest(_ fragment: WhoopMotionFragment) -> Result {
         let result = shared.ingest(
