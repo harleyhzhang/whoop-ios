@@ -9,6 +9,7 @@ enum WhoopMotionProtocol {
         let origin: UInt8
         let result: UInt8
         let receivedAt: Date
+        var deviceClock: Date? = nil
     }
 
     struct Buffer: Codable, Equatable, Sendable {
@@ -18,6 +19,9 @@ enum WhoopMotionProtocol {
         let accelerometerCount: Int
         let gyroscopeCount: Int
         let configuration: [UInt8]
+        var sourcePacketHashes: [String]? = nil
+        var characteristicUUID: String? = nil
+        var realtime: Bool? = nil
     }
 
     enum Event: Sendable {
@@ -30,8 +34,17 @@ enum WhoopMotionProtocol {
         let bytes = [UInt8](envelope.packet)
         guard bytes.count >= 12, bytes[1] == 1 else { return nil }
         if bytes.count >= 20, bytes[8] == 36 {
-            return .reply(
-                Reply(command: bytes[10], origin: bytes[11], result: bytes[12], receivedAt: envelope.deliveredAt))
+            var reply = Reply(
+                command: bytes[10], origin: bytes[11], result: bytes[12], receivedAt: envelope.deliveredAt)
+            if bytes[10] == 147, bytes.count >= 24, bytes[13] == 1 {
+                let seconds =
+                    UInt32(bytes[14]) | UInt32(bytes[15]) << 8 | UInt32(bytes[16]) << 16 | UInt32(bytes[17]) << 24
+                let fraction = unsigned16(bytes, at: 18)
+                if seconds > 1_700_000_000, fraction <= 32440 {
+                    reply.deviceClock = Date(timeIntervalSince1970: Double(seconds) + Double(fraction) / 32768)
+                }
+            }
+            return .reply(reply)
         }
         // R21 has independent, bounded valid-sample counts. Types 51/52 have a
         // different layout; an ACK or an R18 gravity vector is never IMU evidence.
@@ -49,7 +62,8 @@ enum WhoopMotionProtocol {
                 sha256: SHA256.hash(data: envelope.packet).map { String(format: "%02x", $0) }.joined(),
                 sensorAt: sensorAt, receivedAt: envelope.deliveredAt,
                 accelerometerCount: Int(accelCount), gyroscopeCount: Int(gyroCount),
-                configuration: [21, 22, 26, 27, 628, 632, 633].map { bytes[$0] }
+                configuration: [21, 22, 26, 27, 628, 632, 633].map { bytes[$0] },
+                characteristicUUID: envelope.characteristicUUID, realtime: bytes[8] == 43
             ))
     }
 

@@ -4,6 +4,7 @@ import sqlite3
 import struct
 import zlib
 from pathlib import Path
+from typing import cast
 
 import pytest
 from motion_capture_report import APPLE_REFERENCE_EPOCH, decode_buffer, export_session
@@ -77,3 +78,68 @@ def test_export_requires_exact_private_provenance_and_never_changes_database(
     journal.write_text(json.dumps(session))
     with pytest.raises(ValueError, match="missing"):
         export_session(db, journal)
+
+
+def test_fragmented_notifications_export_exact_source_hashes_and_clock_alignment(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "fragmented.sqlite3"
+    packet = frame()
+    fragments = [packet[offset : offset + 244] for offset in range(0, len(packet), 244)]
+    receipt = 1_800_000_114.0
+    with sqlite3.connect(db) as connection:
+        connection.execute(
+            "CREATE TABLE whoop_raw_packet (received_at REAL, peripheral_id TEXT, characteristic_uuid TEXT, payload BLOB, delivery_sequence INTEGER)"
+        )
+        connection.executemany(
+            "INSERT INTO whoop_raw_packet VALUES (?, ?, ?, ?, ?)",
+            [
+                (receipt + i * 0.01, "synthetic", "data", part, i)
+                for i, part in enumerate(fragments)
+            ],
+        )
+    source_hashes = [hashlib.sha256(part).hexdigest() for part in fragments]
+    session = {
+        "peripheralID": "synthetic",
+        "startedAt": receipt - APPLE_REFERENCE_EPOCH - 1,
+        "deadline": receipt - APPLE_REFERENCE_EPOCH + 59,
+        "endedAt": receipt - APPLE_REFERENCE_EPOCH + 20,
+        "clockReference": {
+            "deviceAt": 1_800_000_000 - APPLE_REFERENCE_EPOCH,
+            "sentAt": receipt - APPLE_REFERENCE_EPOCH - 0.1,
+            "receivedAt": receipt - APPLE_REFERENCE_EPOCH + 0.1,
+        },
+        "buffers": [
+            {
+                "sha256": hashlib.sha256(packet).hexdigest(),
+                "receivedAt": receipt - APPLE_REFERENCE_EPOCH + 0.05,
+                "sourcePacketHashes": source_hashes,
+                "characteristicUUID": "data",
+            }
+        ],
+    }
+    journal = tmp_path / "capture.json"
+    journal.write_text(json.dumps(session))
+    result = export_session(db, journal)
+    buffers = cast(list[dict[str, object]], result["buffers"])
+    assert buffers[0]["source_packet_sha256"] == source_hashes
+    assert buffers[0]["aligned_sensor_at_unix"] == receipt
+    assert buffers[0]["sensor_at_unix"] == 1_800_000_000
+    references = cast(list[dict[str, object]], session["buffers"])
+    references[0]["sourcePacketHashes"] = ["wrong"]
+    journal.write_text(json.dumps(session))
+    with pytest.raises(ValueError, match="provenance"):
+        export_session(db, journal)
+
+
+def test_fragment_streams_do_not_cross_channels_gaps_or_bad_crc() -> None:
+    from motion_frames import NotificationFrames
+
+    packet = frame()
+    reader = NotificationFrames()
+    assert reader.feed("a", packet[:244], 0) == []
+    assert reader.feed("b", packet[244:], 0) == []
+    assert reader.feed("a", packet[244:], 3) == []
+    corrupt = bytearray(packet)
+    corrupt[100] ^= 1
+    assert reader.feed("a", bytes(corrupt) + packet, 4)[0][0] == packet

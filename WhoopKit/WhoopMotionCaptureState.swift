@@ -10,7 +10,7 @@ struct WhoopMotionCaptureState: Codable {
     }
 
     enum Phase: String, Codable {
-        case startingRaw, enablingIMU, awaitingSamples, recording
+        case readingClock, startingRaw, enablingIMU, awaitingSamples, recording
         case stoppingRaw, disablingIMU, settling, needsCleanup, complete
     }
 
@@ -20,6 +20,16 @@ struct WhoopMotionCaptureState: Codable {
         let sentAt: Date
     }
 
+    struct ClockReference: Codable {
+        let deviceAt: Date
+        let sentAt: Date
+        let receivedAt: Date
+        var offset: TimeInterval {
+            (sentAt.timeIntervalSince1970 + receivedAt.timeIntervalSince1970) / 2 - deviceAt.timeIntervalSince1970
+        }
+        var uncertainty: TimeInterval { receivedAt.timeIntervalSince(sentAt) / 2 + 0.02 }
+    }
+    private(set) var clockReference: ClockReference?
     let id: UUID
     let peripheralID: UUID
     let label: Label
@@ -27,7 +37,7 @@ struct WhoopMotionCaptureState: Codable {
     let sourceCommit: String
     let startedAt: Date
     let deadline: Date
-    private(set) var phase: Phase = .startingRaw
+    private(set) var phase: Phase = .readingClock
     private(set) var pending: Pending?
     private(set) var endedAt: Date?
     private(set) var reason = ""
@@ -57,7 +67,7 @@ struct WhoopMotionCaptureState: Codable {
     }
 
     var isCollecting: Bool {
-        [.startingRaw, .enablingIMU, .awaitingSamples, .recording].contains(phase)
+        [.readingClock, .startingRaw, .enablingIMU, .awaitingSamples, .recording].contains(phase)
     }
 
     var needsCleanup: Bool { phase != .complete }
@@ -68,6 +78,7 @@ struct WhoopMotionCaptureState: Codable {
     var nextCommand: WhoopCommand? {
         guard pending == nil else { return nil }
         switch phase {
+        case .readingClock: return .readMotionClock
         case .startingRaw: return .rawMotion(start: true)
         case .enablingIMU: return .liveIMU(enabled: true)
         case .stoppingRaw: return .rawMotion(start: false)
@@ -84,7 +95,22 @@ struct WhoopMotionCaptureState: Codable {
         guard let pending, reply.command == pending.opcode, reply.origin == pending.sequence,
             reply.receivedAt >= pending.sentAt
         else { return }
-        guard reply.result != 2 else { return }  // Pending is not successful completion.
+        guard reply.result != 2 else { return }
+        if phase == .readingClock {
+            commandResults.append("147:\(pending.sequence):\(reply.result)")
+            self.pending = nil
+            if reply.result == 1, let deviceAt = reply.deviceClock,
+                reply.receivedAt.timeIntervalSince(pending.sentAt) <= 2,
+                abs(reply.receivedAt.timeIntervalSince(deviceAt)) <= 86400
+            {
+                clockReference = ClockReference(
+                    deviceAt: deviceAt, sentAt: pending.sentAt, receivedAt: reply.receivedAt)
+                phase = .startingRaw
+            } else {
+                failClock(now: now)
+            }
+            return
+        }  // Pending is not successful completion.
         commandResults.append("\(reply.command):\(reply.origin):\(reply.result)")
         self.pending = nil
         if reply.result == 3 {
@@ -123,21 +149,36 @@ struct WhoopMotionCaptureState: Codable {
     mutating func observe(_ buffer: WhoopMotionProtocol.Buffer, now: Date) {
         // Only fresh, timestamped data from the labeled interval is credited.
         // Replayed history, duplicate buffers and clock skew never add coverage.
-        guard abs(buffer.receivedAt.timeIntervalSince(buffer.sensorAt)) <= 2,
-            buffer.sensorAt >= startedAt.addingTimeInterval(-1)
+        if buffer.realtime != false { observeProducerTraffic(now: now) }
+        guard let reference = clockReference else { return }
+        let aligned = buffer.sensorAt.addingTimeInterval(reference.offset)
+        let uncertainty = reference.uncertainty
+        guard aligned.addingTimeInterval(-uncertainty) >= startedAt.addingTimeInterval(-1),
+            aligned.addingTimeInterval(uncertainty) <= (endedAt ?? deadline),
+            buffer.receivedAt >= aligned.addingTimeInterval(-uncertainty),
+            buffer.receivedAt.timeIntervalSince(aligned) <= 600
         else { return }
         // Even an empty valid buffer is live producer traffic and prevents a
         // false quiet-stop confirmation; it never adds sample coverage.
-        lastLiveBufferAt = now
         guard buffer.accelerometerCount > 0 || buffer.gyroscopeCount > 0 else { return }
         if buffer.accelerometerCount > 0, buffer.gyroscopeCount > 0 { lastBothSensorsAt = now }
-        guard isCollecting, buffer.sensorAt <= deadline,
+        guard isCollecting || phase == .complete || phase == .settling, buffers.count < 1200,
             !buffers.contains(where: { $0.sensorAt == buffer.sensorAt })
         else { return }
         buffers.append(buffer)
         if phase == .awaitingSamples, hasBothSensors { phase = .recording }
         if buffers.count >= 1200 { stop(reason: "Capture buffer limit reached", now: now) }
     }
+
+    mutating func observeProducerTraffic(now: Date) {
+        lastLiveBufferAt = now
+        if phase == .complete {
+            phase = .needsCleanup
+            stop(reason: "Realtime motion continued after stop", now: now)
+        }
+    }
+
+    var acceptsHistoryRepair: Bool { clockReference != nil && endedAt != nil }
 
     mutating func observeRawBytes(_ count: Int, now: Date) {
         guard isCollecting else { return }
@@ -150,7 +191,7 @@ struct WhoopMotionCaptureState: Codable {
     mutating func tick(now: Date) {
         if isCollecting, now >= deadline {
             stop(reason: "Time limit reached", now: now)
-        } else if isCollecting, now.timeIntervalSince(startedAt) >= 15, !hasBothSensors {
+        } else if isCollecting, now.timeIntervalSince(startedAt) >= 30, !hasBothSensors {
             stop(reason: "No verified accel and gyro stream", now: now)
         } else if phase == .recording,
             now.timeIntervalSince(lastBothSensorsAt ?? startedAt) > 5
@@ -179,8 +220,20 @@ struct WhoopMotionCaptureState: Codable {
         }
     }
 
+    private mutating func failClock(now: Date) {
+        if lastLiveBufferAt != nil {
+            stop(reason: "Clock unavailable; stopping observed motion producer", now: now)
+        } else {
+            reason = "Clock reference unavailable; sensors were not started"
+            endedAt = now
+            phase = .complete
+        }
+    }
+
     private mutating func finishCommand(accepted: Bool, now: Date) {
         switch phase {
+        case .readingClock:
+            failClock(now: now)
         case .startingRaw:
             if accepted {
                 phase = .enablingIMU

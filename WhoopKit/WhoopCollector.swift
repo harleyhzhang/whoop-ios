@@ -244,7 +244,7 @@ final class WhoopCollector: NSObject {
         _ result: WhoopPacketBatchPersistenceResult,
         summary: WhoopTransportBatchSummary
     ) {
-        motionCapture.persisted(summary.motionEvents, success: result.success, byteCount: summary.deliveredByteCount)
+        motionCapture.persisted(summary, success: result.success)
         guard result.success else {
             if let failure = result.failure {
                 record(failure.localizedDescription)

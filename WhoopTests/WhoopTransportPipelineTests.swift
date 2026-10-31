@@ -471,4 +471,16 @@ private final class TransportCallbackRecorder: @unchecked Sendable {
             )
         }
     }
+    func testInvalidPartialNotificationCannotBeCompactedAsAWholeFrameRetry() {
+        // A continuation's arbitrary byte8 can equal historical type47. Equal
+        // fragment bytes do not prove a complete retransmitted protocol frame.
+        var partial = [UInt8](repeating: 0, count: 244)
+        partial[8] = 47
+        let envelope = WhoopPacketEnvelope.proprietary(
+            packet: Data(partial), peripheralID: UUID(),
+            characteristicUUID: "synthetic", offloadSessionID: nil, deliveredAt: .now, proprietaryOrdinal: 1)
+        XCTAssertFalse(envelope.integrityIsValid)
+        XCTAssertFalse(envelope.deduplicateTransportRetries)
+    }
+
 }

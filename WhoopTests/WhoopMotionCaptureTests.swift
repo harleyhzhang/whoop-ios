@@ -8,11 +8,14 @@ final class WhoopMotionCaptureTests: XCTestCase {
     private let peripheralID = UUID()
 
     private func state(duration: TimeInterval = 60) throws -> WhoopMotionCaptureState {
-        try XCTUnwrap(
+        var state = try XCTUnwrap(
             WhoopMotionCaptureState(
                 peripheralID: peripheralID, label: .lifting, notes: "Synthetic exercise", duration: duration,
                 sourceCommit: "synthetic", now: now
             ))
+        state.sent(.readMotionClock, sequence: 1, now: now)
+        state.reply(.init(command: 147, origin: 1, result: 1, receivedAt: now, deviceClock: now), now: now)
+        return state
     }
 
     private func accept(
@@ -148,7 +151,7 @@ final class WhoopMotionCaptureTests: XCTestCase {
         var missing = try state()
         try accept(&missing, at: now)
         try accept(&missing, at: now)
-        missing.tick(now: now.addingTimeInterval(15))
+        missing.tick(now: now.addingTimeInterval(30))
         XCTAssertEqual(missing.phase, .stoppingRaw)
         var stalled = try state()
         try accept(&stalled, at: now)
@@ -197,11 +200,11 @@ final class WhoopMotionCaptureTests: XCTestCase {
         XCTAssertEqual(dropout.phase, .stoppingRaw)
     }
 
-    func testHistoricalAndClockSkewedBuffersDoNotCount() throws {
+    func testOutOfIntervalAndUncorrelatedClockSkewedBuffersDoNotCount() throws {
         var state = try state()
         state.observe(buffer(at: now.addingTimeInterval(-10)), now: now)
         let skewed = WhoopMotionProtocol.Buffer(
-            sha256: "synthetic", sensorAt: now, receivedAt: now.addingTimeInterval(10),
+            sha256: "synthetic", sensorAt: now.addingTimeInterval(-114), receivedAt: now,
             accelerometerCount: 100, gyroscopeCount: 100, configuration: []
         )
         state.observe(skewed, now: now)
@@ -234,4 +237,78 @@ final class WhoopMotionCaptureTests: XCTestCase {
         XCTAssertTrue(
             FileManager.default.fileExists(atPath: directory.appendingPathComponent("motion-calibration.json").path))
     }
+    func testCorrelatedDelayedHistoryRepairsOnlyTheActualLabelIntervalWithoutResumingCapture() throws {
+        var state = try XCTUnwrap(
+            WhoopMotionCaptureState(
+                peripheralID: peripheralID, label: .rest, notes: "",
+                duration: 60, sourceCommit: "synthetic", now: now))
+        state.sent(.readMotionClock, sequence: 1, now: now)
+        state.reply(
+            .init(
+                command: 147, origin: 1, result: 1, receivedAt: now,
+                deviceClock: now.addingTimeInterval(-120)), now: now)
+        try accept(&state, at: now)
+        try accept(&state, at: now)
+        state.stop(reason: "Stopped", now: now.addingTimeInterval(5))
+        try accept(&state, at: now.addingTimeInterval(5))
+        try accept(&state, at: now.addingTimeInterval(5))
+        state.tick(now: now.addingTimeInterval(8))
+        XCTAssertEqual(state.phase, .complete)
+        let raw = now.addingTimeInterval(-118)
+        let repaired = WhoopMotionProtocol.Buffer(
+            sha256: "synthetic", sensorAt: raw,
+            receivedAt: now.addingTimeInterval(20), accelerometerCount: 100, gyroscopeCount: 100,
+            configuration: [], realtime: false)
+        state.observe(repaired, now: now.addingTimeInterval(20))
+        XCTAssertEqual(state.buffers.count, 1)
+        XCTAssertEqual(state.buffers.first?.sensorAt, raw)
+        XCTAssertEqual(state.phase, .complete)
+        XCTAssertNil(state.nextCommand)
+        var outside = repaired
+        outside = .init(
+            sha256: "outside", sensorAt: now.addingTimeInterval(-110),
+            receivedAt: now.addingTimeInterval(20), accelerometerCount: 100, gyroscopeCount: 100,
+            configuration: [], realtime: false)
+        state.observe(outside, now: now.addingTimeInterval(20))
+        XCTAssertEqual(state.buffers.count, 1)
+        state.observeProducerTraffic(now: now.addingTimeInterval(21))
+        XCTAssertEqual(state.phase, .stoppingRaw)
+        XCTAssertEqual(state.nextCommand, .rawMotion(start: false))
+    }
+
+    func testClockRefusalAndTimeoutNeverStartSensors() throws {
+        for timeout in [false, true] {
+            var state = try XCTUnwrap(
+                WhoopMotionCaptureState(
+                    peripheralID: peripheralID, label: .rest, notes: "",
+                    duration: 60, sourceCommit: "synthetic", now: now))
+            state.sent(.readMotionClock, sequence: 1, now: now)
+            if timeout {
+                state.tick(now: now.addingTimeInterval(4))
+            } else {
+                state.reply(.init(command: 147, origin: 1, result: 3, receivedAt: now), now: now)
+            }
+            XCTAssertEqual(state.phase, .complete)
+            XCTAssertNil(state.clockReference)
+            XCTAssertNil(state.nextCommand)
+        }
+    }
+
+    func testFailedClockStillStopsAnObservedProducerAndSlowReferenceIsRejected() throws {
+        for observed in [false, true] {
+            var state = try XCTUnwrap(
+                WhoopMotionCaptureState(
+                    peripheralID: peripheralID, label: .rest, notes: "",
+                    duration: 60, sourceCommit: "synthetic", now: now))
+            state.sent(.readMotionClock, sequence: 1, now: now)
+            if observed { state.observeProducerTraffic(now: now) }
+            state.reply(
+                .init(
+                    command: 147, origin: 1, result: 1,
+                    receivedAt: now.addingTimeInterval(3), deviceClock: now), now: now.addingTimeInterval(3))
+            XCTAssertNil(state.clockReference)
+            XCTAssertEqual(state.phase, observed ? .stoppingRaw : .complete)
+        }
+    }
+
 }

@@ -322,3 +322,12 @@ README. Newer entries are not guaranteed to be appended here; see the Git log.
   calibration, disconnect recovery, and stage models remain. Keep iCloud Backup
   enabled until the direct path has completed on the physical phone and the
   guarded phone recovery drill has passed there.
+
+### Bounded calibration transport repair
+
+Capture interpretation now reconstructs fragmented format-1 sensor frames from
+already durable notifications; original raw rows remain authoritative. A bounded
+read-only clock reference aligns labels without changing the strap clock or raw
+timestamps. Matching delayed history can repair the latest recording for ten
+minutes without restarting capture. Fragmented live traffic also participates in
+stop verification. Strain scoring and model coefficients remain unchanged.

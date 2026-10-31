@@ -23,7 +23,10 @@ and any load estimate; daily gym checkmarks cannot identify individual sets.
 The app waits for the existing history offload to finish before starting. Raw
 packet persistence continues throughout. Leaving the screen, backgrounding,
 loss of the connection, failed persistence, missing sensors or a stalled stream
-ends collection. Capture never automatically resumes after reconnect.
+ends collection. A read-only command-147 clock check precedes sensor writes;
+an unsupported, invalid or slow clock reply prevents starting. Raw device times
+remain unchanged; the label uses the measured offset and round-trip uncertainty.
+No clock-setting command is sent. Capture never automatically resumes after reconnect.
 
 ## Bounds and cleanup
 
@@ -38,13 +41,30 @@ Only temporary commands are used: START_RAW_DATA 81 `[01]`, then live IMU 106
 No persistent IMU/optical saving policy or global gyro setting is changed.
 A successful response is not proof of a live stream. Capture requires fresh,
 CRC-valid R21 accel and gyro buffers; lack of either stops the probe within
-15 seconds. Command timeouts are four seconds. Cleanup requires successful stop responses and at least three seconds without
+30 seconds. Command timeouts are four seconds. Cleanup requires successful stop responses and at least three seconds without
 fresh R21 traffic, with a bounded ten-second observation window. An explicit
 unsupported start, with no observed R21 producer, establishes that the capture
 did not enable it; both stop
 controls are still attempted, but an unsupported optional feature does not
 permanently defer ordinary history. Failure, timeout and unknown results never
 supply that proof.
+
+BLE notifications can split a frame or contain multiple frames. Capture-only
+reassembly consumes already committed original notifications, keeps streams
+separate by peripheral/characteristic, validates both CRCs and links source
+notification hashes. It retains at most four 4 KiB stream buffers, clears them
+on disconnect or gaps longer than two seconds and never changes raw rows or
+ordinary metric decoding. Invalid partial notifications are never compacted as
+whole-frame retries merely because an arbitrary continuation byte looks like a
+packet type. Even a partial valid live-IMU header keeps cleanup
+uncertain. Live producer traffic after completion reopens OFF-only cleanup.
+
+After verified stopping, normal history can repair the latest recording for up
+to ten minutes, including after relaunch. Only sensor times wholly inside the
+clock-correlated labeled interval count; delayed arrival does not become a new
+activity or restart sensors. Keep the app open briefly after stopping for its
+normal history offload. The 1,200-buffer limit still applies. A missing clock
+reference in an older recording does not authorize assigning delayed data a label.
 
 The cleanup obligation is saved atomically before the first device command.
 Interruption leaves it pending for the next connection to the same strap.
@@ -75,8 +95,8 @@ uv run --frozen python Tools/motion_capture_report.py \
   --session-id SESSION-UUID --output /private/new-motion-export.json
 ```
 
-The exporter validates frame shape and both CRCs, matches exact packet hashes
-and peripheral, and preserves independent signed raw XYZ axes. It does not
+The exporter validates frame shape and both CRCs, reconstructs split frames and matches exact frame/source-notification hashes,
+characteristic and peripheral, and preserves independent signed raw XYZ axes. It does not
 invent per-sample timestamps, physical units, sample rate, exercise labels,
 reps or load. Configuration, signal quality, sample cadence and actual device
 start/stop behavior must be checked on the paired firmware before fitting or

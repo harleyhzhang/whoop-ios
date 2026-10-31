@@ -78,4 +78,21 @@ final class WhoopMotionProtocolTests: XCTestCase {
         XCTAssertEqual(summary.motionEvents.count, 1)
         XCTAssertEqual(summary.motionEvents.first?.0, packet.peripheralID)
     }
+    func testReadOnlyClockReplyRetainsValidatedDeviceTime() {
+        var packet = WhoopTestFrameFactory.frame(length: 24, type: 36, version: 5)
+        packet[10] = 147
+        packet[11] = 3
+        packet[12] = 1
+        packet[13] = 1
+        let seconds: UInt32 = 1_800_000_000
+        for offset in 0..<4 { packet[14 + offset] = UInt8(truncatingIfNeeded: seconds >> (8 * offset)) }
+        WhoopTestFrameFactory.finishChecksums(&packet)
+        guard case .reply(let reply) = WhoopMotionProtocol.event(envelope(packet)) else {
+            return XCTFail("Clock reply")
+        }
+        XCTAssertEqual(reply.deviceClock, Date(timeIntervalSince1970: 1_800_000_000))
+        XCTAssertEqual(WhoopCommand.readMotionClock.opcode, 147)
+        XCTAssertEqual(WhoopCommand.readMotionClock.payload, [1])
+    }
+
 }

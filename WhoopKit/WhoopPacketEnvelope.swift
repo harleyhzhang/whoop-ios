@@ -107,7 +107,7 @@ struct WhoopPacketEnvelope: Sendable {
                 freshnessWindow: wristFreshnessWindow
             ),
             offloadSessionID: offloadSessionID,
-            deduplicateTransportRetries: frameType?.isReplayProne == true,
+            deduplicateTransportRetries: integrityIsValid && frameType?.isReplayProne == true,
             deliveredAt: deliveredAt,
             proprietaryOrdinal: proprietaryOrdinal
         )

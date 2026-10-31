@@ -230,3 +230,11 @@ SwiftLint's type-checked `unused_declaration` analyzer rejects new production
 dead code against a reviewed baseline. The file-size gate scans both app source
 trees and tests; inherited oversized coordinators may only shrink from their
 explicit baselines.
+
+Capture-only `WhoopMotionReassembler` reconstructs CRC-valid format-1 frames from
+committed source notifications, separated by peripheral/characteristic and bounded
+by bytes, stream count and gap. It does not rewrite raw rows or change ordinary
+metric ingest. A correlated read-only clock response records label alignment and
+uncertainty. Delayed history repair is bounded to the latest recorded interval,
+retains source hashes and cannot resume sensing. The private exporter uses the
+same stream boundaries and verifies both reconstructed frames and their sources.
