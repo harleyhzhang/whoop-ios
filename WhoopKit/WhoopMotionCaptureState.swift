@@ -17,6 +17,9 @@ struct WhoopMotionCaptureState: Codable {
         let sequence: UInt8
         let sentAt: Date
     }
+    // Legacy Codable evidence is still read/written by the journal. Retain
+    // every field even when OFF-only recovery does not inspect its value.
+    // swiftlint:disable unused_declaration
     struct ClockReference: Codable {
         let deviceAt: Date
         let sentAt: Date
@@ -44,6 +47,8 @@ struct WhoopMotionCaptureState: Codable {
     private(set) var settlingAt: Date?
     private(set) var lastLiveBufferAt: Date?
     private(set) var lastBothSensorsAt: Date?
+
+    // swiftlint:enable unused_declaration
 
     var needsCleanup: Bool { phase != .complete }
     var nextCommand: WhoopCommand? {
