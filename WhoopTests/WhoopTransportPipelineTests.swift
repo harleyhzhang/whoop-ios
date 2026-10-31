@@ -422,13 +422,18 @@ final class WhoopTransportPipelineTests: XCTestCase {
             packet: WhoopTestFrameFactory.historicalMetadata(type: 3, length: 16),
             peripheralID: fixture.peripheralID, characteristicUUID: "notify", offloadSessionID: nil,
             deliveredAt: .now, connectionToken: old)
+        pipeline.submitProprietary(
+            packet: packet, peripheralID: fixture.peripheralID,
+            characteristicUUID: "notify", offloadSessionID: nil, deliveredAt: .now, connectionToken: old)
         pipeline.flushAndWaitForPersistence { recorder.recordDrain() }
         XCTAssertEqual(recorder.drainSemaphore.wait(timeout: .now() + 5), .success)
         let database = try openReadOnlyDatabase(fixture.databaseURL)
         defer { sqlite3_close(database) }
         XCTAssertEqual(scalarInt(database, "SELECT COUNT(*) FROM whoop_historical_sample"), 0)
         XCTAssertEqual(scalarInt(database, "SELECT COUNT(*) FROM whoop_frame_source"), 0)
-        XCTAssertEqual(scalarInt(database, "SELECT COUNT(*) FROM whoop_raw_packet"), 3)
+        XCTAssertEqual(scalarInt(database, "SELECT COUNT(*) FROM whoop_raw_packet"), 4)
+        // A quarantined supported frame is not an unsupported decoder version.
+        XCTAssertEqual(scalarInt(database, "SELECT COUNT(*) FROM whoop_decode_failure WHERE status='unsupported'"), 0)
     }
 
     private func historicalFrame(timestamp: UInt32, stepCounter: UInt16) -> Data {

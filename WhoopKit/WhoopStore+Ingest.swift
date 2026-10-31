@@ -267,14 +267,15 @@ extension WhoopStore {
             return nil
         }
         guard
-            decodePacketIfNeeded(
-                database: database,
-                packetID: packetID,
-                packet: packet,
-                historical: envelope.historical,
-                ppg: envelope.ppg,
-                integrityIsValid: envelope.integrityIsValid
-            ),
+            !envelope.acceptsControlEvents
+                || decodePacketIfNeeded(
+                    database: database,
+                    packetID: packetID,
+                    packet: packet,
+                    historical: envelope.historical,
+                    ppg: envelope.ppg,
+                    integrityIsValid: envelope.integrityIsValid
+                ),
             updateOffloadProgress(
                 database: database,
                 sessionID: envelope.offloadSessionID,
