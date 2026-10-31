@@ -164,6 +164,11 @@ final class WhoopMotionCapture {
         saveAndDrive()
     }
 
+    func resumeCleanup(on peripheralID: UUID) {
+        guard state?.phase == .needsCleanup else { return }
+        connected(peripheralID)
+    }
+
     func disconnected() {
         connectedPeripheralID = nil
         guard blocksHistory else { return }

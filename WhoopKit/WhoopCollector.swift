@@ -477,6 +477,7 @@ final class WhoopCollector: NSObject {
         // Score the night from stored history now; the offload refines it.
         refreshSleepSnapshot(force: true, includeProvisional: true)
         guard isConnected else { return }
+        if let peripheral { motionCapture.resumeCleanup(on: peripheral.identifier) }
         beginHistoricalSync()
     }
 

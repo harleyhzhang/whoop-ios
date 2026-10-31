@@ -45,6 +45,30 @@ final class WhoopMotionCaptureControllerTests: XCTestCase {
         XCTAssertFalse(restored.state?.isCollecting ?? true)
     }
 
+    func testForegroundRetriesExpiredCleanupOnTheSameStillConnectedLinkWithoutRestartingCapture() {
+        let directory = directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let peripheralID = UUID()
+        var commands: [WhoopCommand] = []
+        let capture = WhoopMotionCapture(
+            journal: .init(directory: directory),
+            send: {
+                commands.append($0)
+                return UInt8(commands.count)
+            },
+            ready: { peripheralID }, didFinish: {}, isForeground: { true }, automaticTicks: false
+        )
+        capture.start(label: .rest, notes: "Synthetic", duration: 60)
+        capture.resumeCleanup(on: peripheralID)
+        XCTAssertEqual(commands, [.rawMotion(start: true)])
+        // Background-task expiration marks cleanup uncertain even when the
+        // actual CoreBluetooth link has remained connected.
+        capture.disconnected()
+        capture.resumeCleanup(on: peripheralID)
+        XCTAssertEqual(commands, [.rawMotion(start: true), .rawMotion(start: false)])
+        XCTAssertFalse(capture.state?.isCollecting ?? true)
+    }
+
     func testUnavailableOrCorruptStorageNeverStartsSensors() throws {
         let directory = directory()
         defer { try? FileManager.default.removeItem(at: directory) }
