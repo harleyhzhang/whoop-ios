@@ -18,7 +18,7 @@ final class WhoopStore: Sendable, WhoopPacketPersisting {
     let targetSchemaVersion: Int
     static let logger = Logger(subsystem: "whoop", category: "WhoopStore")
     static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
-    static let currentSchemaVersion = 11
+    static let currentSchemaVersion = 12
     static let expectedSchemaVersion = currentSchemaVersion
     static let decoderVersion = 3
 
@@ -355,24 +355,12 @@ final class WhoopStore: Sendable, WhoopPacketPersisting {
                 FROM whoop_latest_heart_rate
                 WHERE singleton = 1
                 """
-            var statement: OpaquePointer?
-            guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-                let statement
-            else {
-                completion(nil)
-                return
-            }
-            defer { sqlite3_finalize(statement) }
-            guard sqlite3_step(statement) == SQLITE_ROW else {
-                completion(nil)
-                return
-            }
-            completion(
+            let samples = try? SQLiteRead.rows(database, sql: sql) { statement in
                 WhoopLatestHeartRateSample(
                     heartRate: Int(sqlite3_column_int(statement, 0)),
-                    receivedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 1))
-                )
-            )
+                    receivedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 1)))
+            }
+            completion(samples?.first)
         }
     }
 

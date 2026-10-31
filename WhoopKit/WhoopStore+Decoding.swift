@@ -110,7 +110,8 @@ extension WhoopStore {
     /// large phone database remains responsive during migration.
     func backfillVersion26PPG(cursor: Int64 = 0, batchSize: Int = 500) {
         guard let database,
-            metadataValue(database: database, key: "decoder-2-v26-backfill") != "complete"
+            let marker = try? metadataValue(database: database, key: "decoder-2-v26-backfill"),
+            marker != .value("complete")
         else {
             return
         }
@@ -124,19 +125,18 @@ extension WhoopStore {
             ORDER BY rowid
             LIMIT ?
             """
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-            let statement
+        guard
+            let selected = try? SQLiteRead.rows(
+                database, sql: sql,
+                bindings: [.integer(cursor), .integer(Int64(batchSize))],
+                map: { statement -> (Int64, String, Data) in
+                    guard let id = textColumn(statement, 1), let payload = dataColumn(statement, 2) else {
+                        throw SQLiteRead.ReadError.invalidResult("Backfill raw row has no ID or payload")
+                    }
+                    return (sqlite3_column_int64(statement, 0), id, payload)
+                })
         else { return }
-        sqlite3_bind_int64(statement, 1, cursor)
-        sqlite3_bind_int(statement, 2, Int32(batchSize))
-        var rows: [(Int64, String, Data)] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            if let id = textColumn(statement, 1), let payload = dataColumn(statement, 2) {
-                rows.append((sqlite3_column_int64(statement, 0), id, payload))
-            }
-        }
-        sqlite3_finalize(statement)
+        let rows = selected
 
         guard !rows.isEmpty else {
             _ = setMetadataValue(
@@ -175,7 +175,8 @@ extension WhoopStore {
     /// so upgrading a phone-sized store cannot monopolize the store queue.
     func backfillVersion18Motion(cursor: Int64 = 0, batchSize: Int = 1_000) {
         guard let database,
-            metadataValue(database: database, key: "decoder-3-v18-motion-backfill") != "complete"
+            let marker = try? metadataValue(database: database, key: "decoder-3-v18-motion-backfill"),
+            marker != .value("complete")
         else {
             return
         }
@@ -189,19 +190,18 @@ extension WhoopStore {
             ORDER BY rowid
             LIMIT ?
             """
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-            let statement
+        guard
+            let selected = try? SQLiteRead.rows(
+                database, sql: sql,
+                bindings: [.integer(cursor), .integer(Int64(batchSize))],
+                map: { statement -> (Int64, String, Data) in
+                    guard let id = textColumn(statement, 1), let payload = dataColumn(statement, 2) else {
+                        throw SQLiteRead.ReadError.invalidResult("Backfill raw row has no ID or payload")
+                    }
+                    return (sqlite3_column_int64(statement, 0), id, payload)
+                })
         else { return }
-        sqlite3_bind_int64(statement, 1, cursor)
-        sqlite3_bind_int(statement, 2, Int32(batchSize))
-        var rows: [(Int64, String, Data)] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            if let id = textColumn(statement, 1), let payload = dataColumn(statement, 2) {
-                rows.append((sqlite3_column_int64(statement, 0), id, payload))
-            }
-        }
-        sqlite3_finalize(statement)
+        let rows = selected
 
         guard !rows.isEmpty else {
             // Re-derive the durable set instead of trusting the in-memory set.

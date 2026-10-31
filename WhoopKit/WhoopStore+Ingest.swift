@@ -189,7 +189,7 @@ extension WhoopStore {
         let deliveredAt = envelope.deliveredAt
         let deliverySequence = nextDeliverySequence
         nextDeliverySequence += 1
-        let packetID = "p" + String(deliverySequence, radix: 36)
+        let packetID = envelope.provenance?.notificationID ?? "p" + String(deliverySequence, radix: 36)
         let receivedAt = deliveredAt.timeIntervalSince1970
         let registration: PacketSignatureRegistration =
             envelope.deduplicateTransportRetries
@@ -206,6 +206,7 @@ extension WhoopStore {
             : .new
         switch registration {
         case .duplicate(let canonicalPacketID):
+            guard insertFrameProvenance(envelope, frameID: canonicalPacketID, database: database) else { return nil }
             if let realtime = envelope.realtime,
                 !insertRealtime(
                     database: database,
@@ -254,6 +255,7 @@ extension WhoopStore {
                 payload: packet
             )
         else { return nil }
+        guard insertFrameProvenance(envelope, frameID: packetID, database: database) else { return nil }
         if let realtime = envelope.realtime,
             !insertRealtime(
                 database: database,
@@ -265,14 +267,16 @@ extension WhoopStore {
             return nil
         }
         guard
-            decodePacketIfNeeded(
-                database: database,
-                packetID: packetID,
-                packet: packet,
-                historical: envelope.historical,
-                ppg: envelope.ppg,
-                integrityIsValid: envelope.integrityIsValid
-            ),
+            !envelope.acceptsControlEvents
+                || envelope.provenance?.notificationID != nil
+                || decodePacketIfNeeded(
+                    database: database,
+                    packetID: packetID,
+                    packet: packet,
+                    historical: envelope.historical,
+                    ppg: envelope.ppg,
+                    integrityIsValid: envelope.integrityIsValid
+                ),
             updateOffloadProgress(
                 database: database,
                 sessionID: envelope.offloadSessionID,

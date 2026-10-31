@@ -24,21 +24,18 @@ extension WhoopStore {
         _ = sqlite3_step(statement)
     }
 
-    func nearestRecordedUTCOffset(database: OpaquePointer, sampleAt: Date) -> Int {
+    func nearestRecordedUTCOffset(database: OpaquePointer, sampleAt: Date) throws -> Int {
         let sql = """
             SELECT utc_offset_seconds
             FROM whoop_time_zone_observation
             ORDER BY ABS(observed_at - ?)
             LIMIT 1
             """
-        let storedOffset: Int? =
-            withCachedStatement(database: database, sql: sql) { statement in
-                sqlite3_bind_double(statement, 1, sampleAt.timeIntervalSince1970)
-                if sqlite3_step(statement) == SQLITE_ROW {
-                    return Int(sqlite3_column_int(statement, 0))
-                }
-                return nil
-            } ?? nil
+        let offsets: [Int] = try SQLiteRead.rows(
+            database, sql: sql,
+            bindings: [.real(sampleAt.timeIntervalSince1970)]
+        ) { Int(sqlite3_column_int($0, 0)) }
+        let storedOffset = offsets.first
         if let storedOffset { return storedOffset }
         return TimeZone.autoupdatingCurrent.secondsFromGMT(for: sampleAt)
     }
@@ -57,7 +54,7 @@ extension WhoopStore {
         return formatter.date(from: value)
     }
 
-    func publishedWakeBoundaries(database: OpaquePointer) -> [WhoopWakeBoundary] {
+    func publishedWakeBoundaries(database: OpaquePointer) throws -> [WhoopWakeBoundary] {
         if let cachedPublishedWakeBoundaries { return cachedPublishedWakeBoundaries }
         let sql = """
             SELECT date_key, sleep_end_at
@@ -65,20 +62,13 @@ extension WhoopStore {
             WHERE sleep_end_at IS NOT NULL
             ORDER BY date_key ASC
             """
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-            let statement
-        else { return [] }
-        defer { sqlite3_finalize(statement) }
-        var boundaries: [WhoopWakeBoundary] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            guard let rawDateKey = textColumn(statement, 0),
-                let dateKey = DayKey(rawValue: rawDateKey),
-                let rawWake = textColumn(statement, 1),
-                let wokeAt = Self.parseISO8601(rawWake)
-            else { continue }
-            boundaries.append(WhoopWakeBoundary(dateKey: dateKey, wokeAt: wokeAt))
+        let selected: [WhoopWakeBoundary?] = try SQLiteRead.rows(database, sql: sql) { statement in
+            guard let rawDateKey = textColumn(statement, 0), let dateKey = DayKey(rawValue: rawDateKey),
+                let rawWake = textColumn(statement, 1), let wokeAt = Self.parseISO8601(rawWake)
+            else { return nil }
+            return WhoopWakeBoundary(dateKey: dateKey, wokeAt: wokeAt)
         }
+        let boundaries = selected.compactMap { $0 }
         let sorted = boundaries.sorted { $0.wokeAt < $1.wokeAt }
         cachedPublishedWakeBoundaries = sorted
         return sorted
@@ -88,14 +78,14 @@ extension WhoopStore {
         for sampleAt: Date,
         utcOffsetSeconds: Int,
         database: OpaquePointer
-    ) -> String {
+    ) throws -> String {
         let fallback = DayKey(
             date: sampleAt,
             timeZone: TimeZone(secondsFromGMT: utcOffsetSeconds) ?? .gmt
         )
         return WhoopPhysiologicalDay.dateKey(
             for: sampleAt,
-            publishedWakes: publishedWakeBoundaries(database: database),
+            publishedWakes: try publishedWakeBoundaries(database: database),
             civilFallback: fallback
         ).rawValue
     }
@@ -106,14 +96,12 @@ extension WhoopStore {
         declaration: String
     ) -> Bool {
         guard let database else { return false }
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, "PRAGMA table_info(\(table))", -1, &statement, nil) == SQLITE_OK,
-            let statement
+        guard
+            let columns = try? SQLiteRead.rows(
+                database, sql: "PRAGMA table_info(\(table))",
+                map: { textColumn($0, 1) })
         else { return false }
-        defer { sqlite3_finalize(statement) }
-        while sqlite3_step(statement) == SQLITE_ROW {
-            if textColumn(statement, 1) == column { return true }
-        }
+        if columns.contains(column) { return true }
         return execute("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration)")
     }
 }

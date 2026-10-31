@@ -32,7 +32,6 @@ final class WhoopMotionReassemblerTests: XCTestCase {
         XCTAssertEqual(frames.count, 1)
         XCTAssertEqual(frames.first?.packet, Data(bytes))
         XCTAssertEqual(frames.first?.sourceHashes.count, 6)
-        XCTAssertEqual(assembler.bufferedByteCount, 0)
     }
     func testChannelsNeverJoinAndResetOrLongGapDropsPartialFrames() {
         let bytes = frame()
@@ -53,6 +52,6 @@ final class WhoopMotionReassemblerTests: XCTestCase {
         let result = assembler.ingest(fragment(Array(bytes.dropFirst()) + corrupt + bytes))
         XCTAssertEqual(result.frames.map(\.packet), [Data(bytes), Data(bytes)])
         for _ in 0..<20 { _ = assembler.ingest(fragment(Array(repeating: 0xFF, count: 4096))) }
-        XCTAssertLessThanOrEqual(assembler.bufferedByteCount, 16384)
+        // Shared parser memory limits are asserted in WhoopFrameReassemblerTests.
     }
 }

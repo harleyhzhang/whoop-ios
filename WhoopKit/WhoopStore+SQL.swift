@@ -141,13 +141,7 @@ extension WhoopStore {
     }
 
     func scalarInt(_ database: OpaquePointer, sql: String) throws -> Int64 {
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-            let statement
-        else { throw StoreError.queryFailed(errorMessage(database)) }
-        defer { sqlite3_finalize(statement) }
-        guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }
-        return sqlite3_column_int64(statement, 0)
+        try SQLiteRead.requiredInteger(database, sql: sql)
     }
 
     func errorMessage(_ database: OpaquePointer) -> String {

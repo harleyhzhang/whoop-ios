@@ -81,23 +81,12 @@ enum WhoopReplicaRecovery {
     }
 
     private static func scalarInt(_ database: OpaquePointer, sql: String) -> Int? {
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-            let statement
-        else { return nil }
-        defer { sqlite3_finalize(statement) }
-        return sqlite3_step(statement) == SQLITE_ROW ? Int(sqlite3_column_int64(statement, 0)) : nil
+        (try? SQLiteRead.requiredInteger(database, sql: sql)).map(Int.init)
     }
 
     private static func scalarText(_ database: OpaquePointer, sql: String) -> String? {
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-            let statement
-        else { return nil }
-        defer { sqlite3_finalize(statement) }
-        guard sqlite3_step(statement) == SQLITE_ROW, let text = sqlite3_column_text(statement, 0)
-        else { return nil }
-        return String(cString: text)
+        guard case .value(let value) = try? SQLiteRead.text(database, sql: sql) else { return nil }
+        return value
     }
 
     private static func rowCount(_ database: OpaquePointer, sql: String) -> Int? {

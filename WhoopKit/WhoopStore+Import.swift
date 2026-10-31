@@ -12,7 +12,9 @@ extension WhoopStore {
             let records = try? JSONDecoder().decode([DailyHealthRecord].self, from: data)
         else { return }
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        guard metadataValue(database: database, key: "bundled-history-sha256") != digest else {
+        guard let marker = try? metadataValue(database: database, key: "bundled-history-sha256"),
+            marker != .value(digest)
+        else {
             return
         }
         guard execute("BEGIN IMMEDIATE") else { return }
@@ -50,7 +52,10 @@ extension WhoopStore {
             seed.formatVersion == 1
         else { return }
         let digest = SHA256.hash(data: metricsData).map { String(format: "%02x", $0) }.joined()
-        if metadataValue(database: database, key: "bundled-official-metrics-sha256") == digest {
+        guard let marker = try? metadataValue(database: database, key: "bundled-official-metrics-sha256") else {
+            return
+        }
+        if marker == .value(digest) {
             if let directory = Self.databaseDirectory(),
                 !FileManager.default.fileExists(
                     atPath: directory.appendingPathComponent("whoop-official-archive.sqlite3").path

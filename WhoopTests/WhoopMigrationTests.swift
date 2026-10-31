@@ -290,7 +290,10 @@ extension WhoopSleepStateTests {
         XCTAssertEqual(sqlite3_open_v2(databaseURL.path, &migrated, SQLITE_OPEN_READONLY, nil), SQLITE_OK)
         defer { if let migrated { sqlite3_close(migrated) } }
         XCTAssertEqual(scalarInt(migrated, sql: "PRAGMA user_version"), Int64(WhoopStore.currentSchemaVersion))
-        XCTAssertGreaterThan(scalarInt(migrated, sql: "PRAGMA freelist_count"), 0)
+        // Schema 12 can reuse pages freed by v10; free-page count is not a
+        // compaction invariant once the provenance table is installed.
+        XCTAssertEqual(
+            scalarInt(migrated, sql: "SELECT COUNT(*) FROM sqlite_master WHERE name='whoop_frame_source'"), 1)
         XCTAssertEqual(scalarInt(migrated, sql: "SELECT COUNT(*) FROM heart_rate_sample"), 1)
         XCTAssertEqual(
             scalarInt(migrated, sql: "SELECT COUNT(*) FROM heart_rate_sample WHERE rr_intervals_json='[]'"),

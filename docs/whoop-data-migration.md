@@ -827,7 +827,7 @@ explicitly with `CODE_SIGN_STYLE=Manual`, `PROVISIONING_PROFILE_SPECIFIER`, and
 `CODE_SIGN_IDENTITY`. Verify the resulting bundle identifier, version,
 signature, embedded profile, and private-asset hashes before installation.
 
-The store currently targets schema 11. Its addition is a transactional UTC-day
+The store currently targets schema 12. Its addition is a transactional UTC-day
 revision/count index for incremental Strain reads, not the unrelated offline
 packet-compaction prototype. Initial index construction reads retained history
 once; raw evidence and score models remain unchanged. Before any non-empty schema upgrade, it
@@ -1010,3 +1010,10 @@ fields, or let a dashboard choice decide what data survives.
 The practical consequence is to archive early, keep exact bytes and checksums,
 continue collecting locally, and treat every display metric as a replaceable
 projection over preserved evidence.
+
+
+Schema 12 adds `whoop_frame_source`, a foreign-keyed byte-range provenance table
+for reconstructed proprietary frames. Original raw packets and all historical,
+official and calibration evidence remain intact. Missing source notifications
+abort the frame transaction before a historical ACK. Canonical phone backups
+include the new table and compare existing source edges exactly across updates.

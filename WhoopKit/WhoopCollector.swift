@@ -52,6 +52,7 @@ final class WhoopCollector: NSObject {
     @ObservationIgnored private var lastSleepAnalysisAt: Date?
     @ObservationIgnored private var lastFinalizedSleepID: String?
     @ObservationIgnored private weak var replicaScheduler: WhoopReplicaScheduling?
+    @ObservationIgnored private let deviceClock = WhoopDeviceClockProbe()
     private let store = WhoopStore.shared
     @ObservationIgnored private lazy var transportPipeline = WhoopTransportPipeline(
         store: store,
@@ -222,6 +223,7 @@ final class WhoopCollector: NSObject {
     }
 
     private func applyTransportUISnapshot(_ snapshot: WhoopTransportUISnapshot) {
+        if let token = snapshot.connectionToken, !connectionSession.accepts(token) { return }
         if let heartRate = snapshot.heartRate,
             let receivedAt = snapshot.heartRateReceivedAt
         {
@@ -238,6 +240,7 @@ final class WhoopCollector: NSObject {
         _ result: WhoopPacketBatchPersistenceResult,
         summary: WhoopTransportBatchSummary
     ) {
+        if let token = summary.connectionToken, !connectionSession.accepts(token) { return }
         motionCapture.persisted(summary, success: result.success)
         guard result.success else {
             if let failure = result.failure {
@@ -254,7 +257,7 @@ final class WhoopCollector: NSObject {
             }
             return
         }
-        if let isWorn = summary.latestWristState,
+        if let isWorn = deviceClock.persisted(summary, store: store),
             isWorn != lastObservedWristState
         {
             lastObservedWristState = isWorn
@@ -338,6 +341,8 @@ final class WhoopCollector: NSObject {
         }
         peripheral = nil
         connectionSession.clear()
+        transportPipeline.setConnection(nil)
+        deviceClock.reset(nil)
         resetConnectionSession()
         commandSequence = 1
         canAttemptHandshake = false
@@ -364,6 +369,8 @@ final class WhoopCollector: NSObject {
         guard peripheral == nil else { return }
         peripheral = candidate
         _ = connectionSession.select(candidate.identifier)
+        transportPipeline.setConnection(connectionSession.token())
+        deviceClock.reset(connectionSession.token())
         UserDefaults.standard.set(candidate.identifier.uuidString, forKey: WhoopCollectorKeys.knownPeripheralKey)
         central.stopScan()
         deviceName = candidate.name ?? "WHOOP"
@@ -422,6 +429,8 @@ final class WhoopCollector: NSObject {
         commandCharacteristic = nil
         heartRateCharacteristic = nil
         _ = connectionSession.resetKeepingPeripheral()
+        transportPipeline.setConnection(connectionSession.token())
+        deviceClock.reset(connectionSession.token())
         batteryState.resetConnection()
         notifyCharacteristics.removeAll(keepingCapacity: true)
         helloOutstanding = false
@@ -607,23 +616,18 @@ final class WhoopCollector: NSObject {
             peripheral.state == .connected,
             let commandCharacteristic
         else { return }
-        commandSequence &+= 1
-        let sensorFrame = WhoopCommand.realtimeSensors(enabled: false).frame(
-            sequence: commandSequence
-        )
-        record(
-            "Disabling battery-heavy SEND_R10_R11_REALTIME burst, seq \(commandSequence): \(sensorFrame.map { String(format: "%02X", $0) }.joined(separator: " "))"
-        )
-        peripheral.writeValue(Data(sensorFrame), for: commandCharacteristic, type: .withoutResponse)
-
-        commandSequence &+= 1
-        let heartRateFrame = WhoopCommand.realtimeHeartRate(enabled: true).frame(
-            sequence: commandSequence
-        )
-        record(
-            "Sending reversible TOGGLE_REALTIME_HR(1), seq \(commandSequence): \(heartRateFrame.map { String(format: "%02X", $0) }.joined(separator: " "))"
-        )
-        peripheral.writeValue(Data(heartRateFrame), for: commandCharacteristic, type: .withoutResponse)
+        if let token = connectionSession.token(),
+            peripheral.services?.flatMap({ $0.characteristics ?? [] }).contains(where: {
+                notifyUUIDs.contains($0.uuid) && $0.isNotifying
+            }) == true
+        {
+            deviceClock.requestIfDue(
+                peripheral: peripheral, characteristic: commandCharacteristic,
+                token: token, sequence: &commandSequence)
+        }
+        WhoopLiveStream.arm(
+            peripheral: peripheral, characteristic: commandCharacteristic,
+            sequence: &commandSequence, record: record)
         startRealtimeKeepalive()
     }
 
@@ -710,6 +714,8 @@ extension WhoopCollector: @preconcurrency CBCentralManagerDelegate {
         }
         peripheral = restored
         _ = connectionSession.select(restored.identifier)
+        transportPipeline.setConnection(connectionSession.token())
+        deviceClock.reset(connectionSession.token())
         restored.delegate = self
         deviceName = restored.name ?? "WHOOP"
         UserDefaults.standard.set(restored.identifier.uuidString, forKey: WhoopCollectorKeys.knownPeripheralKey)
@@ -917,7 +923,8 @@ extension WhoopCollector: @preconcurrency CBPeripheralDelegate {
                 peripheralID: peripheralID,
                 characteristicUUID: characteristicUUID,
                 offloadSessionID: historicalSync.sessionID,
-                deliveredAt: deliveredAt
+                deliveredAt: deliveredAt, connectionToken: connectionSession.token(),
+                receivedUptime: ProcessInfo.processInfo.systemUptime
             )
         }
     }

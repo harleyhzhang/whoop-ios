@@ -1,5 +1,18 @@
 # Development history
 
+## October 31: durable framing, strict reads, and independent clock references
+
+- Promote the validated bounded CRC-aware parser to ordinary proprietary ingest,
+  preserving original notifications and schema-12 byte-slice provenance before
+  reconstructed history can be acknowledged. Reset stale connection fragments.
+- Require complete SQLite SELECTs and checked bindings for legacy backfills,
+  recent history, scalar/metadata reads and sleep inputs; query failure cannot
+  become a partial metric or a successful completion marker.
+- Keep read-only command-147 acquisition independent of retired motion controls.
+  Correlate connection/origin/RTT, expire references, retain provenance, and use
+  conservative uncertainty-aware wrist freshness without changing raw dates or
+  setting the strap clock. No exercise trials or sensor streaming added.
+
 A running log of verified capabilities and design decisions, moved out of the
 README. Newer entries are not guaranteed to be appended here; see the Git log.
 

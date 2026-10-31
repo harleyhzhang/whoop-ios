@@ -43,6 +43,7 @@ PRESERVED_TABLES = (
     "whoop_raw_packet",
     "whoop_historical_sample",
     "whoop_packet_replay",
+    "whoop_frame_source",
     "whoop_ppg_packet",
     "whoop_offload_session",
     "whoop_api_source_record",
@@ -55,6 +56,7 @@ PRESERVED_TABLES = (
 )
 IMMUTABLE_EVIDENCE_TABLES = (
     "whoop_raw_packet",
+    "whoop_frame_source",
     "whoop_time_zone_observation",
 )
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")

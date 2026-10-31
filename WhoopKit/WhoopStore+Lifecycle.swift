@@ -209,18 +209,26 @@ extension WhoopStore {
                 keeping: retainedSnapshot
             )
         }
-        nextDeliverySequence =
-            ((try? scalarInt(
-                openedDatabase,
-                sql: """
-                    SELECT MAX(value) FROM (
-                        SELECT COALESCE(MAX(delivery_sequence), 0) AS value FROM whoop_raw_packet
-                        UNION ALL
-                        SELECT COALESCE(MAX(last_sequence), 0) FROM whoop_offload_session
-                        UNION ALL
-                        SELECT COALESCE(MAX(completion_sequence), 0) FROM whoop_offload_session
-                    )
-                    """)) ?? 0) + 1
+        do {
+            nextDeliverySequence =
+                (try scalarInt(
+                    openedDatabase,
+                    sql: """
+                        SELECT MAX(value) FROM (
+                            SELECT COALESCE(MAX(delivery_sequence), 0) AS value FROM whoop_raw_packet
+                            UNION ALL
+                            SELECT COALESCE(MAX(last_sequence), 0) FROM whoop_offload_session
+                            UNION ALL
+                            SELECT COALESCE(MAX(completion_sequence), 0) FROM whoop_offload_session
+                        )
+                        """)) + 1
+        } catch {
+            let failure = WhoopStorageFailure.sqlite(
+                operation: .read, database: openedDatabase, resultCode: sqlite3_errcode(openedDatabase))
+            sqlite3_close_v2(openedDatabase)
+            database = nil
+            return .failure(failure)
+        }
         abandonInterruptedOffloads()
         recordTimeZoneObservation()
         // Injected database URLs are short-lived test fixtures. Avoid starting
@@ -375,21 +383,15 @@ extension WhoopStore {
             return false
         }
         defer { sqlite3_close(snapshot) }
-        var statement: OpaquePointer?
+        let sql = "SELECT (SELECT user_version FROM pragma_user_version), (SELECT quick_check FROM pragma_quick_check)"
         guard
-            sqlite3_prepare_v2(
-                snapshot,
-                "SELECT (SELECT user_version FROM pragma_user_version), (SELECT quick_check FROM pragma_quick_check)",
-                -1,
-                &statement,
-                nil
-            ) == SQLITE_OK, let statement
+            let values = try? SQLiteRead.rows(
+                snapshot, sql: sql,
+                map: { statement in
+                    sqlite3_column_int64(statement, 0) == expectedVersion
+                        && sqlite3_column_text(statement, 1).map { String(cString: $0) } == "ok"
+                }), values.count == 1
         else { return false }
-        defer { sqlite3_finalize(statement) }
-        guard sqlite3_step(statement) == SQLITE_ROW,
-            sqlite3_column_int64(statement, 0) == expectedVersion,
-            let check = sqlite3_column_text(statement, 1)
-        else { return false }
-        return String(cString: check) == "ok"
+        return values.first == true
     }
 }
