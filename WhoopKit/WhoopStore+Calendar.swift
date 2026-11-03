@@ -26,15 +26,19 @@ extension WhoopStore {
 
     func nearestRecordedUTCOffset(database: OpaquePointer, sampleAt: Date) throws -> Int {
         let sql = """
-            SELECT utc_offset_seconds
+            SELECT time_zone_identifier, utc_offset_seconds
             FROM whoop_time_zone_observation
-            ORDER BY ABS(observed_at - ?)
+            ORDER BY ABS(observed_at - ?), observed_at
             LIMIT 1
             """
         let offsets: [Int] = try SQLiteRead.rows(
             database, sql: sql,
             bindings: [.real(sampleAt.timeIntervalSince1970)]
-        ) { Int(sqlite3_column_int($0, 0)) }
+        ) { row in
+            RecordedTimeZone.offset(
+                identifier: textColumn(row, 0) ?? "",
+                recordedOffset: Int(sqlite3_column_int(row, 1)), at: sampleAt)
+        }
         let storedOffset = offsets.first
         if let storedOffset { return storedOffset }
         return TimeZone.autoupdatingCurrent.secondsFromGMT(for: sampleAt)
