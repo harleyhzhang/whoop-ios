@@ -35,14 +35,16 @@ struct RecordedTimeZone {
         }.joined(separator: ";")
     }
 
-    func zones(overlapping start: Double, end: Double) -> [TimeZone] {
-        var identifiers: Set<String> = []
+    func regions(overlapping start: Double, end: Double) -> [(zone: TimeZone, start: Double, end: Double)] {
+        var regions: [(zone: TimeZone, start: Double, end: Double)] = []
         for (index, run) in runs.enumerated() {
             let lower = index == 0 ? -.infinity : runs[index - 1].last
             let upper = index == runs.count - 1 ? .infinity : runs[index + 1].first
-            if lower < end, upper >= start { identifiers.insert(run.identifier) }
+            if lower < end, upper > start, let zone = TimeZone(identifier: run.identifier) {
+                regions.append((zone: zone, start: max(start, lower), end: min(end, upper)))
+            }
         }
-        return identifiers.sorted().compactMap(TimeZone.init(identifier:))
+        return regions
     }
 
     /// Between observations in different locations the actual travel instant

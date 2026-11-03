@@ -226,9 +226,9 @@ final class LocalStrainRepository {
     ) throws -> [InputDay] {
         let start = Double(utcDay * 86400)
         let end = start + 86400
-        let zones = timeZones.zones(overlapping: start, end: end)
+        let regions = timeZones.regions(overlapping: start, end: end)
         var days: [InputDay] = []
-        if zones.isEmpty {
+        if regions.isEmpty {
             // Legacy archives without a recorded identifier retain their strict
             // fixed-offset safety rule; invalid identifiers cannot certify a day.
             try query(
@@ -251,9 +251,10 @@ final class LocalStrainRepository {
             }
             return days
         }
-        for zone in zones {
-            var cursor = start
-            while cursor < end {
+        for region in regions {
+            let zone = region.zone
+            var cursor = region.start
+            while cursor < region.end {
                 let day = DayKey.string(from: Date(timeIntervalSince1970: cursor), timeZone: zone)
                 guard let bounds = RecordedTimeZone.bounds(day: day, zone: zone), bounds.end > cursor else { break }
                 try query(
@@ -263,7 +264,7 @@ final class LocalStrainRepository {
                            GROUP_CONCAT(DISTINCT step_utc_offset_seconds)
                     FROM whoop_historical_sample
                     WHERE peripheral_id = ? AND sample_at >= ? AND sample_at < ?
-                    """, strings: [peripheral], numbers: [max(start, bounds.start), min(end, bounds.end)]
+                    """, strings: [peripheral], numbers: [max(region.start, bounds.start), min(region.end, bounds.end)]
                 ) { row in
                     guard sqlite3_column_type(row, 2) != SQLITE_NULL else { return }
                     days.append(

@@ -132,6 +132,18 @@ final class StrainTimeZoneTests: XCTestCase {
         XCTAssertTrue(result.records.isEmpty, "A different location's offset is not a seasonal correction")
     }
 
+    func testTravelAmbiguityDoesNotHideAdjacentDaysWithKnownLocations() throws {
+        let fixture = try Fixture()
+        try fixture.observation("2026-11-02T12:00:00Z", "America/New_York", -18000)
+        try fixture.observation("2026-11-02T14:00:00Z", "America/Los_Angeles", -28800)
+        try fixture.sample(try timestamp("2026-11-02T04:30:00Z"), offset: -18000)
+        try fixture.sample(try timestamp("2026-11-02T10:00:00Z"), offset: -18000)
+        try fixture.sample(try timestamp("2026-11-03T10:00:00Z"), offset: -28800)
+        let result = try LocalStrainRepository().load(
+            database: fixture.database, model: model, now: try date("2026-11-04T08:00:00Z"))
+        XCTAssertEqual(result.records.map(\.dateKey), ["2026-11-01", "2026-11-03"])
+    }
+
     private func cache(_ result: LocalStrainRepository.Result, day: String) throws -> [String: Any] {
         let value = try XCTUnwrap(result.derivations.first { $0.key.hasPrefix("local-strain.\(day).") }?.value)
         return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(value.utf8)) as? [String: Any])
