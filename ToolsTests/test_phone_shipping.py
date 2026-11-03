@@ -758,8 +758,27 @@ def test_suspension_quiesces_then_always_resumes_after_failure(
         raise RuntimeError("copy failed")
 
     actions = [call[2] for call in runner.device_calls if call[:2] == ["device", "process"]]
-    assert actions == ["launch", "suspend", "resume"]
-    assert waits == [True, True]
+    assert actions == ["launch", "resume"]
+    assert waits == [True]
+
+
+def test_suspension_resumes_if_quiescence_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = RecordingRunner()
+    device = core.Device("CORE-1", "UDID-1", "IP", "iPhone", "27.0", "24A1", "")
+
+    def fail_quiescence() -> None:
+        raise RuntimeError("settle failed")
+
+    monkeypatch.setattr(device_shipping, "wait_for_backup_quiescence", fail_quiescence)
+    with (
+        pytest.raises(RuntimeError, match="settle failed"),
+        device_shipping.suspended_application(runner, tmp_path, device),
+    ):
+        pytest.fail("Do not copy before quiescence")
+    actions = [call[2] for call in runner.device_calls if call[:2] == ["device", "process"]]
+    assert actions == ["launch", "resume"]
 
 
 class BackgroundRestartRunner(RecordingRunner):
@@ -789,7 +808,7 @@ class BackgroundRestartRunner(RecordingRunner):
         return payload, completed
 
 
-def test_backup_backgrounds_app_before_suspending_its_new_process(
+def test_backup_starts_paused_before_app_code_and_resumes_its_new_process(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -798,9 +817,9 @@ def test_backup_backgrounds_app_before_suspending_its_new_process(
     monkeypatch.setattr(device_shipping, "wait_for_backup_quiescence", lambda: None)
     with device_shipping.suspended_application(runner, tmp_path, device):
         calls = [call for call in runner.device_calls if call[:2] == ["device", "process"]]
-        assert [call[2] for call in calls] == ["launch", "suspend"]
+        assert [call[2] for call in calls] == ["launch"]
         assert "--no-activate" in calls[0] and "--terminate-existing" in calls[0]
-        assert calls[1][calls[1].index("--pid") + 1] == "8765"
+        assert "--start-stopped" in calls[0]
     assert runner.device_calls[-1][runner.device_calls[-1].index("--pid") + 1] == "8765"
 
 
@@ -834,6 +853,7 @@ def test_install_verification_launches_without_foreground_activation(
     )
     launch = next(call for call in runner.device_calls if "launch" in call)
     assert "--no-activate" in launch and "--terminate-existing" in launch
+    assert "--start-stopped" not in launch
 
 
 class ResumeFailureRunner(RecordingRunner):
@@ -864,7 +884,8 @@ def test_suspension_retries_resume_then_relaunches(
         pass
 
     actions = [call[2] for call in runner.device_calls if call[:2] == ["device", "process"]]
-    assert actions == ["launch", "suspend", "resume", "resume", "launch"]
+    assert actions == ["launch", "resume", "resume", "launch"]
+    assert "--start-stopped" not in runner.device_calls[-1]
     assert all("--no-activate" in call for call in runner.device_calls if "launch" in call)
 
 

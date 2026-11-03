@@ -70,10 +70,10 @@ existing full-copy preservation path. The old off-phone checkpoint is retained
 and its coverage time is not advanced by the local-only route. Physical USB is
 optional; both modes support wireless.
 
-The workflow launches without foreground activation and restarts an existing
-collector in the background before suspending its fresh process for a snapshot.
-This avoids scene-update watchdog kills that would restart a writer during
-copying. Snapshot length/metadata stability, integrity, and exact preserved-row
+The workflow restarts an existing collector without foreground activation in
+Apple's start-stopped state before app code runs. This avoids pausing pending
+scene callbacks, whose watchdog could restart a writer during copying.
+Snapshot length/metadata stability, integrity, and exact preserved-row
 checks remain mandatory, and the collector is resumed or relaunched afterward.
 
 Device builds reuse `~/Library/Caches/whoop-ios/device-derived-data`. Verified

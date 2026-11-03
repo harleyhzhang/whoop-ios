@@ -59,7 +59,7 @@ def process_payload(runner: CommandRunner, scratch: Path, device: Device) -> obj
     return payload if payload is not None else {}
 
 
-def background_launch_arguments(device: Device) -> list[str]:
+def background_launch_arguments(device: Device, *, start_stopped: bool = False) -> list[str]:
     return [
         "device",
         "process",
@@ -68,6 +68,7 @@ def background_launch_arguments(device: Device) -> list[str]:
         device.identifier,
         "--terminate-existing",
         "--no-activate",
+        *(["--start-stopped"] if start_stopped else []),
         BUNDLE_IDENTIFIER,
         "--timeout",
         "60",
@@ -113,12 +114,10 @@ def suspended_application(runner: CommandRunner, scratch: Path, device: Device) 
     pid = find_process_id(process_payload(runner, scratch, device))
     suspended = False
     if pid is not None:
-        # A foreground SIGSTOP leaves scene updates unhandled: iOS kills the
-        # frozen app and Bluetooth restoration starts a new writer mid-copy.
-        # Restart without activating a scene before freezing its fresh PID.
-        runner.devicectl_json(background_launch_arguments(device), scratch)
-        # Give launch callbacks time to finish before stopping the main thread.
-        wait_for_backup_quiescence()
+        # Stopping a running app can strand pending scene callbacks, even
+        # after a background restart. iOS then kills it and Bluetooth
+        # restoration starts a new writer. Start paused before app code runs.
+        runner.devicectl_json(background_launch_arguments(device, start_stopped=True), scratch)
         for _ in range(15):
             pid = find_process_id(process_payload(runner, scratch, device))
             if pid is not None:
@@ -126,23 +125,10 @@ def suspended_application(runner: CommandRunner, scratch: Path, device: Device) 
             time.sleep(1)
         if pid is None:
             raise ShippingError("WHOOP did not start in the background before backup suspension.")
-        runner.devicectl_json(
-            [
-                "device",
-                "process",
-                "suspend",
-                "--device",
-                device.identifier,
-                "--pid",
-                str(pid),
-                "--timeout",
-                "30",
-            ],
-            scratch,
-        )
         suspended = True
-        wait_for_backup_quiescence()
     try:
+        if suspended:
+            wait_for_backup_quiescence()
         yield
     finally:
         if suspended and pid is not None:
