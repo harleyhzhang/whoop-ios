@@ -51,9 +51,12 @@ final class LocalStrainRepository {
         var firstOffset: Int
         var lastOffset: Int
         var latestSample: Double
+        var zoneIdentifier: String?
+        var eligible: Bool
     }
     private struct InputSlice: Codable {
         let revision: Int64
+        let timeZoneSignature: String
         let days: [InputDay]
     }
     // Confined to the dashboard reader's serial queue, just like its connection.
@@ -81,6 +84,15 @@ final class LocalStrainRepository {
             peripheral = text(row, 0)
         }
         guard let peripheral else { return Result(records: sorted(records), derivations: [:]) }
+        var observations: [RecordedTimeZone.Observation] = []
+        try query(
+            database,
+            "SELECT observed_at, time_zone_identifier FROM whoop_time_zone_observation ORDER BY observed_at"
+        ) { row in
+            observations.append(
+                .init(timestamp: sqlite3_column_double(row, 0), identifier: text(row, 1) ?? ""))
+        }
+        let timeZones = RecordedTimeZone(observations: observations)
         if cachedPeripheral != peripheral {
             slices.removeAll()
             cachedPeripheral = peripheral
@@ -97,37 +109,23 @@ final class LocalStrainRepository {
         encoder.outputFormatting = [.sortedKeys]
         var derivations: [String: String] = [:]
         slices = slices.filter { revisions[$0.key] != nil }
-        for (utcDay, revision) in revisions where slices[utcDay]?.revision != revision {
-            let cacheKey = "local-strain-input.v1.\(peripheral).\(utcDay)"
+        for (utcDay, revision) in revisions
+        where slices[utcDay]?.revision != revision || slices[utcDay]?.timeZoneSignature != timeZones.signature {
+            let cacheKey = "local-strain-input.v2.\(peripheral).\(utcDay)"
             var storedSlice: InputSlice?
             try query(database, "SELECT value FROM whoop_store_metadata WHERE key = ?", strings: [cacheKey]) { row in
                 if let value = text(row, 0) {
                     storedSlice = try? JSONDecoder().decode(InputSlice.self, from: Data(value.utf8))
                 }
             }
-            if let storedSlice, storedSlice.revision == revision {
+            if let storedSlice, storedSlice.revision == revision,
+                storedSlice.timeZoneSignature == timeZones.signature
+            {
                 slices[utcDay] = storedSlice
                 continue
             }
-            var days: [InputDay] = []
-            try query(
-                database,
-                """
-                SELECT strftime('%Y-%m-%d', sample_at + step_utc_offset_seconds, 'unixepoch'),
-                       MIN(step_utc_offset_seconds), MAX(step_utc_offset_seconds), MAX(sample_at)
-                FROM whoop_historical_sample
-                WHERE peripheral_id = ? AND sample_at >= ? AND sample_at < ?
-                  AND step_utc_offset_seconds IS NOT NULL
-                GROUP BY 1
-                """, strings: [peripheral], numbers: [Double(utcDay * 86400), Double((utcDay + 1) * 86400)]
-            ) { row in
-                guard let day = text(row, 0) else { return }
-                days.append(
-                    InputDay(
-                        day: day, firstOffset: Int(sqlite3_column_int(row, 1)),
-                        lastOffset: Int(sqlite3_column_int(row, 2)), latestSample: sqlite3_column_double(row, 3)))
-            }
-            let slice = InputSlice(revision: revision, days: days)
+            let days = try inputDays(database: database, peripheral: peripheral, utcDay: utcDay, timeZones: timeZones)
+            let slice = InputSlice(revision: revision, timeZoneSignature: timeZones.signature, days: days)
             slices[utcDay] = slice
             derivations[cacheKey] = String(decoding: try encoder.encode(slice), as: UTF8.self)
         }
@@ -138,6 +136,8 @@ final class LocalStrainRepository {
                     previous.firstOffset = min(previous.firstOffset, day.firstOffset)
                     previous.lastOffset = max(previous.lastOffset, day.lastOffset)
                     previous.latestSample = max(previous.latestSample, day.latestSample)
+                    previous.eligible =
+                        previous.eligible && day.eligible && previous.zoneIdentifier == day.zoneIdentifier
                     inputDays[day.day] = previous
                 } else {
                     inputDays[day.day] = day
@@ -153,27 +153,20 @@ final class LocalStrainRepository {
         }
         if storedModel != modelJSON { derivations[modelKey] = modelJSON }
         for day in inputDays.values where records[day.day] == nil {
-            // Travel/DST dates with conflicting recorded offsets stay unknown.
-            // Never silently assign samples to the wrong civil day.
-            guard day.firstOffset == day.lastOffset,
-                let zone = TimeZone(secondsFromGMT: day.firstOffset),
-                let date = DayKey.date(from: day.day, timeZone: zone)
+            guard day.eligible,
+                let zone = day.zoneIdentifier.flatMap(TimeZone.init(identifier:))
+                    ?? (day.firstOffset == day.lastOffset ? TimeZone(secondsFromGMT: day.firstOffset) : nil),
+                let bounds = RecordedTimeZone.bounds(day: day.day, zone: zone)
             else { continue }
-            var calendar = Calendar(identifier: .gregorian)
-            calendar.timeZone = zone
-            let start = calendar.startOfDay(for: date).timeIntervalSince1970
-            guard let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: date)) else {
-                continue
-            }
-            let end = min(tomorrow.timeIntervalSince1970, floor(now.timeIntervalSince1970 / 60) * 60)
+            let start = bounds.start
+            let tomorrow = Date(timeIntervalSince1970: bounds.end)
+            let end = min(bounds.end, floor(now.timeIntervalSince1970 / 60) * 60)
             guard end > start, day.latestSample >= start else { continue }
-            // Absolute-day revisions cover every row read below, even unknown
-            // offsets and a correction that moves a sample across civil days.
             let firstUTC = Int(floor(start / 86400))
-            let lastUTC = Int(floor((tomorrow.timeIntervalSince1970 - 1) / 86400))
+            let lastUTC = Int(floor((bounds.end - 1) / 86400))
             let inputRevision = (firstUTC...lastUTC).map { "\($0):\(revisions[$0] ?? 0)" }.joined(separator: ",")
             let signature =
-                "utc-revision-v1|\(StrainAccumulator.version)|\(modelJSON)|\(peripheral)|\(inputRevision)|\(start)|\(end)"
+                "iana-day-v2|\(timeZones.signature)|\(zone.identifier)|\(StrainAccumulator.version)|\(modelJSON)|\(peripheral)|\(inputRevision)|\(start)|\(end)"
             let key = "local-strain.\(day.day).\(peripheral).\(model.calibration.version).\(StrainAccumulator.version)"
             var cached: CachedDay?
             try query(database, "SELECT value FROM whoop_store_metadata WHERE key = ?", strings: [key]) { row in
@@ -226,6 +219,63 @@ final class LocalStrainRepository {
         }
         if storedSummary != summaryJSON { derivations[summaryKey] = summaryJSON }
         return Result(records: sorted(records), derivations: derivations)
+    }
+
+    private func inputDays(
+        database: OpaquePointer, peripheral: String, utcDay: Int, timeZones: RecordedTimeZone
+    ) throws -> [InputDay] {
+        let start = Double(utcDay * 86400)
+        let end = start + 86400
+        let zones = timeZones.zones(overlapping: start, end: end)
+        var days: [InputDay] = []
+        if zones.isEmpty {
+            // Legacy archives without a recorded identifier retain their strict
+            // fixed-offset safety rule; invalid identifiers cannot certify a day.
+            try query(
+                database,
+                """
+                SELECT strftime('%Y-%m-%d', sample_at + step_utc_offset_seconds, 'unixepoch'),
+                       MIN(step_utc_offset_seconds), MAX(step_utc_offset_seconds), MAX(sample_at)
+                FROM whoop_historical_sample
+                WHERE peripheral_id = ? AND sample_at >= ? AND sample_at < ?
+                  AND step_utc_offset_seconds IS NOT NULL
+                GROUP BY 1
+                """, strings: [peripheral], numbers: [start, end]
+            ) { row in
+                guard let day = text(row, 0) else { return }
+                days.append(
+                    InputDay(
+                        day: day, firstOffset: Int(sqlite3_column_int(row, 1)),
+                        lastOffset: Int(sqlite3_column_int(row, 2)), latestSample: sqlite3_column_double(row, 3),
+                        zoneIdentifier: nil, eligible: timeZones.isEmpty))
+            }
+            return days
+        }
+        for zone in zones {
+            var cursor = start
+            while cursor < end {
+                let day = DayKey.string(from: Date(timeIntervalSince1970: cursor), timeZone: zone)
+                guard let bounds = RecordedTimeZone.bounds(day: day, zone: zone), bounds.end > cursor else { break }
+                try query(
+                    database,
+                    """
+                    SELECT MIN(step_utc_offset_seconds), MAX(step_utc_offset_seconds), MAX(sample_at)
+                    FROM whoop_historical_sample
+                    WHERE peripheral_id = ? AND sample_at >= ? AND sample_at < ?
+                    """, strings: [peripheral], numbers: [max(start, bounds.start), min(end, bounds.end)]
+                ) { row in
+                    guard sqlite3_column_type(row, 2) != SQLITE_NULL else { return }
+                    days.append(
+                        InputDay(
+                            day: day, firstOffset: Int(sqlite3_column_int(row, 0)),
+                            lastOffset: Int(sqlite3_column_int(row, 1)), latestSample: sqlite3_column_double(row, 2),
+                            zoneIdentifier: zone.identifier,
+                            eligible: timeZones.supports(zone, start: bounds.start, end: bounds.end)))
+                }
+                cursor = bounds.end
+            }
+        }
+        return days
     }
 
     private func sorted(_ records: [String: DailyStrainRecord]) -> [DailyStrainRecord] {

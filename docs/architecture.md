@@ -76,7 +76,17 @@ runtime decoding ahead of the external private-file replacement boundary.
   deletes, unknown offsets and moves between days all invalidate the relevant
   slices. Slice summaries persist alongside estimates, so relaunches also avoid
   rescanning unchanged history. First use builds the summaries once.
-  Civil timestamps/offsets define Strain days independently of wake-based Steps.
+  Recorded IANA timezone identifiers define Strain's civil days independently
+  of wake-based Steps. Their calendar rules resolve stale observation offsets
+  and 23/25-hour DST days without changing historical sample fields. Version-2
+  slice summaries and estimate signatures include timezone provenance, so a
+  timezone-only correction invalidates both caches. Intervals between differing
+  location observations remain ambiguous; a complete civil day must fit one
+  known location. Archives without identifiers retain the strict fixed-offset
+  fallback. New historical ingestion also resolves the nearest recorded IANA
+  identifier at the sample instant, correcting future civil step fallbacks;
+  existing wake-based Steps and published Sleep/Recovery date labels and
+  evidence gates are not rewritten by this projection.
   Startup maintenance explicitly refreshes the projection, including background
   launches; view-model reads still follow activation and visible publication.
   The writer commits all changed estimates and their versioned backfill summary

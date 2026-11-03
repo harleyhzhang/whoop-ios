@@ -16,6 +16,7 @@ final class LocalStrainRepositoryTests: XCTestCase {
         }
         try sql(
             """
+            CREATE TABLE whoop_time_zone_observation(observed_at REAL, time_zone_identifier TEXT, utc_offset_seconds INTEGER);
             CREATE TABLE whoop_store_metadata(key TEXT PRIMARY KEY, value TEXT);
             CREATE TABLE whoop_official_daily_metric(date_key TEXT, official_day_strain REAL);
             CREATE TABLE whoop_historical_sample(id INTEGER PRIMARY KEY, sample_at REAL,
@@ -118,6 +119,7 @@ final class LocalStrainRepositoryTests: XCTestCase {
         }
         try sql(
             """
+            CREATE TABLE whoop_time_zone_observation(observed_at REAL, time_zone_identifier TEXT, utc_offset_seconds INTEGER);
             CREATE TABLE whoop_store_metadata(key TEXT PRIMARY KEY, value TEXT);
             CREATE TABLE whoop_official_daily_metric(date_key TEXT, official_day_strain REAL);
             CREATE TABLE whoop_historical_sample(id INTEGER PRIMARY KEY, sample_at REAL,
@@ -186,6 +188,9 @@ final class LocalStrainRepositoryTests: XCTestCase {
                 sqlite3_exec(database, value, nil, nil, nil), SQLITE_OK,
                 String(cString: sqlite3_errmsg(database)))
         }
+        sql(
+            "CREATE TABLE whoop_time_zone_observation(observed_at REAL,time_zone_identifier TEXT,utc_offset_seconds INTEGER)"
+        )
         sql("CREATE TABLE whoop_store_metadata(key TEXT PRIMARY KEY,value TEXT)")
         sql("CREATE TABLE whoop_official_daily_metric(date_key TEXT,official_day_strain REAL)")
         sql(
