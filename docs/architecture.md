@@ -82,7 +82,8 @@ runtime decoding ahead of the external private-file replacement boundary.
   slice summaries and estimate signatures include timezone provenance, so a
   timezone-only correction invalidates both caches. Intervals between differing
   location observations remain ambiguous; a complete civil day must fit one
-  known location. Archives without identifiers retain the strict fixed-offset
+  known location, and stored offsets outside that location's seasonal rules
+  keep the day unknown. Archives without identifiers retain the strict fixed-offset
   fallback. New historical ingestion also resolves the nearest recorded IANA
   identifier at the sample instant, correcting future civil step fallbacks;
   existing wake-based Steps and published Sleep/Recovery date labels and

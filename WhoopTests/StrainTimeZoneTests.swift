@@ -78,7 +78,7 @@ final class StrainTimeZoneTests: XCTestCase {
         try fixture.persist(repaired.derivations)
         try fixture.observation("2026-11-03T12:00:00Z", "America/Toronto", -18000)
         XCTAssertTrue(try repository.load(database: fixture.database, model: model, now: now).derivations.isEmpty)
-        try fixture.sql("UPDATE whoop_time_zone_observation SET time_zone_identifier='America/Chicago'")
+        try fixture.sql("UPDATE whoop_time_zone_observation SET time_zone_identifier='America/New_York'")
         let changed = try repository.load(database: fixture.database, model: model, now: now)
         XCTAssertNotEqual(
             try cache(changed, day: "2026-11-02")["signature"] as? String,
@@ -119,6 +119,17 @@ final class StrainTimeZoneTests: XCTestCase {
             RecordedTimeZone.offset(
                 identifier: "invalid", recordedOffset: 3600,
                 at: try date("2026-11-02T12:00:00Z")), 3600)
+    }
+
+    func testRecordedLocationCannotExplainUnrelatedConflictingOffsets() throws {
+        let fixture = try Fixture()
+        let start = try timestamp("2026-11-02T05:00:00Z")
+        try fixture.observation("2026-10-31T12:00:00Z", "America/Toronto", -14400)
+        try fixture.sample(start + 3600, offset: -18000)
+        try fixture.sample(start + 7200, offset: 32400)
+        let result = try LocalStrainRepository().load(
+            database: fixture.database, model: model, now: Date(timeIntervalSince1970: start + 86400))
+        XCTAssertTrue(result.records.isEmpty, "A different location's offset is not a seasonal correction")
     }
 
     private func cache(_ result: LocalStrainRepository.Result, day: String) throws -> [String: Any] {

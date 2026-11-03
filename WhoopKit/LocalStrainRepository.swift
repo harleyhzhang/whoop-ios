@@ -259,7 +259,8 @@ final class LocalStrainRepository {
                 try query(
                     database,
                     """
-                    SELECT MIN(step_utc_offset_seconds), MAX(step_utc_offset_seconds), MAX(sample_at)
+                    SELECT MIN(step_utc_offset_seconds), MAX(step_utc_offset_seconds), MAX(sample_at),
+                           GROUP_CONCAT(DISTINCT step_utc_offset_seconds)
                     FROM whoop_historical_sample
                     WHERE peripheral_id = ? AND sample_at >= ? AND sample_at < ?
                     """, strings: [peripheral], numbers: [max(start, bounds.start), min(end, bounds.end)]
@@ -270,7 +271,10 @@ final class LocalStrainRepository {
                             day: day, firstOffset: Int(sqlite3_column_int(row, 0)),
                             lastOffset: Int(sqlite3_column_int(row, 1)), latestSample: sqlite3_column_double(row, 2),
                             zoneIdentifier: zone.identifier,
-                            eligible: timeZones.supports(zone, start: bounds.start, end: bounds.end)))
+                            eligible: timeZones.supports(zone, start: bounds.start, end: bounds.end)
+                                && RecordedTimeZone.recognizes(
+                                    offsets: text(row, 3) ?? "", zone: zone, start: bounds.start, end: bounds.end)
+                        ))
                 }
                 cursor = bounds.end
             }

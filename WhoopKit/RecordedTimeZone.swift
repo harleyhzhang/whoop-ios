@@ -67,4 +67,22 @@ struct RecordedTimeZone {
         guard let end = calendar.date(byAdding: .day, value: 1, to: start) else { return nil }
         return (start.timeIntervalSince1970, end.timeIntervalSince1970)
     }
+
+    /// Stale seasonal offsets are explainable by the recorded location. A
+    /// conflicting offset from elsewhere cannot be repaired by assuming it is DST.
+    static func recognizes(offsets: String, zone: TimeZone, start: Double, end: Double) -> Bool {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        let year = calendar.component(.year, from: Date(timeIntervalSince1970: start))
+        var known = Set([
+            zone.secondsFromGMT(for: Date(timeIntervalSince1970: start)),
+            zone.secondsFromGMT(for: Date(timeIntervalSince1970: end - 1)),
+        ])
+        for month in 1...12 {
+            if let date = calendar.date(from: DateComponents(year: year, month: month, day: 15, hour: 12)) {
+                known.insert(zone.secondsFromGMT(for: date))
+            }
+        }
+        return offsets.split(separator: ",").allSatisfy { Int($0).map(known.contains) ?? false }
+    }
 }
