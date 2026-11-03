@@ -28,7 +28,9 @@ enum WhoopPowerPackPolicy {
 @MainActor
 @Observable
 final class WhoopPowerPackMonitor: NSObject {
-    private(set) var batteryLevel: Int?
+    private var batteryState = WhoopBatteryState()
+    var batteryLevel: Int? { batteryState.level }
+    var isCharging: Bool { batteryState.status.isCharging }
 
     @ObservationIgnored private lazy var central = CBCentralManager(
         delegate: self,
@@ -40,11 +42,14 @@ final class WhoopPowerPackMonitor: NSObject {
     )
     @ObservationIgnored private var peripheral: CBPeripheral?
     @ObservationIgnored private var batteryCharacteristic: CBCharacteristic?
+    @ObservationIgnored private var pollingTask: Task<Void, Never>?
     @ObservationIgnored private var reconnectTask: Task<Void, Never>?
 
     private let powerPackService = CBUUID(string: WhoopPowerPackPolicy.serviceUUID)
     private let batteryService = CBUUID(string: "180F")
     private let batteryLevelUUID = CBUUID(string: "2A19")
+    private let batteryLevelStatusUUID = CBUUID(string: "2BED")
+    private let batteryPowerStateUUID = CBUUID(string: "2A1A")
     private let cachedBatteryLevelKey = "WhoopPowerPackMonitor.cachedBatteryLevel"
     private let cachedBatteryLevelDateKey = "WhoopPowerPackMonitor.cachedBatteryLevelDate"
     private static let logger = Logger(
@@ -59,16 +64,18 @@ final class WhoopPowerPackMonitor: NSObject {
     }
 
     deinit {
+        pollingTask?.cancel()
         reconnectTask?.cancel()
     }
 
     func refresh() {
+        batteryState.expireInference()
         guard central.state == .poweredOn else { return }
         if let peripheral {
             switch peripheral.state {
             case .connected:
-                if let batteryCharacteristic {
-                    peripheral.readValue(for: batteryCharacteristic)
+                if batteryCharacteristic != nil {
+                    WhoopBatteryGATT.refresh(peripheral)
                 } else {
                     peripheral.discoverServices([batteryService])
                 }
@@ -88,8 +95,8 @@ final class WhoopPowerPackMonitor: NSObject {
 
     private func restoreCachedBatteryLevel() {
         let defaults = UserDefaults.standard
-        batteryLevel = WhoopBluetoothPolicy.cachedBatteryLevel(
-            defaults.object(forKey: cachedBatteryLevelKey)
+        batteryState = WhoopBatteryState(
+            cachedLevel: WhoopBluetoothPolicy.cachedBatteryLevel(defaults.object(forKey: cachedBatteryLevelKey))
         )
     }
 
@@ -124,11 +131,28 @@ final class WhoopPowerPackMonitor: NSObject {
             Self.logger.error("Ignoring invalid PowerPack battery payload")
             return
         }
-        batteryLevel = level
+        batteryState.observe(BatteryObservation(level: level, status: .unavailable))
         let defaults = UserDefaults.standard
         defaults.set(level, forKey: cachedBatteryLevelKey)
         defaults.set(Date(), forKey: cachedBatteryLevelDateKey)
         Self.logger.debug("PowerPack battery: \(level, privacy: .public)%")
+    }
+
+    private func startPolling() {
+        pollingTask?.cancel()
+        pollingTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(15))
+                guard !Task.isCancelled, let self else { return }
+                self.refresh()
+            }
+        }
+    }
+
+    private func resetChargingState() {
+        pollingTask?.cancel()
+        pollingTask = nil
+        batteryState.resetConnection()
     }
 
     private func scheduleRediscovery() {
@@ -147,6 +171,7 @@ extension WhoopPowerPackMonitor: @preconcurrency CBCentralManagerDelegate {
         if central.state == .poweredOn {
             discoverPowerPack()
         } else {
+            resetChargingState()
             reconnectTask?.cancel()
             reconnectTask = nil
         }
@@ -160,6 +185,7 @@ extension WhoopPowerPackMonitor: @preconcurrency CBCentralManagerDelegate {
         peripheral = restored
         restored.delegate = self
         if restored.state == .connected {
+            startPolling()
             restored.discoverServices([batteryService])
         } else {
             central.connect(restored)
@@ -190,6 +216,8 @@ extension WhoopPowerPackMonitor: @preconcurrency CBCentralManagerDelegate {
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         guard self.peripheral?.identifier == peripheral.identifier else { return }
+        batteryState.resetConnection()
+        startPolling()
         Self.logger.debug("Connected to PowerPack; discovering battery service")
         peripheral.discoverServices([batteryService])
     }
@@ -203,6 +231,7 @@ extension WhoopPowerPackMonitor: @preconcurrency CBCentralManagerDelegate {
         Self.logger.error(
             "PowerPack connection failed: \(error?.localizedDescription ?? "unknown error", privacy: .public)"
         )
+        resetChargingState()
         self.peripheral = nil
         batteryCharacteristic = nil
         scheduleRediscovery()
@@ -215,6 +244,7 @@ extension WhoopPowerPackMonitor: @preconcurrency CBCentralManagerDelegate {
     ) {
         guard self.peripheral?.identifier == peripheral.identifier else { return }
         Self.logger.debug("PowerPack disconnected")
+        resetChargingState()
         self.peripheral = nil
         batteryCharacteristic = nil
         scheduleRediscovery()
@@ -231,7 +261,8 @@ extension WhoopPowerPackMonitor: @preconcurrency CBPeripheralDelegate {
             central.cancelPeripheralConnection(peripheral)
             return
         }
-        peripheral.discoverCharacteristics([batteryLevelUUID], for: service)
+        peripheral.discoverCharacteristics(
+            [batteryLevelUUID, batteryLevelStatusUUID, batteryPowerStateUUID], for: service)
     }
 
     func peripheral(
@@ -251,11 +282,9 @@ extension WhoopPowerPackMonitor: @preconcurrency CBPeripheralDelegate {
             return
         }
         batteryCharacteristic = characteristic
-        if characteristic.properties.contains(.read) {
-            peripheral.readValue(for: characteristic)
-        }
-        if characteristic.properties.contains(.notify) || characteristic.properties.contains(.indicate) {
-            peripheral.setNotifyValue(true, for: characteristic)
+        for characteristic in service.characteristics ?? []
+        where WhoopBatteryGATT.characteristicUUIDs.contains(characteristic.uuid) {
+            WhoopBatteryGATT.subscribe(characteristic, on: peripheral)
         }
     }
 
@@ -265,10 +294,23 @@ extension WhoopPowerPackMonitor: @preconcurrency CBPeripheralDelegate {
         error: Error?
     ) {
         guard self.peripheral?.identifier == peripheral.identifier,
-            characteristic.uuid == batteryLevelUUID,
             error == nil,
             let data = characteristic.value
         else { return }
-        applyBatteryLevel(data)
+        if characteristic.uuid == batteryLevelUUID {
+            applyBatteryLevel(data)
+        } else {
+            let status: BatteryStatus?
+            if characteristic.uuid == batteryLevelStatusUUID {
+                status = WhoopBluetoothPolicy.batteryLevelStatus(data)
+            } else if characteristic.uuid == batteryPowerStateUUID {
+                status = WhoopBluetoothPolicy.legacyBatteryStatus(data)
+            } else {
+                return
+            }
+            if let status {
+                batteryState.observe(BatteryObservation(level: nil, status: status))
+            }
+        }
     }
 }

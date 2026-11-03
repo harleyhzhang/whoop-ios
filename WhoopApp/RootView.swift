@@ -113,7 +113,8 @@ struct RootView: View {
                         batteryLevel: batteryLevel,
                         isCharging: isCharging,
                         isConnected: isConnected,
-                        powerPackBatteryLevel: powerPackBatteryLevel
+                        powerPackBatteryLevel: powerPackBatteryLevel,
+                        powerPackIsCharging: powerPackMonitor.isCharging
                     )
                     VStack(spacing: Theme.Layout.spacing) {
                         SummaryRings(selected: projection.selected)

@@ -182,14 +182,14 @@ extension WhoopSleepStateTests {
         XCTAssertEqual(WhoopReconnectPolicy.delaySeconds(forAttempt: 100), 60)
     }
 
-    func testBatteryLevelStatusReportsChargingOrExternalPower() {
+    func testBatteryLevelStatusDistinguishesChargingFromExternalPower() {
         XCTAssertEqual(
             WhoopBluetoothPolicy.batteryLevelStatus(Data([0x02, 0x23, 0x00, 68])),
             .charging
         )
         XCTAssertEqual(
             WhoopBluetoothPolicy.batteryLevelStatus(Data([0x02, 0x63, 0x00, 100])),
-            .charging
+            .notCharging
         )
         XCTAssertEqual(
             WhoopBluetoothPolicy.batteryLevelStatus(Data([0x02, 0x41, 0x00, 67])),

@@ -172,6 +172,23 @@ carries level plus charging state from the serial transport snapshot through the
 probe into notification policy. Low-battery reminders require an explicit
 non-charging observation, so a charging strap cannot emit “Charge now.”
 
+Strap and PowerPack keep independent `WhoopBatteryState` instances. Both read
+standard charge-state characteristics when exposed; `WhoopBatteryGATT` shares
+read/subscribe behavior. The strap refreshes on its 30-second keepalive and
+foreground entry; PowerPack refreshes every 15 seconds while connected. Direct
+hardware state wins over percentage trends. The decoder follows the Bluetooth
+SIG [Battery Service 1.1](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/BAS_v1.1/out/en/index-en.html):
+external power alone is not proof of active charging, and inactive/discharging
+state takes precedence over power presence.
+
+Without hardware charge state, an increase infers charging for 120 seconds;
+flat readings cannot extend that estimate. Polling expires it even if no new
+notification arrives, while the last valid percentage stays visible. A new
+increase renews the estimate, a decrease clears it, and disconnects reset it.
+These estimates cannot detect physical attachment/removal immediately and may
+expire during very slow charging. Charging status is never restored from a
+cached percentage. The header renders each battery's own status.
+
 ## Storage representation
 
 SQLite separates immutable evidence from rebuildable query projections:
