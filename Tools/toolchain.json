@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "xcode": {
-    "version": "26.2",
-    "build": "17C52",
-    "iphoneOSSDK": "26.2",
-    "deviceCtl": "506.6"
+    "version": "27.2",
+    "build": "27B52",
+    "iphoneOSSDK": "27.2",
+    "deviceCtl": "651.32"
   },
   "simulatorRuntime": {
     "version": "26.3.1",
