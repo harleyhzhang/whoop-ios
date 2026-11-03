@@ -23,13 +23,11 @@ from phone_shipping_core import (
     validate_backup,
     validate_deployment_health_report,
 )
+from phone_shipping_debugger import debugger_paused_application
 from phone_shipping_environment import CommandRunner
 
-# CoreDevice reports that a suspend signal was sent before the process and its
-# SQLite connections are necessarily quiescent.  Starting a multi-gigabyte
-# directory copy immediately can therefore capture the main database before a
-# final WAL write.  A short settle interval produced coherent snapshots on the
-# physical device where immediate copies did not.
+# Allow pending kernel writes to settle after the process is stopped. Exact
+# file metadata and SQLite checks still decide whether the snapshot is coherent.
 BACKUP_SUSPEND_QUIESCE_SECONDS = 5
 BACKUP_REQUIRED_FILES = ("sleep.sqlite3", "whoop-official-archive.sqlite3")
 BACKUP_OPTIONAL_FILES = (
@@ -127,9 +125,12 @@ def suspended_application(runner: CommandRunner, scratch: Path, device: Device) 
             raise ShippingError("WHOOP did not start in the background before backup suspension.")
         suspended = True
     try:
-        if suspended:
-            wait_for_backup_quiescence()
-        yield
+        if suspended and pid is not None:
+            with debugger_paused_application(device, scratch, pid):
+                wait_for_backup_quiescence()
+                yield
+        else:
+            yield
     finally:
         if suspended and pid is not None:
             resume_or_relaunch_application(runner, scratch, device, pid)

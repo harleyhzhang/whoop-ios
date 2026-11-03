@@ -73,6 +73,11 @@ optional; both modes support wireless.
 The workflow restarts an existing collector without foreground activation in
 Apple's start-stopped state before app code runs. This avoids pausing pending
 scene callbacks, whose watchdog could restart a writer during copying.
+An LLDB attachment holds that development-signed process stopped for the whole
+snapshot, then detaches. A launch pause alone can end during a long transfer.
+Failure to confirm the exact stopped process or successful detach rejects the
+snapshot; the existing collector resume/relaunch cleanup still runs. No
+debugger remains attached for installation or runtime health checks.
 Snapshot length/metadata stability, integrity, and exact preserved-row
 checks remain mandatory, and the collector is resumed or relaunched afterward.
 

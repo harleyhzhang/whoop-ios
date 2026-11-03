@@ -8,6 +8,8 @@ import sqlite3
 import subprocess
 import tempfile
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -702,8 +704,21 @@ class BackupCopyRunner(RecordingRunner):
         return super().devicectl_json(arguments, scratch, check=check, timeout=timeout)
 
 
+@pytest.fixture
+def snapshot_debugger(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    stopped: list[int] = []
+
+    @contextmanager
+    def paused(device: core.Device, scratch: Path, pid: int) -> Iterator[None]:
+        stopped.append(pid)
+        yield
+
+    monkeypatch.setattr(device_shipping, "debugger_paused_application", paused)
+    return stopped
+
+
 def test_device_backup_copies_only_allowlisted_files_and_compacts(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, snapshot_debugger: list[int]
 ) -> None:
     runner = BackupCopyRunner()
     selected = core.Device("CORE-1", "UDID-1", "IP", "iPhone", "27.0", "24A1", "")
@@ -744,7 +759,7 @@ def test_device_backup_copies_only_allowlisted_files_and_compacts(
 
 
 def test_suspension_quiesces_then_always_resumes_after_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, snapshot_debugger: list[int]
 ) -> None:
     runner = RecordingRunner()
     device = core.Device("CORE-1", "UDID-1", "IP", "iPhone", "27.0", "24A1", "")
@@ -763,7 +778,7 @@ def test_suspension_quiesces_then_always_resumes_after_failure(
 
 
 def test_suspension_resumes_if_quiescence_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, snapshot_debugger: list[int]
 ) -> None:
     runner = RecordingRunner()
     device = core.Device("CORE-1", "UDID-1", "IP", "iPhone", "27.0", "24A1", "")
@@ -811,6 +826,7 @@ class BackgroundRestartRunner(RecordingRunner):
 def test_backup_starts_paused_before_app_code_and_resumes_its_new_process(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    snapshot_debugger: list[int],
 ) -> None:
     runner = BackgroundRestartRunner(8765)
     device = core.Device("CORE-1", "UDID-1", "IP", "iPhone", "27.0", "24A1", "")
@@ -820,6 +836,7 @@ def test_backup_starts_paused_before_app_code_and_resumes_its_new_process(
         assert [call[2] for call in calls] == ["launch"]
         assert "--no-activate" in calls[0] and "--terminate-existing" in calls[0]
         assert "--start-stopped" in calls[0]
+        assert snapshot_debugger == [8765]
     assert runner.device_calls[-1][runner.device_calls[-1].index("--pid") + 1] == "8765"
 
 
@@ -874,7 +891,7 @@ class ResumeFailureRunner(RecordingRunner):
 
 
 def test_suspension_retries_resume_then_relaunches(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, snapshot_debugger: list[int]
 ) -> None:
     runner = ResumeFailureRunner()
     device = core.Device("CORE-1", "UDID-1", "IP", "iPhone", "27.0", "24A1", "")
