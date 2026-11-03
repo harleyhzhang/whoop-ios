@@ -261,6 +261,66 @@ final class WhoopBluetoothPolicyTests: XCTestCase {
         XCTAssertEqual(state.status, .charging)
     }
 
+    func testChargingEstimateExpiresWhilePercentageStaysFlat() {
+        var state = WhoopBatteryState()
+        let start = Date(timeIntervalSince1970: 1_000)
+        state.observe(BatteryObservation(level: 40, status: .unavailable), at: start)
+        state.observe(BatteryObservation(level: 41, status: .unavailable), at: start.addingTimeInterval(30))
+        for seconds in [60.0, 90.0, 120.0] {
+            state.observe(BatteryObservation(level: 41, status: .unavailable), at: start.addingTimeInterval(seconds))
+            XCTAssertTrue(state.status.isCharging)
+        }
+        state.expireInference(at: start.addingTimeInterval(150))
+        XCTAssertEqual(state.level, 41)
+        XCTAssertEqual(state.status, .unavailable)
+        state.observe(BatteryObservation(level: 42, status: .unavailable), at: start.addingTimeInterval(160))
+        XCTAssertTrue(state.status.isCharging)
+    }
+
+    func testChargingExpiryDoesNotDependOnNewBatteryNotifications() {
+        var state = WhoopBatteryState(cachedLevel: 90)
+        let start = Date(timeIntervalSince1970: 1_000)
+        state.observe(BatteryObservation(level: 98, status: .unavailable), at: start)
+        state.observe(BatteryObservation(level: 99, status: .unavailable), at: start)
+        state.expireInference(at: start.addingTimeInterval(120))
+        XCTAssertEqual(state.status, .unavailable)
+        XCTAssertEqual(state.level, 99)
+        state.observe(BatteryObservation(level: 99, status: .unavailable), at: start.addingTimeInterval(121))
+        XCTAssertEqual(state.status, .unavailable)
+    }
+
+    func testStrapAndPowerPackChargeIndependentlyAndResetWithoutLosingLevels() {
+        var strap = WhoopBatteryState()
+        var pack = WhoopBatteryState()
+        let start = Date(timeIntervalSince1970: 1_000)
+        strap.observe(BatteryObservation(level: 50, status: .unavailable), at: start)
+        pack.observe(BatteryObservation(level: 50, status: .unavailable), at: start)
+        strap.observe(BatteryObservation(level: 51, status: .unavailable), at: start)
+        pack.observe(BatteryObservation(level: 49, status: .unavailable), at: start)
+        XCTAssertTrue(strap.status.isCharging)
+        XCTAssertFalse(pack.status.isCharging)
+        pack.observe(BatteryObservation(level: 50, status: .unavailable), at: start.addingTimeInterval(30))
+        strap.expireInference(at: start.addingTimeInterval(120))
+        XCTAssertFalse(strap.status.isCharging)
+        XCTAssertTrue(pack.status.isCharging)
+        pack.resetConnection()
+        XCTAssertEqual(pack.level, 50)
+        XCTAssertEqual(pack.status, .unavailable)
+    }
+
+    func testHardwareChargeStateOverridesPowerPresenceAndTrendExpiry() {
+        XCTAssertEqual(WhoopBluetoothPolicy.batteryLevelStatus(Data([0, 0x43, 0])), .notCharging)
+        XCTAssertEqual(WhoopBluetoothPolicy.batteryLevelStatus(Data([0, 0x69, 0])), .notCharging)
+        XCTAssertEqual(WhoopBluetoothPolicy.batteryLevelStatus(Data([0, 0x03, 0])), .unknown(rawValue: 3))
+        var state = WhoopBatteryState()
+        let start = Date(timeIntervalSince1970: 1_000)
+        state.observe(BatteryObservation(level: 50, status: .charging), at: start)
+        state.expireInference(at: start.addingTimeInterval(300))
+        XCTAssertTrue(state.status.isCharging)
+        state.observe(BatteryObservation(level: nil, status: .notCharging), at: start.addingTimeInterval(301))
+        XCTAssertFalse(state.status.isCharging)
+    }
+
     func testHistoricalChunkAcknowledgementSuppressesBurstButAllowsRetry() {
         let endData: [UInt8] = [0, 1, 2, 3, 4, 5, 6, 7]
         let acknowledgedAt = Date(timeIntervalSince1970: 100)

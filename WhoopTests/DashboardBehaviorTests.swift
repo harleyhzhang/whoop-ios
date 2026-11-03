@@ -182,14 +182,14 @@ extension WhoopSleepStateTests {
         XCTAssertEqual(WhoopReconnectPolicy.delaySeconds(forAttempt: 100), 60)
     }
 
-    func testBatteryLevelStatusReportsChargingOrExternalPower() {
+    func testBatteryLevelStatusDistinguishesChargingFromExternalPower() {
         XCTAssertEqual(
             WhoopBluetoothPolicy.batteryLevelStatus(Data([0x02, 0x23, 0x00, 68])),
             .charging
         )
         XCTAssertEqual(
             WhoopBluetoothPolicy.batteryLevelStatus(Data([0x02, 0x63, 0x00, 100])),
-            .charging
+            .notCharging
         )
         XCTAssertEqual(
             WhoopBluetoothPolicy.batteryLevelStatus(Data([0x02, 0x41, 0x00, 67])),
@@ -207,6 +207,14 @@ extension WhoopSleepStateTests {
         XCTAssertTrue(WhoopBatteryPresentation.isLow(level: 20))
         XCTAssertFalse(WhoopBatteryPresentation.isLow(level: 21))
         XCTAssertFalse(WhoopBatteryPresentation.isLow(level: 35))
+    }
+
+    func testBatteryTerminalJoinsTheFillOnlyAtFullCharge() {
+        for level in [nil, -1, 0, 20, 99] as [Int?] {
+            XCTAssertFalse(WhoopBatteryPresentation.terminalIsFilled(level: level))
+        }
+        XCTAssertTrue(WhoopBatteryPresentation.terminalIsFilled(level: 100))
+        XCTAssertTrue(WhoopBatteryPresentation.terminalIsFilled(level: 101))
     }
 
     func testBatteryTrackContrastsWithItsLabelColor() {

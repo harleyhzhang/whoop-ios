@@ -14,6 +14,11 @@ Tools/doctor.sh --toolchain-only
 Tools/install_git_hooks.sh
 ```
 
+The pinned Xcode 27.2 supports macOS 26.6 and later. Xcode 26.x cannot
+launch its simulator test service on macOS 27 because the OS rejects its
+version-restricted signature. Use the supported toolchain rather than changing
+Developer Tools security or retrying suspended test hosts.
+
 ## 2. Sign with your own team
 
 Copy the example config and fill in your bundle ID and Team ID

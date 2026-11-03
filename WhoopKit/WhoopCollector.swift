@@ -477,6 +477,8 @@ final class WhoopCollector: NSObject {
     }
 
     func refreshHistoricalData() {
+        batteryState.expireInference()
+        WhoopBatteryGATT.refresh(peripheral)
         // Score the night from stored history now; the offload refines it.
         refreshSleepSnapshot(force: true, includeProvisional: true)
         guard isConnected else { return }
@@ -612,6 +614,8 @@ final class WhoopCollector: NSObject {
     }
 
     private func armRealtimeHeartRate() {
+        batteryState.expireInference()
+        WhoopBatteryGATT.refresh(peripheral)
         guard !motionCapture.blocksHistory, let peripheral,
             peripheral.state == .connected,
             let commandCharacteristic
@@ -824,27 +828,8 @@ extension WhoopCollector: @preconcurrency CBPeripheralDelegate {
                     record("Subscribing to bond-free standard Heart Rate Measurement 2A37 before handshake")
                     peripheral.setNotifyValue(true, for: characteristic)
                 }
-            } else if characteristic.uuid == batteryLevelUUID {
-                if characteristic.properties.contains(.read) {
-                    peripheral.readValue(for: characteristic)
-                }
-                if characteristic.properties.contains(.notify) || characteristic.properties.contains(.indicate) {
-                    peripheral.setNotifyValue(true, for: characteristic)
-                }
-            } else if characteristic.uuid == batteryLevelStatusUUID {
-                if characteristic.properties.contains(.read) {
-                    peripheral.readValue(for: characteristic)
-                }
-                if characteristic.properties.contains(.notify) || characteristic.properties.contains(.indicate) {
-                    peripheral.setNotifyValue(true, for: characteristic)
-                }
-            } else if characteristic.uuid == batteryPowerStateUUID {
-                if characteristic.properties.contains(.read) {
-                    peripheral.readValue(for: characteristic)
-                }
-                if characteristic.properties.contains(.notify) || characteristic.properties.contains(.indicate) {
-                    peripheral.setNotifyValue(true, for: characteristic)
-                }
+            } else if WhoopBatteryGATT.characteristicUUIDs.contains(characteristic.uuid) {
+                WhoopBatteryGATT.subscribe(characteristic, on: peripheral)
             } else if notifyUUIDs.contains(characteristic.uuid) {
                 if !notifyCharacteristics.contains(where: { $0.uuid == characteristic.uuid }) {
                     notifyCharacteristics.append(characteristic)

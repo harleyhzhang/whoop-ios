@@ -24,6 +24,7 @@ struct DashboardHeader: View {
     let isCharging: Bool
     let isConnected: Bool
     let powerPackBatteryLevel: Int?
+    var powerPackIsCharging = false
 
     var body: some View {
         HStack {
@@ -68,13 +69,13 @@ struct DashboardHeader: View {
                     PowerPackStatusImage(batteryLevel: powerPackBatteryLevel)
                         .offset(x: 2)
 
-                    WhoopBatteryPercentIcon(level: powerPackBatteryLevel, isCharging: false)
+                    WhoopBatteryPercentIcon(level: powerPackBatteryLevel, isCharging: powerPackIsCharging)
                 }
             }
             .frame(minHeight: 36)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(
-                "WHOOP \(isConnected ? "connected" : "disconnected"), battery \(batteryLevel.map { "\($0) percent" } ?? "unavailable")\(isCharging ? ", charging" : ""); PowerPack battery \(powerPackBatteryLevel.map { "\($0) percent" } ?? "unavailable")"
+                "WHOOP \(isConnected ? "connected" : "disconnected"), battery \(batteryLevel.map { "\($0) percent" } ?? "unavailable")\(isCharging ? ", charging" : ""); PowerPack battery \(powerPackBatteryLevel.map { "\($0) percent" } ?? "unavailable")\(powerPackIsCharging ? ", charging" : "")"
             )
             .accessibilityIdentifier("whoop.batteries")
         }

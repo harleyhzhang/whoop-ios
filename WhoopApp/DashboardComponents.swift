@@ -11,6 +11,11 @@ enum WhoopBatteryPresentation {
         return level <= 20
     }
 
+    static func terminalIsFilled(level: Int?) -> Bool {
+        guard let level else { return false }
+        return level >= 100
+    }
+
     static func trackTone(level: Int?, isCharging: Bool) -> TrackTone {
         isCharging || isLow(level: level) ? .darkBehindWhite : .lightBehindBlack
     }
@@ -126,7 +131,7 @@ struct WhoopBatteryPercentIcon: View {
                 topTrailingRadius: Theme.Layout.batteryTerminalRadius,
                 style: .continuous
             )
-            .fill(trackColor)
+            .fill(WhoopBatteryPresentation.terminalIsFilled(level: level) ? fillColor : trackColor)
             .frame(width: Theme.Layout.batteryTerminalWidth, height: Theme.Layout.batteryTerminalHeight)
         }
         .accessibilityHidden(true)

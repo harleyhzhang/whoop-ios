@@ -138,10 +138,8 @@ enum WhoopBluetoothPolicy {
     static func batteryLevelStatus(_ data: Data) -> BatteryStatus? {
         guard data.count >= 3 else { return nil }
         let powerState = UInt16(data[1]) | (UInt16(data[2]) << 8)
-        let wiredPower = (powerState >> 1) & 0b11
-        let wirelessPower = (powerState >> 3) & 0b11
         let chargeState = (powerState >> 5) & 0b11
-        if chargeState == 1 || wiredPower == 1 || wirelessPower == 1 { return .charging }
+        if chargeState == 1 { return .charging }
         if chargeState == 2 || chargeState == 3 { return .notCharging }
         return .unknown(rawValue: powerState)
     }
@@ -224,20 +222,30 @@ struct WhoopBatteryState {
     private(set) var status = BatteryStatus.unavailable
     private var hardwareStatus = BatteryStatus.unavailable
     private var previousLiveLevel: Int?
+    private var inferredChargingAt: Date?
+    static let inferenceLifetime: TimeInterval = 120
 
     init(cachedLevel: Int? = nil) {
         level = cachedLevel
     }
 
-    mutating func observe(_ observation: BatteryObservation) {
+    mutating func observe(_ observation: BatteryObservation, at date: Date = .now) {
+        expireInference(at: date)
         if observation.status.isExplicit {
             hardwareStatus = observation.status
         }
         if hardwareStatus.isExplicit {
             status = hardwareStatus
+            inferredChargingAt = nil
         } else if let currentLevel = observation.level, let previousLiveLevel {
-            if currentLevel > previousLiveLevel { status = .charging }
-            if currentLevel < previousLiveLevel { status = .notCharging }
+            if currentLevel > previousLiveLevel {
+                status = .charging
+                inferredChargingAt = date
+            }
+            if currentLevel < previousLiveLevel {
+                status = .notCharging
+                inferredChargingAt = nil
+            }
         }
         if let currentLevel = observation.level {
             level = currentLevel
@@ -245,9 +253,20 @@ struct WhoopBatteryState {
         }
     }
 
+    /// Flat readings do not prove the charger is still attached. Keep the
+    /// percentage, but retire a charging estimate without a recent increase.
+    mutating func expireInference(at date: Date = .now) {
+        guard let inferredChargingAt,
+            date.timeIntervalSince(inferredChargingAt) >= Self.inferenceLifetime
+        else { return }
+        status = .unavailable
+        self.inferredChargingAt = nil
+    }
+
     mutating func resetConnection() {
         hardwareStatus = .unavailable
         status = .unavailable
         previousLiveLevel = nil
+        inferredChargingAt = nil
     }
 }
