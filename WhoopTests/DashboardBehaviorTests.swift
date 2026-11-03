@@ -209,6 +209,14 @@ extension WhoopSleepStateTests {
         XCTAssertFalse(WhoopBatteryPresentation.isLow(level: 35))
     }
 
+    func testBatteryTerminalJoinsTheFillOnlyAtFullCharge() {
+        for level in [nil, -1, 0, 20, 99] as [Int?] {
+            XCTAssertFalse(WhoopBatteryPresentation.terminalIsFilled(level: level))
+        }
+        XCTAssertTrue(WhoopBatteryPresentation.terminalIsFilled(level: 100))
+        XCTAssertTrue(WhoopBatteryPresentation.terminalIsFilled(level: 101))
+    }
+
     func testBatteryTrackContrastsWithItsLabelColor() {
         XCTAssertEqual(
             WhoopBatteryPresentation.trackTone(level: 73, isCharging: false),
