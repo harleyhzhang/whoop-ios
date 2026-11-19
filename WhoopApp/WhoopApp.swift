@@ -83,6 +83,7 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
     )
 
     private let scheduler: WhoopNotificationScheduling
+    private let collectionMonitor: WhoopCollectionMonitor
     private let defaults: UserDefaults
     private let now: () -> Date
     private var isConfigured = false
@@ -110,6 +111,7 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
         now: @escaping () -> Date = Date.init
     ) {
         self.scheduler = scheduler
+        self.collectionMonitor = WhoopCollectionMonitor(scheduler: scheduler, defaults: defaults, now: now)
         self.defaults = defaults
         self.now = now
         super.init()
@@ -119,6 +121,7 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
         guard !isConfigured else { return }
         isConfigured = true
         scheduler.install(delegate: self)
+        if defaults.bool(forKey: WhoopCollectorKeys.confirmedBondKey) { collectionMonitor.start() }
         Task { @MainActor [weak self] in
             guard let self else { return }
             guard await scheduler.authorizationStatus() == .notDetermined else { return }
@@ -165,6 +168,10 @@ final class WhoopNotificationManager: NSObject, UNUserNotificationCenterDelegate
             self.defaults.set(record.dateKey, forKey: Key.lastMorningDateKey)
             self.defaults.set(body, forKey: Key.lastMorningSummaryBody)
         }
+    }
+
+    func observePersistedSample(at sampleAt: Date) {
+        collectionMonitor.observePersistedSample(at: sampleAt)
     }
 
     func observeBattery(_ observation: BatteryObservation) {

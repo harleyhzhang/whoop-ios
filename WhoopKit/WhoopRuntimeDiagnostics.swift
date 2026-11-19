@@ -67,6 +67,16 @@ final class WhoopRuntimeDiagnostics: NSObject, MXMetricManagerSubscriber, @unche
         }
     }
 
+    func recordCollectionIssueIfNeeded(_ message: String) {
+        let prefixes = [
+            "Historical offload stalled", "Repeated history stalls",
+            "Transport persistence backpressure:", "Failed to persist WHOOP packet batch",
+            "CLIENT_HELLO had no write callback",
+        ]
+        guard prefixes.contains(where: message.hasPrefix) else { return }
+        recordEvent(message)
+    }
+
     private func persist(_ payloads: [Data], name: String) {
         guard !payloads.isEmpty else { return }
         persistenceQueue.async {

@@ -7,9 +7,9 @@
     "deviceCtl": "651.32"
   },
   "simulatorRuntime": {
-    "version": "26.3.1",
-    "build": "23D8133",
-    "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-26-3"
+    "version": "27.2",
+    "build": "24B8117",
+    "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-2"
   },
   "python": "3.13.13",
   "homebrew": {
