@@ -113,3 +113,26 @@ actual official scores preferred. See [movement-calibration.md](movement-calibra
 for retained evidence, read-only export and OFF-only cleanup of any interrupted
 legacy session. Canonical backups still include `motion-calibration.json`;
 an existing archive requires a postinstall snapshot and preservation checks.
+
+## Collection freshness and history recovery
+
+A live heart-rate value or connected Bluetooth badge does not prove that the
+historical samples used for sleep and recovery are advancing. Check the latest
+sensor timestamp in the small `sleep-diagnostics.json` report separately from
+its report-generation time. A newly generated report can describe old data.
+
+For a previously bonded device, the app schedules a local system notification
+one hour after its last monitored fresh, persisted historical sample (or one
+hour after first enabling the monitor if no anchor exists yet). New recent
+samples replace that deadline at most every five minutes; replayed history,
+future timestamps, live-only heart-rate packets and battery traffic cannot
+postpone it. The persisted anchor survives relaunch. Notification delivery
+still depends on iOS authorization, Focus and system delivery behavior; this
+is an interruption warning, not a guarantee of continuous collection.
+
+The existing historical watchdog first retries a stalled offload. A second
+stall without newer durable history reconnects the Bluetooth command channel,
+unless persistence is backpressured. It retains raw evidence and never
+acknowledges uncommitted history or relaxes sleep-completion gates. Returning
+to the foreground also resumes a missing/disconnected link before requesting
+history. None of this can reconstruct samples the band never recorded.

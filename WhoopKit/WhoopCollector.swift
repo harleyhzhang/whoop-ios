@@ -47,6 +47,7 @@ final class WhoopCollector: NSObject {
     @ObservationIgnored private let connectionRecovery = WhoopConnectionRecovery()
     @ObservationIgnored private let backgroundDrain = WhoopBackgroundDrain()
     @ObservationIgnored private var historicalSync = WhoopHistoricalSyncState()
+    @ObservationIgnored private var historicalRecovery = WhoopHistoricalRecovery()
     @ObservationIgnored private var lastAcknowledgedHistoricalEndData: [UInt8]?
     @ObservationIgnored private var lastHistoricalAcknowledgementAt: Date?
     @ObservationIgnored private var lastSleepAnalysisAt: Date?
@@ -128,6 +129,7 @@ final class WhoopCollector: NSObject {
 
     private func record(_ message: String) {
         Self.logger.debug("\(message, privacy: .public)")
+        WhoopRuntimeDiagnostics.shared.recordCollectionIssueIfNeeded(message)
     }
 
     private func restoreCachedTelemetry() {
@@ -273,6 +275,8 @@ final class WhoopCollector: NSObject {
             return
         }
         if let sampleAt = summary.latestHistoricalSampleAt {
+            historicalRecovery.observeProgress(at: sampleAt)
+            WhoopNotificationManager.shared.observePersistedSample(at: sampleAt)
             historicalSync.observe(sampleAt: sampleAt, receivedAt: .now)
         }
         for event in summary.metadataEvents {
@@ -415,6 +419,7 @@ final class WhoopCollector: NSObject {
     }
 
     private func resetConnectionSession() {
+        historicalRecovery.resetStalls()
         motionCapture.disconnected()
         if let historicalSessionID = historicalSync.reset() {
             transportPipeline.flushAndWaitForPersistence { [store] in
@@ -477,6 +482,7 @@ final class WhoopCollector: NSObject {
     }
 
     func refreshHistoricalData() {
+        if central.state == .poweredOn { resumeConnection() }
         batteryState.expireInference()
         WhoopBatteryGATT.refresh(peripheral)
         // Score the night from stored history now; the offload refines it.
@@ -607,7 +613,14 @@ final class WhoopCollector: NSObject {
                 self.lastAcknowledgedHistoricalEndData = nil
                 self.lastHistoricalAcknowledgementAt = nil
                 self.historicalWatchdogTask = nil
-                self.beginHistoricalSync()
+                if self.historicalRecovery.shouldReconnectAfterStall(), !self.transportIsBackpressured,
+                    let peripheral = self.peripheral
+                {
+                    self.record("Repeated history stalls; reconnecting the Bluetooth command channel")
+                    self.central.cancelPeripheralConnection(peripheral)
+                } else {
+                    self.beginHistoricalSync()
+                }
                 return
             }
         }
