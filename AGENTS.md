@@ -48,3 +48,11 @@ current, and privacy holds. Use `Tools/check_fast.sh` while iterating and
 
 Only via `Tools/ship_phone.sh --commit <exact-merged-sha>`. Never uninstall,
 and never use ad hoc Xcode or `devicectl` installs. Follow `docs/operator.md`.
+
+## Proportionate routine work
+
+Routine updates with unchanged storage/identity use the canonical in-place tier
+and retain the existing off-phone checkpoint; a new full-history transfer or
+census is not a prerequisite. Preserve its true backup date. Migrations,
+backfills, restores and persistence rewrites retain the heavy checks. Normal
+append/read operations must stay bounded by new/recent work, not total history.

@@ -161,6 +161,7 @@ def final_state(
             "bundleIdentifier": BUNDLE_IDENTIFIER,
             "dataPreservationVerification": {
                 "fast": "in-place-install-and-database-advance",
+                "routine": "in-place-same-storage-and-database-advance",
                 "protected": "preinstall-backup-and-app-health-attestation",
                 "migration": "pre-post-backup-row-and-hash",
             }[mode],
@@ -237,7 +238,14 @@ def complete_after_install(
         raise IntegrityError(
             "Installed app version/build does not match the commit-bound shipping manifest."
         )
-    pid = launch_and_verify(runner, scratch, doctor_result.device, before_stamps, manifest_path)
+    pid = launch_and_verify(
+        runner,
+        scratch,
+        doctor_result.device,
+        before_stamps,
+        manifest_path,
+        force_storage_verification=mode in {"protected", "migration"},
+    )
     preinstall: BackupResult | None = None
     postinstall: BackupResult | None = None
     health_report: DeploymentHealthReport | None = None
@@ -307,7 +315,14 @@ def complete_after_install(
         postinstall,
         health_report,
     )
-    if local_policy:
+    if mode in {"fast", "routine"}:
+        state["backupPolicy"] = "retained-offphone-checkpoint"
+        checkpoint = state.get("lastVerifiedBackup", state.get("lastFullBackup"))
+        state["offphoneCoverage"] = {
+            "coverage": "newer observations remain on phone; existing off-phone checkpoint retained",
+            "checkpoint": checkpoint,
+        }
+    elif local_policy:
         state["backupPolicy"] = local_rollback.POLICY
         state["dataPreservationVerification"] = (
             "on-phone-migration-rollback-and-small-archive-attestation"
@@ -318,9 +333,12 @@ def complete_after_install(
         state["backupPolicy"] = local_rollback.FULL_POLICY
     atomic_write_json(state_path, state)
     try:
-        retention_plan = plan_retention(backup_root, state_path)
-        apply_retention(retention_plan, backup_root)
-        purge_expired_retirements(backup_root)
+        retention_plan = (
+            plan_retention(backup_root, state_path) if preinstall or postinstall else None
+        )
+        if retention_plan is not None:
+            apply_retention(retention_plan, backup_root)
+            purge_expired_retirements(backup_root)
     except (OSError, ShippingError, ValueError) as error:
         print(f"warning: backup retention requires attention: {error}", file=sys.stderr)
     manifest["phase"] = "complete"
@@ -460,8 +478,15 @@ def _run_ship_locked(
             if getattr(args, "backup_policy", None) not in (None, policy):
                 raise ShippingError("Resume backup policy differs from the original transaction.")
             args.backup_policy = policy
-            if policy not in (local_rollback.FULL_POLICY, local_rollback.POLICY) or (
-                policy == local_rollback.POLICY and mode != "migration"
+            if (
+                policy
+                not in (
+                    local_rollback.FULL_POLICY,
+                    local_rollback.POLICY,
+                    "retained-offphone-checkpoint",
+                )
+                or (policy == "retained-offphone-checkpoint" and mode not in {"fast", "routine"})
+                or (policy == local_rollback.POLICY and mode != "migration")
             ):
                 raise ShippingError("Invalid backup policy for this resume transaction.")
             if mode == "full":
@@ -526,7 +551,13 @@ def _run_ship_locked(
 
         classification = classify_install(runner, repo_root, commit, state_path)
         mode = classification["mode"]
-        policy = getattr(args, "backup_policy", None) or local_rollback.FULL_POLICY
+        policy = getattr(args, "backup_policy", None) or (
+            "retained-offphone-checkpoint"
+            if mode in {"fast", "routine"}
+            else local_rollback.FULL_POLICY
+        )
+        if mode in {"fast", "routine"} and policy == local_rollback.FULL_POLICY:
+            mode = "protected"
         print(
             f"installMode={mode}\nbase={classification.get('base', 'unknown')}\n"
             f"reason={classification.get('reason', 'unknown')}"
@@ -534,6 +565,10 @@ def _run_ship_locked(
         if mode == "none":
             print(f"status=already-installed\ncommit={commit}")
             return
+        if policy == "retained-offphone-checkpoint" and mode not in {"fast", "routine"}:
+            raise ShippingError(
+                "Existing-checkpoint coverage requires unchanged storage and identity."
+            )
         if policy == local_rollback.POLICY and mode != "migration":
             raise ShippingError(
                 "On-device rollback is only available for an actual schema migration."
@@ -757,7 +792,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser = subparsers.add_parser("doctor", help="verify phone shipping prerequisites")
     add_paths(doctor_parser)
     doctor_parser.add_argument(
-        "--mode", choices=("fast", "protected", "migration"), default="migration"
+        "--mode", choices=("fast", "routine", "protected", "migration"), default="migration"
     )
     doctor_parser.add_argument("--device")
 
@@ -770,7 +805,7 @@ def build_parser() -> argparse.ArgumentParser:
     ship_parser.add_argument("--resume")
     ship_parser.add_argument(
         "--backup-policy",
-        choices=(local_rollback.FULL_POLICY, local_rollback.POLICY),
+        choices=(local_rollback.FULL_POLICY, local_rollback.POLICY, "retained-offphone-checkpoint"),
         help="Explicitly choose on-phone-only newest-data rollback instead of fresh full off-phone copies.",
     )
 

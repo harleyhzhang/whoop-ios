@@ -45,7 +45,8 @@ enum WhoopDeploymentHealthReporter {
             let sourceCommit = Bundle.main.object(forInfoDictionaryKey: "WHOOPSourceCommit") as? String,
             sourceCommit.range(of: "^[0-9a-fA-F]{40}$", options: .regularExpression) != nil
         else { return }
-        WhoopStore.shared.publishDeploymentHealthReport(sourceCommit: sourceCommit, force: force)
+        let explicitlyRequested = force || ProcessInfo.processInfo.environment["WHOOP_VERIFY_STORAGE"] == "1"
+        WhoopStore.shared.publishDeploymentHealthReport(sourceCommit: sourceCommit, force: explicitlyRequested)
     }
 
     static func publish(databaseURL: URL, sourceCommit: String, force: Bool = false) {
@@ -53,11 +54,9 @@ enum WhoopDeploymentHealthReporter {
         let archiveURL = directory.appendingPathComponent("whoop-official-archive.sqlite3")
         let reportURL = directory.appendingPathComponent(fileName)
         reportQueue.async {
-            if !force, let current = currentReport(at: reportURL),
-                current.sourceCommit == sourceCommit.lowercased(),
-                current.quickCheck == "ok",
-                current.foreignKeyViolations == 0
-            {
+            if canReuseReport(
+                currentReport(at: reportURL), schemaVersion: WhoopStore.expectedSchemaVersion, force: force
+            ) {
                 WhoopReplicaRecovery.finalizeIfHealthy(databaseURL: databaseURL)
                 return
             }
@@ -80,6 +79,17 @@ enum WhoopDeploymentHealthReporter {
                 }
             }
         }
+    }
+
+    /// A new app revision alone does not invalidate the stored format. Keep
+    /// the original attestation/source date; migrations, backfills and explicit
+    /// storage verification still request a full check.
+    static func canReuseReport(
+        _ report: WhoopDeploymentHealthReport?, schemaVersion: Int, force: Bool
+    ) -> Bool {
+        guard !force, let report else { return false }
+        return report.formatVersion == 1 && report.schemaVersion == schemaVersion
+            && report.quickCheck == "ok" && report.foreignKeyViolations == 0
     }
 
     static func makeReport(

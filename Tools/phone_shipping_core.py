@@ -463,7 +463,7 @@ def assert_database_rows_preserved(preinstall: BackupResult, postinstall: Backup
         raise ShippingError(f"Cannot compare pre/postinstall databases: {error}") from error
 
 
-def validate_hash_manifest(root: Path) -> dict[str, str]:
+def validate_hash_manifest(root: Path, *, verify_contents: bool = True) -> dict[str, str]:
     manifest_path = root / "SHA256SUMS.json"
     hashes = object_dict(load_json(manifest_path, "backup hash manifest"), "backup hash manifest")
     if not hashes:
@@ -478,7 +478,7 @@ def validate_hash_manifest(root: Path) -> dict[str, str]:
             candidate.relative_to(resolved_root)
         except ValueError as error:
             raise ShippingError("Backup hash manifest contains a path outside its root.") from error
-        if not candidate.is_file() or sha256(candidate) != raw_digest:
+        if not candidate.is_file() or (verify_contents and sha256(candidate) != raw_digest):
             raise ShippingError(f"Backup hash mismatch: {candidate}")
         verified[relative_name] = raw_digest
     return verified
@@ -504,7 +504,9 @@ def validate_backup_result(backup: BackupResult) -> None:
         raise IntegrityError("Backup contents no longer match the recorded validation result.")
 
 
-def validate_recent_backup(state: dict[str, object], maximum_age_days: int = 14) -> Path:
+def validate_recent_backup(
+    state: dict[str, object], maximum_age_days: int | None = 14, *, verify_contents: bool = True
+) -> Path:
     value = state.get("lastVerifiedBackup")
     description = "install state.lastVerifiedBackup"
     path_key = "path"
@@ -522,7 +524,9 @@ def validate_recent_backup(state: dict[str, object], maximum_age_days: int = 14)
         raise ShippingError("The recorded backup has an invalid verification time.") from error
     if verified.tzinfo is None:
         verified = verified.replace(tzinfo=UTC)
-    if datetime.now(UTC) - verified.astimezone(UTC) > timedelta(days=maximum_age_days):
+    if maximum_age_days is not None and datetime.now(UTC) - verified.astimezone(UTC) > timedelta(
+        days=maximum_age_days
+    ):
         raise ShippingError(
             f"The last verified backup is older than {maximum_age_days} days; "
             "use protected or migration verification."
@@ -537,7 +541,7 @@ def validate_recent_backup(state: dict[str, object], maximum_age_days: int = 14)
         key: required_string(recorded_hashes_value, key, "install state backup hash")
         for key in recorded_hashes_value
     }
-    verified_hashes = validate_hash_manifest(postinstall)
+    verified_hashes = validate_hash_manifest(postinstall, verify_contents=verify_contents)
     if recorded_hashes != verified_hashes:
         raise ShippingError("The recorded backup hashes do not match trusted install state.")
     if not any(name.endswith("sleep-standalone.sqlite3") for name in recorded_hashes):
@@ -555,6 +559,10 @@ def validate_recent_backup(state: dict[str, object], maximum_age_days: int = 14)
             f"Expected one standalone database in the recorded backup; found "
             f"{len(standalone_candidates)}."
         )
+    if not verify_contents:
+        # Retain the checkpoint's original verification date. Routine installs
+        # check its identity/existence; they do not rescan all historical bytes.
+        return postinstall
     schema, quick_check, foreign_keys, _ = sqlite_checks(standalone_candidates[0])
     recorded_schema = backup.get("schemaVersion")
     if quick_check != "ok" or foreign_keys != 0 or schema != recorded_schema:

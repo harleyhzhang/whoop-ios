@@ -111,6 +111,32 @@ final class WhoopDeploymentHealthReporterTests: XCTestCase {
                 databaseURL: current, archiveURL: archive, sourceCommit: String(repeating: "c", count: 40)))
     }
 
+    func testRoutineRevisionReusesFormatAttestationButExplicitCheckDoesNot() {
+        let report = WhoopDeploymentHealthReport(
+            formatVersion: 1, sourceCommit: String(repeating: "a", count: 40),
+            generatedAt: "2020-01-01T00:00:00Z", schemaVersion: 12,
+            quickCheck: "ok", foreignKeyViolations: 0, tableCounts: [:],
+            officialArchiveSHA256: String(repeating: "b", count: 64)
+        )
+        // Age/code revision are not reasons to rescan an append-only archive.
+        XCTAssertTrue(WhoopDeploymentHealthReporter.canReuseReport(report, schemaVersion: 12, force: false))
+        XCTAssertFalse(WhoopDeploymentHealthReporter.canReuseReport(report, schemaVersion: 12, force: true))
+        XCTAssertFalse(WhoopDeploymentHealthReporter.canReuseReport(report, schemaVersion: 13, force: false))
+        XCTAssertFalse(WhoopDeploymentHealthReporter.canReuseReport(nil, schemaVersion: 12, force: false))
+        XCTAssertEqual(report.sourceCommit, String(repeating: "a", count: 40))
+        XCTAssertEqual(report.generatedAt, "2020-01-01T00:00:00Z")
+    }
+
+    func testFailedPriorAttestationCannotSuppressVerification() {
+        let report = WhoopDeploymentHealthReport(
+            formatVersion: 1, sourceCommit: String(repeating: "a", count: 40),
+            generatedAt: "2020-01-01T00:00:00Z", schemaVersion: 12,
+            quickCheck: "corrupt", foreignKeyViolations: 1, tableCounts: [:],
+            officialArchiveSHA256: String(repeating: "b", count: 64)
+        )
+        XCTAssertFalse(WhoopDeploymentHealthReporter.canReuseReport(report, schemaVersion: 12, force: false))
+    }
+
     private func makeDatabase(at url: URL, schema: Int, rawPackets: Int) throws {
         var database: OpaquePointer?
         XCTAssertEqual(sqlite3_open(url.path, &database), SQLITE_OK)
