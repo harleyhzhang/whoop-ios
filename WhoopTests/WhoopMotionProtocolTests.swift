@@ -97,7 +97,7 @@ final class WhoopMotionProtocolTests: XCTestCase {
         var packet = WhoopTestFrameFactory.frame(length: 24, type: 36, version: 5)
         packet[10] = 147
         packet[11] = 3
-        packet[12] = 0
+        packet[12] = 1
         packet[13] = 1
         let seconds: UInt32 = 946_700_000
         for offset in 0..<4 { packet[14 + offset] = UInt8(truncatingIfNeeded: seconds >> (8 * offset)) }

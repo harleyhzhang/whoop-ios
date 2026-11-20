@@ -58,7 +58,7 @@ struct WhoopDeviceClock {
         }
         if reply.result == 2 { return nil }
         self.pending = nil
-        guard reply.result == 0, let deviceAt = reply.deviceClock else { return nil }
+        guard reply.result == 1, let deviceAt = reply.deviceClock else { return nil }
         let midpoint = pending.sentAt.addingTimeInterval(elapsed / 2)
         let offset = midpoint.timeIntervalSince(deviceAt)
         if deviceAt.timeIntervalSince1970 < 1_600_000_000,

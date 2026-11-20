@@ -5,7 +5,7 @@ import XCTest
 final class WhoopDeviceClockTests: XCTestCase {
     private let token = WhoopConnectionSession.Token(generation: 1, peripheralID: UUID())
     private let sent = Date(timeIntervalSince1970: 1_800_000_114)
-    private func reply(origin: UInt8 = 7, delay: Double = 0.04, result: UInt8 = 0) -> WhoopMotionProtocol.Reply {
+    private func reply(origin: UInt8 = 7, delay: Double = 0.04, result: UInt8 = 1) -> WhoopMotionProtocol.Reply {
         WhoopMotionProtocol.Reply(
             command: 147, origin: origin, result: result,
             receivedAt: sent.addingTimeInterval(delay), deviceClock: sent.addingTimeInterval(-114 + delay / 2))
@@ -106,7 +106,7 @@ final class WhoopDeviceClockTests: XCTestCase {
             var clock = WhoopDeviceClock()
             clock.requested(token: token, origin: scenario == 0 ? 8 : 7, at: sent, uptime: 100)
             let reading = WhoopMotionProtocol.Reply(
-                command: 147, origin: 7, result: scenario == 1 ? 1 : 0,
+                command: 147, origin: 7, result: scenario == 1 ? 0 : 1,
                 receivedAt: scenario == 2 ? sent.addingTimeInterval(2) : factory.receivedAt,
                 deviceClock: scenario == 3 ? sent.addingTimeInterval(2 * 86400) : factory.deviceClock)
             let connection =
@@ -123,7 +123,7 @@ final class WhoopDeviceClockTests: XCTestCase {
             let elapsed = attempt == 4 ? 3601.0 : Double(attempt) * 60
             let now = sent.addingTimeInterval(elapsed)
             let reading = WhoopMotionProtocol.Reply(
-                command: 147, origin: 7, result: 0, receivedAt: now.addingTimeInterval(0.04),
+                command: 147, origin: 7, result: 1, receivedAt: now.addingTimeInterval(0.04),
                 deviceClock: Date(timeIntervalSince1970: 946_700_000))
             clock.reset(token)
             clock.requested(token: token, origin: 7, at: now, uptime: 100 + elapsed)
