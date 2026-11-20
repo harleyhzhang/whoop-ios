@@ -24,6 +24,25 @@ storage census use the storage audit tools. `lifecycle-events.json` retains the
 last 128 foreground/background, Bluetooth, and sleep-publication events locally
 for investigating unattended gaps; it is not an OS termination log.
 
+## Routine update cost
+
+Routine runtime and presentation updates with unchanged storage/identity use
+in-place installation. They validate the existing off-phone checkpoint's small
+manifest and file existence, then verify the installed build, running process
+and database/WAL advancement. They do not copy or hash the full history, run a
+whole-database census, or reject an otherwise valid checkpoint just for its age.
+The checkpoint retains its original verification date; new observations remain
+on the phone until the next separate backup. This is not a fresh full backup.
+
+Persistence rewrites, restores, backfills, schema and identity changes retain
+the heavier tiers. Explicit `--backup-policy full-offphone` also requests the
+heavy tier. Full storage reports are forced by the protected/migration install
+path and backfills; routine launch reuses a healthy attestation for the same
+schema without relabelling it as a new code-revision attestation. Restores
+remove the cached report before validation. Routine append/read work must use
+indexed recent ranges, bounded batches or transactional counters rather than
+scans proportional to lifetime history.
+
 ## Physical-phone shipping
 
 From a clean worktree at the exact merged `origin/main` commit, run:
@@ -70,7 +89,7 @@ existing full-copy preservation path. The old off-phone checkpoint is retained
 and its coverage time is not advanced by the local-only route. Physical USB is
 optional; both modes support wireless.
 
-The workflow restarts an existing collector without foreground activation in
+For a full snapshot, the workflow restarts an existing collector without foreground activation in
 Apple's start-stopped state before app code runs. This avoids pausing pending
 scene callbacks, whose watchdog could restart a writer during copying.
 An LLDB attachment holds that development-signed process stopped for the whole

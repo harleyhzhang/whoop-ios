@@ -71,7 +71,7 @@ git commit -qam dashboard_chart_state_ui
 dashboard_chart_state_ui_commit=$(git rev-parse HEAD)
 assert_mode fast --base "$dashboard_components_ui_commit" --head "$dashboard_chart_state_ui_commit"
 
-printf '// SQLite schema migration\n' >> WhoopApp/DashboardChartState.swift
+printf 'let sql = "ALTER TABLE examples ADD COLUMN value TEXT"\n' >> WhoopApp/DashboardChartState.swift
 git commit -qam risky_dashboard_chart_state
 risky_dashboard_chart_state_commit=$(git rev-parse HEAD)
 assert_mode migration --base "$dashboard_chart_state_ui_commit" --head "$risky_dashboard_chart_state_commit"
@@ -85,7 +85,7 @@ git commit -qam trend_support_ui
 trend_support_ui_commit=$(git rev-parse HEAD)
 assert_mode fast --base "$dashboard_chart_state_restored_commit" --head "$trend_support_ui_commit"
 
-printf '// SQLite schema migration\n' >> WhoopApp/TrendSupport.swift
+printf 'let sql = "ALTER TABLE examples ADD COLUMN value TEXT"\n' >> WhoopApp/TrendSupport.swift
 git commit -qam risky_trend_support
 risky_trend_support_commit=$(git rev-parse HEAD)
 assert_mode migration --base "$trend_support_ui_commit" --head "$risky_trend_support_commit"
@@ -94,12 +94,12 @@ sed -i '' '$d' WhoopApp/TrendSupport.swift
 git commit -qam restore_trend_support
 trend_support_restored_commit=$(git rev-parse HEAD)
 
-printf '// SQLite schema migration\n' >> WhoopApp/DashboardComponents.swift
+printf 'let sql = "ALTER TABLE examples ADD COLUMN value TEXT"\n' >> WhoopApp/DashboardComponents.swift
 git commit -qam risky_dashboard_components
 risky_dashboard_components_commit=$(git rev-parse HEAD)
 assert_mode migration --base "$trend_support_restored_commit" --head "$risky_dashboard_components_commit"
 
-printf '// schema migration\n' >> WhoopApp/RootView.swift
+printf 'let sql = "ALTER TABLE examples ADD COLUMN value TEXT"\n' >> WhoopApp/RootView.swift
 git commit -qam risky_ui
 risky_ui_commit=$(git rev-parse HEAD)
 assert_mode migration --base "$risky_dashboard_components_commit" --head "$risky_ui_commit"
@@ -119,7 +119,7 @@ assert_mode fast --base "$storage_commit" --head "$dashboard_presentation_commit
 printf '// bluetooth lifecycle\n' >> WhoopKit/WhoopCollector.swift
 git commit -qam bluetooth
 bluetooth_commit=$(git rev-parse HEAD)
-assert_mode protected --base "$dashboard_presentation_commit" --head "$bluetooth_commit"
+assert_mode routine --base "$dashboard_presentation_commit" --head "$bluetooth_commit"
 
 sed -i '' 's/schemaVersion/currentSchemaVersion/' WhoopKit/WhoopStore.swift
 printf 'struct HealthReporter { let sql = "PRAGMA user_version" }\n' > WhoopKit/WhoopDeploymentHealthReporter.swift
@@ -151,5 +151,21 @@ build_identity_commit=$(git rev-parse HEAD)
 assert_mode migration --base "$schema_version_change_commit" --head "$build_identity_commit"
 
 assert_mode migration --head "$build_identity_commit"
+
+
+backfill_base=$(git rev-parse HEAD)
+printf 'func rewrite() { let sql = "DELETE FROM whoop_historical_sample" }\n' > WhoopKit/WhoopStore+Backfill.swift
+git add WhoopKit/WhoopStore+Backfill.swift
+git commit -qm same_schema_backfill
+backfill_commit=$(git rev-parse HEAD)
+assert_mode protected --base "$backfill_base" --head "$backfill_commit"
+
+routine_base=$(git rev-parse HEAD)
+printf '// schema discussion, no storage mutation\n' >> WhoopApp/RootView.swift
+printf 'settings:\n  CURRENT_PROJECT_VERSION: 99\n' > project.yml
+git add WhoopApp/RootView.swift project.yml
+git commit -qm routine_build_revision
+routine_build_commit=$(git rev-parse HEAD)
+assert_mode routine --base "$routine_base" --head "$routine_build_commit"
 
 echo "Phone install policy tests passed."

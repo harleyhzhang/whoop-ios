@@ -108,23 +108,9 @@ non_presentation_files=$(printf '%s\n' "$production_files" | awk '
   { print }
 ')
 
-# These views are normally presentation-only, but fail closed if a future edit
-# puts persistence, migration, destructive SQL, or bundle-identity mechanics
-# in either component.
-if git diff -U0 "$base_commit..$head_commit" -- \
-  WhoopApp/RootView.swift WhoopApp/DashboardComponents.swift WhoopApp/DashboardHeader.swift \
-  WhoopApp/DashboardChartState.swift WhoopApp/DashboardChartGeometry.swift \
-  WhoopApp/MetricTrendCard.swift WhoopApp/TrendSupport.swift | \
-  grep -E '^[+-]' | grep -Ev '^(\+\+\+|---)' | \
-  grep -Eiq 'SQLite|WhoopStore|schema|migrat|DELETE[[:space:]]+FROM|DROP[[:space:]]+TABLE|bundleIdentifier|FileManager.*remove'; then
-  printf 'mode=migration\nbase=%s\nhead=%s\nreason=risk-sensitive storage or identity code appeared in a presentation component\n' \
-    "$base_commit" "$head_commit"
-  exit 0
-fi
-
 # Generated project churn follows source additions and is verified separately.
 # Escalate only source-of-truth build settings or explicit data-format mechanics.
-if printf '%s\n' "$production_files" | grep -Eq '^project\.yml$|\.entitlements$'; then
+if printf '%s\n' "$production_files" | grep -Eq '\.entitlements$'; then
   printf 'mode=migration\nbase=%s\nhead=%s\nreason=build identity, signing, capability, or entitlement contract changed\nfiles=%s\n' \
     "$base_commit" "$head_commit" "$(printf '%s' "$production_files" | tr '\n' ',')"
   exit 0
@@ -163,9 +149,23 @@ if git diff -U0 "$base_commit..$head_commit" -- WhoopApp WhoopKit project.yml | 
   exit 0
 fi
 
+# A schema can stay the same while old data is rewritten. These changes
+# retain the heavier path even when introduced outside a storage-named file.
+if git diff -U0 "$base_commit..$head_commit" -- WhoopApp WhoopKit | \
+  grep -E '^\+' | grep -Ev '^\+\+\+' | \
+  grep -Eiq 'DELETE[[:space:]]+FROM|UPDATE[[:space:]]+[A-Za-z_]+[[:space:]]+SET|VACUUM|sqlite3_exec|FileManager.*remove'; then
+  printf 'mode=protected\nbase=%s\nhead=%s\nreason=existing-data rewrite mechanics changed\n' "$base_commit" "$head_commit"
+  exit 0
+fi
+
 if [ -n "$non_presentation_files" ]; then
-  printf 'mode=protected\nbase=%s\nhead=%s\nreason=runtime or storage implementation changed without a schema or identity migration\nfiles=%s\n' \
-    "$base_commit" "$head_commit" "$(printf '%s' "$non_presentation_files" | tr '\n' ',')"
+  if printf '%s\n' "$non_presentation_files" | grep -Eq '^WhoopKit/WhoopStore|^WhoopKit/WhoopReplicaRecovery|[Mm]igrat|[Bb]ackfill|^WhoopApp/SleepModels'; then
+    printf 'mode=protected\nbase=%s\nhead=%s\nreason=persistence, restore, or backfill implementation changed\nfiles=%s\n' \
+      "$base_commit" "$head_commit" "$(printf '%s' "$non_presentation_files" | tr '\n' ',')"
+  else
+    printf 'mode=routine\nbase=%s\nhead=%s\nreason=runtime update with unchanged storage and identity\nfiles=%s\n' \
+      "$base_commit" "$head_commit" "$(printf '%s' "$non_presentation_files" | tr '\n' ',')"
+  fi
   exit 0
 fi
 

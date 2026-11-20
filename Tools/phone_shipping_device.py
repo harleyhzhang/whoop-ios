@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -333,6 +334,8 @@ def launch_and_verify(
     device: Device,
     before_stamps: dict[str, FileStamp],
     manifest_path: Path,
+    *,
+    force_storage_verification: bool = False,
 ) -> int:
     if device_is_locked(runner, scratch, device) is True:
         raise ResumeRequired(
@@ -340,11 +343,10 @@ def launch_and_verify(
             "The app is installed safely, but the iPhone must be unlocked before launch.",
             manifest_path,
         )
-    _, launch = runner.devicectl_json(
-        background_launch_arguments(device),
-        scratch,
-        check=False,
-    )
+    arguments = background_launch_arguments(device)
+    if force_storage_verification:
+        arguments[-3:-3] = ["--environment-variables", json.dumps({"WHOOP_VERIFY_STORAGE": "1"})]
+    _, launch = runner.devicectl_json(arguments, scratch, check=False)
     if launch.returncode != 0:
         diagnostics = f"{launch.stdout}\n{launch.stderr}".lower()
         if "lock" in diagnostics or device_is_locked(runner, scratch, device) is True:

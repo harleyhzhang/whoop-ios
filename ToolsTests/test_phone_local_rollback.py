@@ -206,7 +206,7 @@ def test_policy_is_opt_in_and_local_route_never_takes_full_copy(
         assets=SimpleNamespace(hashes={"whoop-official-archive.sqlite3": "b" * 64}),
     )
     monkeypatch.setattr(phone_shipping, "installed_app", lambda *_args: app)
-    monkeypatch.setattr(phone_shipping, "launch_and_verify", lambda *_args: 123)
+    monkeypatch.setattr(phone_shipping, "launch_and_verify", lambda *_args, **_kwargs: 123)
     monkeypatch.setattr(phone_shipping, "fetch_deployment_health_report", lambda *_args: report())
     monkeypatch.setattr(phone_shipping, "project_schema_version", lambda *_args: 12)
     monkeypatch.setattr(phone_shipping, "read_state", lambda *_args: {})

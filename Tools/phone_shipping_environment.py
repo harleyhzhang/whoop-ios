@@ -35,11 +35,13 @@ from whoop_config import setting
 
 MINIMUM_FREE_BYTES = {
     "fast": 3 * 1024**3,
+    "routine": 3 * 1024**3,
     "protected": 5 * 1024**3,
     "migration": 8 * 1024**3,
 }
 MINIMUM_DEVICE_FREE_BYTES = {
     "fast": 512 * 1024**2,
+    "routine": 512 * 1024**2,
     "protected": 1024**3,
     "migration": 2 * 1024**3,
 }
@@ -242,7 +244,7 @@ def classify_install(
         key, separator, value = line.partition("=")
         if separator:
             result[key] = value
-    if result.get("mode") not in {"none", "fast", "protected", "migration"}:
+    if result.get("mode") not in {"none", "fast", "routine", "protected", "migration"}:
         raise ShippingError("The phone install classifier returned no valid mode.")
     return result
 
@@ -459,8 +461,8 @@ def doctor(
             f"Only {device_available_bytes / 1024**3:.1f} GiB is free on the iPhone; "
             f"{mode} shipping requires at least {required_device_bytes / 1024**3:.1f} GiB."
         )
-    if mode == "fast":
-        validate_recent_backup(state)
+    if mode in {"fast", "routine"}:
+        validate_recent_backup(state, maximum_age_days=None, verify_contents=False)
     development_team = project_development_team(repo_root)
     profile = discover_signing_profile(runner, device, development_team)
     return DoctorResult(
