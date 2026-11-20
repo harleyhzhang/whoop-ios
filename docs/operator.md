@@ -84,8 +84,8 @@ uninstalls. Policy is bound into the manifest and printed resume command.
 phone until a later external/replica refresh. Device loss or storage failure can
 lose those newer observations. This is not a fresh off-phone snapshot or an
 exact row-by-row host comparison. Choose it only with the operator's explicit
-acceptance of that coverage difference. Default `full-offphone` retains the
-existing full-copy preservation path. The old off-phone checkpoint is retained
+acceptance of that coverage difference. Protected/migration default
+`full-offphone` retains the full-copy preservation path. The old off-phone checkpoint is retained
 and its coverage time is not advanced by the local-only route. Physical USB is
 optional; both modes support wireless.
 
@@ -155,3 +155,18 @@ unless persistence is backpressured. It retains raw evidence and never
 acknowledges uncommitted history or relaxes sleep-completion gates. Returning
 to the foreground also resumes a missing/disconnected link before requesting
 history. None of this can reconstruct samples the band never recorded.
+
+Factory-reset RTC recovery is separate from Bluetooth reconnects: some firmware
+continues live HR and completes empty offloads while refusing to save samples
+to flash with an invalid date. A CRC-valid, request-correlated GET_CLOCK(147)
+reply from the current connection can identify a pre-2020 clock. It never
+becomes a time reference. With a plausible phone date, the next keepalive sends
+WHOOP 5 SET_CLOCK(146), revision 1, little-endian u32 UTC seconds and u16
+1/32768-second ticks. Readback must agree within two seconds before recovery is
+reported; a BLE write acknowledgement alone is insufficient. Initialization is
+limited to three attempts per hour, at least one minute apart, including across
+reconnects. Ordinary drift and a future-dated clock do not authorize this repair.
+After verified initialization, history retries every 90 seconds until a recent
+durable sample arrives. Raw stored timestamps and completion gates stay intact.
+Bounded lifecycle events distinguish initialization requested from readback
+verified. Reference wire contract: [WHOOP 5 clock commands](https://docs.rs/poop/latest/poop/protocol/enum.Command.html#variant.SetClock).

@@ -639,16 +639,20 @@ state file.
 - `fast` is restricted to presentation-only changes in `RootView.swift`,
   `DashboardComponents.swift`, `DashboardHeader.swift`,
   `DashboardChartGeometry.swift`, `MetricTrendCard.swift`, or the asset catalog.
-  Reuse a recent integrity-checked compact backup, install in place,
+  Retain the existing verified off-phone checkpoint, install in place,
   launch, confirm the process remains alive, and confirm the database or WAL
   modification time advances. Do not copy the complete database before or after
   this tier.
-- `protected` covers runtime, model, collector, lifecycle, and storage
-  implementation changes with no data-format or identity mechanics. It takes a
-  preinstall restore point, installs over Wi-Fi or USB, then verifies the app's
-  post-launch health report instead of copying the database back again.
+- `routine` covers runtime/model/collector/lifecycle updates with unchanged
+  storage and identity. Like `fast`, it checks checkpoint metadata and file
+  existence without rehashing old bytes or requiring a new full copy. Backup
+  dates stay unchanged; newer observations remain on the phone.
+- `protected` covers persistence, restore, backfill and existing-data rewrite
+  mechanics without a schema/identity change. Its full-offphone path creates
+  coherent pre/post restore points and checks preserved evidence.
 - `migration` covers schema SQL/versioning, app identity, signing,
-  entitlements, project configuration, divergence, and unclassified changes.
+  entitlements, and unclassified changes. Routine generated-project and build
+  version churn alone does not require migration protection.
   It supports Wi-Fi and USB with coherent compact pre/post snapshots plus exact
   raw evidence-row comparison. Free iPhone storage must be measurable through
   the paired device's USB or network disk-usage service before installation.

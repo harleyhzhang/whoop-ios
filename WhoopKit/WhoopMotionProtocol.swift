@@ -40,7 +40,9 @@ enum WhoopMotionProtocol {
                 let seconds =
                     UInt32(bytes[14]) | UInt32(bytes[15]) << 8 | UInt32(bytes[16]) << 16 | UInt32(bytes[17]) << 24
                 let fraction = unsigned16(bytes, at: 18)
-                if seconds > 1_700_000_000, fraction <= 32440 {
+                // Preserve an intact factory-epoch reading for recovery. It
+                // must still pass the separate reference-confidence policy.
+                if fraction < 32768 {
                     reply.deviceClock = Date(timeIntervalSince1970: Double(seconds) + Double(fraction) / 32768)
                 }
             }

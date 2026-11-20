@@ -1,7 +1,7 @@
 import Foundation
 
-/// A read-only reference for this exact Bluetooth connection. Raw timestamps
-/// are never changed. The bounds express reference confidence, not clock repair.
+/// A correlated reference for this exact Bluetooth connection. Factory-epoch
+/// reads can authorize bounded initialization; raw stored timestamps never change.
 struct WhoopDeviceClock {
     struct Reference: Codable, Sendable {
         let id: UUID
@@ -27,6 +27,8 @@ struct WhoopDeviceClock {
     private(set) var reference: Reference?
     private var token: WhoopConnectionSession.Token?
     private var lastEventAt: Date?
+    private(set) var needsInitialization = false
+    private var initializationAttempts: [TimeInterval] = []
     static let maximumReferenceAge: TimeInterval = 300
 
     mutating func reset(_ token: WhoopConnectionSession.Token?) {
@@ -34,9 +36,11 @@ struct WhoopDeviceClock {
         pending = nil
         reference = nil
         lastEventAt = nil
+        needsInitialization = false
     }
     mutating func requested(token: WhoopConnectionSession.Token, origin: UInt8, at: Date, uptime: TimeInterval) {
         if self.token != token { reset(token) }
+        needsInitialization = false
         pending = Pending(token: token, origin: origin, sentAt: at, uptime: uptime)
     }
     mutating func receive(
@@ -54,10 +58,18 @@ struct WhoopDeviceClock {
         }
         if reply.result == 2 { return nil }
         self.pending = nil
-        guard reply.result == 0, let deviceAt = reply.deviceClock else { return nil }
+        guard reply.result == 1, let deviceAt = reply.deviceClock else { return nil }
         let midpoint = pending.sentAt.addingTimeInterval(elapsed / 2)
         let offset = midpoint.timeIntervalSince(deviceAt)
+        if deviceAt.timeIntervalSince1970 < 1_600_000_000,
+            midpoint.timeIntervalSince1970 >= 1_700_000_000
+        {
+            reference = nil
+            needsInitialization = true
+            return nil
+        }
         guard abs(offset) <= 24 * 3600 else { return nil }
+        needsInitialization = false
         let accepted = Reference(
             id: UUID(), peripheralID: token.peripheralID, generation: token.generation,
             origin: reply.origin, sentAt: pending.sentAt, receivedAt: reply.receivedAt, deviceAt: deviceAt,
@@ -65,6 +77,22 @@ struct WhoopDeviceClock {
             uncertaintySeconds: elapsed / 2 + 1.0 / 32768, sourceSHA256: sourceSHA256)
         reference = accepted
         return accepted
+    }
+
+    mutating func initializationCommand(now: Date, uptime: TimeInterval) -> WhoopCommand? {
+        let seconds = now.timeIntervalSince1970
+        guard needsInitialization, seconds.isFinite,
+            (1_700_000_000..<4_000_000_000).contains(seconds), uptime.isFinite
+        else { return nil }
+        initializationAttempts.removeAll { uptime - $0 >= 3600 }
+        guard initializationAttempts.count < 3,
+            initializationAttempts.last.map({ uptime - $0 >= 60 }) ?? true
+        else { return nil }
+        initializationAttempts.append(uptime)
+        needsInitialization = false
+        let whole = seconds.rounded(.down)
+        return .initializeDeviceClock(
+            seconds: UInt32(whole), subseconds: UInt16((seconds - whole) * 32768))
     }
     mutating func wristState(
         packet: Data, token: WhoopConnectionSession.Token, receivedAt: Date,
