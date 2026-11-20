@@ -51,6 +51,7 @@ struct WhoopHistoricalMetadata: Equatable {
 enum WhoopCommand: Equatable {
     case clientHello
     case readDeviceClock
+    case initializeDeviceClock(seconds: UInt32, subseconds: UInt16)
     case stopRawMotion
     case disableLiveIMU
     case requestHistory
@@ -62,6 +63,7 @@ enum WhoopCommand: Equatable {
         switch self {
         case .clientHello: 0x91
         case .readDeviceClock: 147
+        case .initializeDeviceClock: 146
         case .stopRawMotion: 82
         case .disableLiveIMU: 106
         case .requestHistory: 22
@@ -74,6 +76,10 @@ enum WhoopCommand: Equatable {
     var payload: [UInt8] {
         switch self {
         case .clientHello, .stopRawMotion, .readDeviceClock: [0x01]
+        case .initializeDeviceClock(let seconds, let subseconds):
+            [0x01]
+                + (0..<4).map { UInt8(truncatingIfNeeded: seconds >> ($0 * 8)) }
+                + [UInt8(truncatingIfNeeded: subseconds), UInt8(truncatingIfNeeded: subseconds >> 8)]
         case .disableLiveIMU: [0x01, 0x00]
         case .requestHistory: [0x00]
         case .acknowledgeHistoryChunk(let endData): [0x01] + endData

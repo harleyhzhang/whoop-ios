@@ -266,6 +266,7 @@ final class WhoopCollector: NSObject {
             WhoopNotificationManager.shared.observeWristState(isWorn: isWorn)
             record("Wrist state: \(isWorn ? "on" : "off")")
         }
+        if let delay = deviceClock.consumeRecoveryHistoryDelay() { scheduleHistoricalSync(after: delay) }
         replicaScheduler?.requestSync(reason: .dataChanged)
         let belongsToCurrentOffload =
             summary.offloadSessionID == nil
@@ -330,7 +331,7 @@ final class WhoopCollector: NSObject {
         historicalWatchdogTask?.cancel()
         historicalWatchdogTask = nil
         refreshSleepSnapshot(force: true, allowAutomaticFinalization: true)
-        scheduleHistoricalSync()
+        scheduleHistoricalSync(after: deviceClock.historyRefreshDelay)
     }
 
     func startScan() {

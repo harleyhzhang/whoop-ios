@@ -77,4 +77,65 @@ final class WhoopDeviceClockTests: XCTestCase {
         clock.requested(token: token, origin: 8, at: sent, uptime: 100)
         XCTAssertNil(clock.receive(reply(), token: token, uptime: 100.04, sourceSHA256: "superseded"))
     }
+
+    func testFactoryEpochAuthorizesInitializationButNeverBecomesAReference() throws {
+        var clock = WhoopDeviceClock()
+        var factory = reply()
+        factory.deviceClock = Date(timeIntervalSince1970: 946_700_000)
+        clock.requested(token: token, origin: 7, at: sent, uptime: 100)
+        XCTAssertNil(clock.receive(factory, token: token, uptime: 100.04, sourceSHA256: "factory"))
+        XCTAssertNil(clock.reference)
+        XCTAssertTrue(clock.needsInitialization)
+        let command = try XCTUnwrap(clock.initializationCommand(now: sent.addingTimeInterval(0.25), uptime: 100.05))
+        XCTAssertEqual(command.opcode, 146)
+        XCTAssertEqual(command.payload.count, 7)
+        XCTAssertEqual(command.payload.first, 1)
+        XCTAssertTrue(WhoopFrameIntegrity.isValid(command.frame(sequence: 8)))
+        XCTAssertNil(clock.initializationCommand(now: sent, uptime: 100.06))
+
+        clock.requested(token: token, origin: 7, at: sent, uptime: 101)
+        XCTAssertNotNil(clock.receive(reply(), token: token, uptime: 101.04, sourceSHA256: "healthy"))
+        XCTAssertFalse(clock.needsInitialization)
+        XCTAssertNil(clock.initializationCommand(now: sent, uptime: 200))
+    }
+
+    func testOnlyCorrelatedFreshFactoryReadCanAuthorizeInitialization() {
+        var factory = reply()
+        factory.deviceClock = Date(timeIntervalSince1970: 946_700_000)
+        for scenario in 0..<5 {
+            var clock = WhoopDeviceClock()
+            clock.requested(token: token, origin: scenario == 0 ? 8 : 7, at: sent, uptime: 100)
+            let reading = WhoopMotionProtocol.Reply(
+                command: 147, origin: 7, result: scenario == 1 ? 1 : 0,
+                receivedAt: scenario == 2 ? sent.addingTimeInterval(2) : factory.receivedAt,
+                deviceClock: scenario == 3 ? sent.addingTimeInterval(2 * 86400) : factory.deviceClock)
+            let connection =
+                scenario == 4 ? WhoopConnectionSession.Token(generation: 2, peripheralID: token.peripheralID) : token
+            XCTAssertNil(clock.receive(reading, token: connection, uptime: 100.04, sourceSHA256: "rejected"))
+            XCTAssertFalse(clock.needsInitialization)
+            XCTAssertNil(clock.initializationCommand(now: sent, uptime: 101))
+        }
+    }
+
+    func testInitializationAttemptsAreBoundedAcrossReconnectsAndExpire() {
+        var clock = WhoopDeviceClock()
+        for attempt in 0..<5 {
+            let elapsed = attempt == 4 ? 3601.0 : Double(attempt) * 60
+            let now = sent.addingTimeInterval(elapsed)
+            let reading = WhoopMotionProtocol.Reply(
+                command: 147, origin: 7, result: 0, receivedAt: now.addingTimeInterval(0.04),
+                deviceClock: Date(timeIntervalSince1970: 946_700_000))
+            clock.reset(token)
+            clock.requested(token: token, origin: 7, at: now, uptime: 100 + elapsed)
+            XCTAssertNil(clock.receive(reading, token: token, uptime: 100.04 + elapsed, sourceSHA256: "factory"))
+            let command = clock.initializationCommand(now: now, uptime: 100.05 + elapsed)
+            XCTAssertEqual(command != nil, attempt != 3)
+        }
+    }
+
+    func testClockInitializationWirePayloadUsesRevisionSecondsAndSubsecondTicks() {
+        let command = WhoopCommand.initializeDeviceClock(seconds: 0x6B12_3456, subseconds: 0x1234)
+        XCTAssertEqual(command.opcode, 146)
+        XCTAssertEqual(command.payload, [1, 0x56, 0x34, 0x12, 0x6B, 0x34, 0x12])
+    }
 }

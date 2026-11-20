@@ -93,4 +93,28 @@ final class WhoopMotionProtocolTests: XCTestCase {
         XCTAssertEqual(reply.deviceClock, Date(timeIntervalSince1970: 1_800_000_000))
     }
 
+    func testFactoryClockReadingSurvivesDecodeForRecoveryWithFullSubsecondRange() {
+        var packet = WhoopTestFrameFactory.frame(length: 24, type: 36, version: 5)
+        packet[10] = 147
+        packet[11] = 3
+        packet[12] = 0
+        packet[13] = 1
+        let seconds: UInt32 = 946_700_000
+        for offset in 0..<4 { packet[14 + offset] = UInt8(truncatingIfNeeded: seconds >> (8 * offset)) }
+        packet[18] = 0xFF
+        packet[19] = 0x7F
+        WhoopTestFrameFactory.finishChecksums(&packet)
+        guard case .reply(let reply) = WhoopMotionProtocol.event(envelope(packet)) else {
+            return XCTFail("Factory clock reply")
+        }
+        XCTAssertEqual(
+            reply.deviceClock?.timeIntervalSince1970 ?? 0, Double(seconds) + 32767.0 / 32768, accuracy: 0.0001)
+        packet[19] = 0x80
+        WhoopTestFrameFactory.finishChecksums(&packet)
+        guard case .reply(let malformed) = WhoopMotionProtocol.event(envelope(packet)) else {
+            return XCTFail("Malformed clock reply")
+        }
+        XCTAssertNil(malformed.deviceClock)
+    }
+
 }
