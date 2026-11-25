@@ -31,6 +31,11 @@ final class WhoopDiagnosticsReader: @unchecked Sendable {
                 } catch {
                     WhoopStore.logger.error("Diagnostic read failed: \(error.localizedDescription, privacy: .public)")
                 }
+                do {
+                    try Self.writeDailyExport(at: url, now: now)
+                } catch {
+                    WhoopStore.logger.error("Daily export failed: \(error.localizedDescription, privacy: .public)")
+                }
             }
         }
     }
@@ -44,7 +49,23 @@ final class WhoopDiagnosticsReader: @unchecked Sendable {
         return request
     }
 
+    /// Month chunks for the Mac's read-only memory pull, from the same kind of
+    /// read-only snapshot connection as the report.
+    static func writeDailyExport(at url: URL, now: Date) throws {
+        _ = try withReadSnapshot(at: url) { handle in
+            try WhoopDailyExport(database: handle).write(besideDatabaseAt: url, now: now)
+        }
+    }
+
     static func read(at url: URL, now: Date) throws -> WhoopSleepDiagnostics {
+        try withReadSnapshot(at: url) { handle in
+            try WhoopSleepDiagnosticsBuilder(database: handle).build(now: now)
+        }
+    }
+
+    private static func withReadSnapshot<Value>(at url: URL, _ body: (OpaquePointer) throws -> Value) throws
+        -> Value
+    {
         var handle: OpaquePointer?
         let result = sqlite3_open_v2(url.path, &handle, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nil)
         guard result == SQLITE_OK, let handle else {
@@ -57,6 +78,6 @@ final class WhoopDiagnosticsReader: @unchecked Sendable {
             throw WhoopStorageFailure.sqlite(operation: .read, database: handle, resultCode: sqlite3_errcode(handle))
         }
         defer { sqlite3_exec(handle, "ROLLBACK", nil, nil, nil) }
-        return try WhoopSleepDiagnosticsBuilder(database: handle).build(now: now)
+        return try body(handle)
     }
 }
