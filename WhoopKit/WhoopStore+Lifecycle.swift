@@ -195,6 +195,9 @@ extension WhoopStore {
             database = nil
             return .failure(failure)
         }
+        if !WhoopChunkBackup.ensureTracking(database: openedDatabase) {
+            Self.logger.error("Chunk backup tracking unavailable; collection continues")
+        }
         if let versionBeforeMigration,
             versionBeforeMigration > 0,
             versionBeforeMigration < targetSchemaVersion

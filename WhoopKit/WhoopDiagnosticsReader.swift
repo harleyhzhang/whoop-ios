@@ -36,6 +36,11 @@ final class WhoopDiagnosticsReader: @unchecked Sendable {
                 } catch {
                     WhoopStore.logger.error("Daily export failed: \(error.localizedDescription, privacy: .public)")
                 }
+                do {
+                    try WhoopChunkBackup.runPass(databaseURL: url, now: now)
+                } catch {
+                    WhoopStore.logger.error("Chunk backup failed: \(error.localizedDescription, privacy: .public)")
+                }
             }
         }
     }

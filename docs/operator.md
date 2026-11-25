@@ -23,7 +23,22 @@ never performs metric derivation. The same pass writes
 for the Mac's read-only memory pull, which copies only chunks whose size or
 date changed instead of the multi-gigabyte database (Wi-Fi copies of the full
 file stall). Only months with rows from the last 40 days, or with no file yet,
-are re-read; unchanged chunks are not rewritten. Its raw-packet census field is omitted;
+are re-read; unchanged chunks are not rewritten.
+
+## Progressive chunk backup
+
+Every rowid table is also backed up progressively to `backup/` beside the
+database: one `<table>/<chunk>.sqlite3` per 65,536-row rowid range plus
+`manifest.json`. Triggers bump a per-chunk version on every insert, update and
+delete, so each pass (after the diagnostics report, 15-second budget, newest
+chunks first) rewrites only chunks that changed and never rescans or rehashes
+history. The first backfill trickles over several passes; `pending` in the
+manifest counts what is left. On the Mac,
+`Tools/phone_chunk_backup.py pull --device <id>` copies only changed chunks
+over Wi-Fi and `restore <out.sqlite3>` rebuilds a database with per-table row
+checks. Migrations that rebuild a table drop its triggers; the next launch
+re-adds them and marks that table's chunks changed from its maximum rowid
+(no row scan). Its raw-packet census field is omitted;
 `historicalSampleTotal` comes from transactional revision counts. For a full
 storage census use the storage audit tools. `lifecycle-events.json` retains the
 last 128 foreground/background, Bluetooth, and sleep-publication events locally
