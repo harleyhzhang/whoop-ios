@@ -69,6 +69,33 @@ final class WhoopChunkBackupTests: XCTestCase {
         XCTAssertNil(manifest.tables[WhoopChunkBackup.trackingTable])
     }
 
+    func testSmallTablesAreNotStarvedByLargeOnes() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let url = directory.appendingPathComponent("sleep.sqlite3")
+        let store = WhoopStore(databaseURL: url, runBackgroundDecoding: false)
+        defer {
+            store.shutdownForTesting()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        try insertDays(url, ["2026-11-01"])
+        // A large table whose newest chunk number is far above every small table's.
+        try exec(
+            url,
+            """
+            INSERT INTO whoop_time_zone_observation(rowid, observed_at, time_zone_identifier, utc_offset_seconds)
+            VALUES (\(5 << WhoopChunkBackup.chunkShift), 123456, 'UTC', 0)
+            """)
+        let pass = try WhoopChunkBackup.runPass(
+            databaseURL: url, now: Date(timeIntervalSince1970: 1_800_000_000), budget: 0)
+        // Budget 0 still writes one chunk per pass; the next ones are each table's newest.
+        XCTAssertEqual(pass.written.count, 1)
+        let second = try WhoopChunkBackup.runPass(
+            databaseURL: url, now: Date(timeIntervalSince1970: 1_800_000_000), budget: 0)
+        XCTAssertEqual(
+            Set(pass.written + second.written),
+            ["daily_health_metric/0", "whoop_time_zone_observation/5"])
+    }
+
     func testTrackingIsIdempotentAndMarksExistingRowsOnce() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let url = directory.appendingPathComponent("sleep.sqlite3")

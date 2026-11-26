@@ -142,8 +142,17 @@ enum WhoopChunkBackup {
             manifest.chunks[key]?.version != version
                 || !fileManager.fileExists(atPath: directory.appendingPathComponent(key + ".sqlite3").path)
         }.map(\.key)
-        // Newest data first: a long first backfill never delays today's rows.
-        dirty.sort { chunkNumber($0) > chunkNumber($1) || (chunkNumber($0) == chunkNumber($1) && $0 < $1) }
+        // Each table's newest chunk first, round-robin across tables: small
+        // tables and today's rows land in the first pass, old history trickles.
+        var newest: [String: Int64] = [:]
+        for key in versions.keys {
+            let table = String(key.split(separator: "/").first ?? "")
+            newest[table] = max(newest[table] ?? 0, chunkNumber(key))
+        }
+        func age(_ key: String) -> Int64 {
+            (newest[String(key.split(separator: "/").first ?? "")] ?? 0) - chunkNumber(key)
+        }
+        dirty.sort { age($0) < age($1) || (age($0) == age($1) && $0 < $1) }
 
         var written: [String] = []
         for key in dirty {
