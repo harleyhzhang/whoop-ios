@@ -15,8 +15,9 @@ R18 motion summaries at or above 0.3 in a minute reset the still stretch;
 this raw-summary threshold is a heuristic, not calibrated exercise or posture
 recognition. Movement does not have to produce steps.
 
-Any asleep sample suppresses nudges for ninety minutes. Ambiguous `up` and
-alternate-awake minutes do not earn still time. A current explicitly awake
+Any asleep sample suppresses nudges for ninety minutes. Minutes need 45
+explicitly awake observations; a current ambiguous `up` or alternate-awake
+sample never permits delivery. A current explicitly awake
 sample must be no older than five minutes, with a live heart-rate receipt
 within sixty seconds and no explicit off-wrist indication. The app's sleep
 state separately vetoes delivery. Cold starts and reconnects start a new

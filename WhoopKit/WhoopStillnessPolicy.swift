@@ -71,7 +71,7 @@ struct WhoopStillnessPolicy {
 
     mutating func takeNudge(_ context: Context) -> Bool {
         guard context.now.isFinite, context.connected, context.worn, !context.sleeping,
-            (10..<22).contains(context.localHour), !nudged,
+            (10..<22).contains(context.localHour), !nudged, movingCount < 20,
             let latest, latest.sleepState == 0,
             (0...Self.maximumSampleAge).contains(context.now - latest.timestamp),
             (0...Self.maximumSampleAge).contains(context.now - latest.receivedAt),

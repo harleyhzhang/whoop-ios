@@ -57,6 +57,17 @@ final class WhoopStillnessTests: XCTestCase {
         XCTAssertFalse(policy.takeNudge(context(7300)))
     }
 
+    func testCurrentMotionVetoesNudgeBeforeItsMinuteIsComplete() {
+        var policy = WhoopStillnessPolicy(startedAt: 0)
+        feed(&policy)
+        feed(&policy, from: 3601, through: 3620, motion: 0.5)
+        XCTAssertFalse(policy.takeNudge(context(3620)))
+        feed(&policy, from: 3621, through: 7259)
+        XCTAssertFalse(policy.takeNudge(context(7259)))
+        policy.observe(sample(7260))
+        XCTAssertTrue(policy.takeNudge(context(7260)))
+    }
+
     func testSleepAndTransientUpNeverEarnAnHourOfStillness() {
         for state in [1, 2, 3] {
             var policy = WhoopStillnessPolicy(startedAt: 0)
