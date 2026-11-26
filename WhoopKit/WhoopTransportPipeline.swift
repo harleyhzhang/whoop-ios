@@ -32,9 +32,11 @@ struct WhoopTransportBatchSummary: Sendable {
     let deliveredByteCount: Int
     let connectionToken: WhoopConnectionSession.Token?
     let clockEnvelopes: [WhoopPacketEnvelope]
+    let stillnessSamples: [WhoopStillnessSample]
 
     init(envelopes: [WhoopPacketEnvelope]) {
         let authoritative = envelopes.filter(\.acceptsControlEvents)
+        stillnessSamples = authoritative.compactMap(WhoopStillnessSample.decode)
         clockEnvelopes = authoritative.filter { $0.integrityIsValid && [36, 48].contains($0.packet[8]) }
         connectionToken = authoritative.compactMap(\.connectionToken).last
         motionFragments = authoritative.filter {

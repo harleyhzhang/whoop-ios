@@ -58,6 +58,7 @@ enum WhoopCommand: Equatable {
     case acknowledgeHistoryChunk([UInt8])
     case realtimeSensors(enabled: Bool)
     case realtimeHeartRate(enabled: Bool)
+    case stillnessNudge
 
     var opcode: UInt8 {
         switch self {
@@ -70,6 +71,7 @@ enum WhoopCommand: Equatable {
         case .acknowledgeHistoryChunk: 23
         case .realtimeSensors: 0x3F
         case .realtimeHeartRate: 0x03
+        case .stillnessNudge: 19
         }
     }
 
@@ -85,6 +87,11 @@ enum WhoopCommand: Equatable {
         case .acknowledgeHistoryChunk(let endData): [0x01] + endData
         case .realtimeSensors(let enabled), .realtimeHeartRate(let enabled):
             [enabled ? 0x01 : 0x00]
+        case .stillnessNudge:
+            // WHOOP 5 revision 1: eight DRV2605 effect slots, zero loop
+            // control and zero overall repeats. Three short clicks separated
+            // by 100 ms waits finish on the strap without phone timers.
+            [1, 1, 0x8A, 1, 0x8A, 1, 0, 0, 0, 0, 0, 0]
         }
     }
 

@@ -74,20 +74,13 @@ final class WhoopCollector: NSObject {
         }
     )
     @ObservationIgnored lazy var motionCapture = WhoopMotionCapture(
-        send: { [weak self] command in
-            guard let self, self.isConnected, let peripheral = self.peripheral,
-                let characteristic = self.commandCharacteristic
-            else { return nil }
-            self.commandSequence &+= 1
-            peripheral.writeValue(
-                Data(command.frame(sequence: self.commandSequence)), for: characteristic, type: .withResponse)
-            return self.commandSequence
-        },
+        send: { [weak self] in self?.sendCommand($0) },
         didFinish: { [weak self] in
             self?.armRealtimeHeartRate()
             self?.scheduleHistoricalSync(after: .seconds(1.5))
         }
     )
+    @ObservationIgnored private lazy var nudges = WhoopStillnessNudges(send: { [weak self] in self?.sendCommand($0) })
     private let whoop5Service = CBUUID(string: "FD4B0001-CCE1-4033-93CE-002D5875F58A")
     private let heartRateService = CBUUID(string: "180D")
     private let batteryService = CBUUID(string: "180F")
@@ -275,6 +268,7 @@ final class WhoopCollector: NSObject {
             record("Ignoring post-commit control events from a superseded historical session")
             return
         }
+        nudges.persisted(summary)
         if let sampleAt = summary.latestHistoricalSampleAt {
             historicalRecovery.observeProgress(at: sampleAt)
             WhoopNotificationManager.shared.observePersistedSample(at: sampleAt)
@@ -325,6 +319,11 @@ final class WhoopCollector: NSObject {
                 historicalSyncActive: historicalSync.isActive
             )
         else { return }
+        nudges.historyCompleted(
+            connected: isConnected,
+            worn: lastObservedWristState != false
+                && lastHeartRateReceivedAt.map({ (0..<60).contains(Date().timeIntervalSince($0)) }) == true,
+            sleeping: isSleeping)
         historicalSync.reset()
         lastAcknowledgedHistoricalEndData = nil
         lastHistoricalAcknowledgementAt = nil
@@ -420,6 +419,7 @@ final class WhoopCollector: NSObject {
     }
 
     private func resetConnectionSession() {
+        nudges.resetConnection()
         historicalRecovery.resetStalls()
         motionCapture.disconnected()
         if let historicalSessionID = historicalSync.reset() {
@@ -452,6 +452,14 @@ final class WhoopCollector: NSObject {
         lastAcknowledgedHistoricalEndData = nil
         lastHistoricalAcknowledgementAt = nil
         canAttemptHandshake = false
+    }
+
+    private func sendCommand(_ command: WhoopCommand) -> UInt8? {
+        guard isConnected, let peripheral, let commandCharacteristic else { return nil }
+        commandSequence &+= 1
+        peripheral.writeValue(
+            Data(command.frame(sequence: commandSequence)), for: commandCharacteristic, type: .withResponse)
+        return commandSequence
     }
 
     private func scheduleReconnect(_ candidate: CBPeripheral, reason: String) {
@@ -559,10 +567,7 @@ final class WhoopCollector: NSObject {
 
     @discardableResult
     private func acknowledgeHistoricalChunk(endData: [UInt8]) -> Bool {
-        guard let peripheral,
-            peripheral.state == .connected,
-            let commandCharacteristic
-        else { return false }
+        guard isConnected, commandCharacteristic != nil else { return false }
 
         // The band repeats an unacknowledged chunk terminator. Suppress the
         // immediate notification burst, but retry after a short interval. The
@@ -581,12 +586,8 @@ final class WhoopCollector: NSObject {
         }
         lastAcknowledgedHistoricalEndData = endData
         lastHistoricalAcknowledgementAt = now
-        commandSequence &+= 1
-        let frame = WhoopCommand.acknowledgeHistoryChunk(endData).frame(
-            sequence: commandSequence
-        )
-        record("Acknowledging durably stored historical chunk, seq \(commandSequence)")
-        peripheral.writeValue(Data(frame), for: commandCharacteristic, type: .withResponse)
+        guard let sequence = sendCommand(.acknowledgeHistoryChunk(endData)) else { return false }
+        record("Acknowledging durably stored historical chunk, seq \(sequence)")
         return true
     }
 
