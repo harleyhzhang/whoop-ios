@@ -9,11 +9,19 @@ known sleep, unresolved sleep/wake transitions, non-wear and stale or missing
 input. A daytime clock window is an additional guard, not proof of wakefulness.
 A transient `up` sample inside an unresolved night must not enable a nudge.
 
-Sixty minutes and a 10:00–22:00 local window are starting candidates, not
-validated stillness thresholds. The retrospective step-counter experiment
-does not validate a motion-based stillness detector. Evaluate actual motion
-and sleep-state inputs in receipt order; late history must not be treated as
-information that was available before the decision.
+The initial rule uses sixty minutes and a 10:00–22:00 local window. Only
+minutes with at least 45 explicitly awake samples count. Twenty one-second
+R18 motion summaries at or above 0.3 in a minute reset the still stretch;
+this raw-summary threshold is a heuristic, not calibrated exercise or posture
+recognition. Movement does not have to produce steps.
+
+Any asleep sample suppresses nudges for ninety minutes. Ambiguous `up` and
+alternate-awake minutes do not earn still time. A current explicitly awake
+sample must be no older than five minutes, with a live heart-rate receipt
+within sixty seconds and no explicit off-wrist indication. The app's sleep
+state separately vetoes delivery. Cold starts and reconnects start a new
+observation interval; preconnection backfill can only suppress sleep, not
+earn an immediate reminder.
 
 ## Implementation constraints
 
@@ -30,8 +38,25 @@ information that was available before the decision.
   An accepted command does not prove three short physical pulses; verify the
   waveform and correlated completion on the actual device.
 
-## Current status
+## Verification and limits
 
-This document records the requested behavior. No runtime nudge, sensor change,
-scheduled job or haptic command is enabled by this change. The motion-based
-rule, physical triple pulse and locked-phone delivery remain to be validated.
+The detector runs after successful persistence, and only a coherent completed
+historical offload can request a nudge. All inputs are interpreted in packet
+receipt order. Backfilled samples are never treated as current wake evidence.
+The decision runs from Bluetooth events while backgrounded; there is no new
+sensor mode, periodic iPhone timer, exercise UI or cloud dependency.
+
+The command is WHOOP 5 revision 1 with three waveform-1 short clicks separated
+by 100 ms waits, zero effect-loop control and zero overall repeats. A request
+is not retried as a repeating alarm. Correlated completion is recorded in
+the bounded lifecycle log. Physical feel still depends on the strap firmware
+and motor; an acknowledgement is not wearer confirmation.
+
+Deterministic tests cover sleep, naps, transient wake states, non-wear, stale
+and future history, gaps, duplicate/out-of-order samples, reconnects, single
+delivery, movement rearming, the transport decoder and finite command shape.
+A bounded private replay uses actual motion, original receipt order and
+completed-offload times; raw health data stays outside the repository. The
+sleep labels are device-derived rather than independent ground truth, and
+lying awake is unlabelled. Suppression reduces interruptions but cannot
+guarantee that every future sleep will be identified correctly.
