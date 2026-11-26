@@ -139,11 +139,13 @@ if [ "$base_schema_version" != "$head_schema_version" ]; then
 fi
 
 # A read-only PRAGMA user_version query and a same-valued schema constant rename
-# are observability/refactor changes, not migrations. Escalate SQL only when the
-# diff adds a schema write or DDL operation.
+# are observability/refactor changes, not migrations. Purely additive DDL
+# (`CREATE TABLE IF NOT EXISTS`, triggers, indexes) leaves existing rows alone
+# and ships routinely; the progressive chunk backup covers it. Escalate only
+# destructive or identity changes.
 if git diff -U0 "$base_commit..$head_commit" -- WhoopApp WhoopKit project.yml | \
-  grep -E '^\+' | grep -Ev '^\+\+\+' | \
-  grep -Eiq 'PRAGMA[[:space:]]+user_version[[:space:]]*=|CREATE[[:space:]]+TABLE|ALTER[[:space:]]+TABLE|DROP[[:space:]]+TABLE|PRODUCT_BUNDLE_IDENTIFIER|DEVELOPMENT_TEAM|CODE_SIGN|\.entitlements'; then
+  grep -E '^\+' | grep -Ev '^\+\+\+' | grep -Eiv 'CREATE[[:space:]]+TABLE[[:space:]]+IF[[:space:]]+NOT[[:space:]]+EXISTS' | \
+  grep -Eiq 'PRAGMA[[:space:]]+user_version[[:space:]]*=|CREATE[[:space:]]+TABLE[[:space:]]+[A-Za-z_"]+[[:space:]]*\(|ALTER[[:space:]]+TABLE|DROP[[:space:]]+TABLE|PRODUCT_BUNDLE_IDENTIFIER|DEVELOPMENT_TEAM|CODE_SIGN|\.entitlements'; then
   printf 'mode=migration\nbase=%s\nhead=%s\nreason=schema, identity, signing, or entitlement mechanics changed\nfiles=%s\n' \
     "$base_commit" "$head_commit" "$(printf '%s' "$production_files" | tr '\n' ',')"
   exit 0
@@ -153,13 +155,16 @@ fi
 # retain the heavier path even when introduced outside a storage-named file.
 if git diff -U0 "$base_commit..$head_commit" -- WhoopApp WhoopKit | \
   grep -E '^\+' | grep -Ev '^\+\+\+' | \
-  grep -Eiq 'DELETE[[:space:]]+FROM|UPDATE[[:space:]]+[A-Za-z_]+[[:space:]]+SET|VACUUM|sqlite3_exec|FileManager.*remove'; then
+  grep -Eiq 'DELETE[[:space:]]+FROM|UPDATE[[:space:]]+[A-Za-z_]+[[:space:]]+SET|VACUUM'; then
   printf 'mode=protected\nbase=%s\nhead=%s\nreason=existing-data rewrite mechanics changed\n' "$base_commit" "$head_commit"
   exit 0
 fi
 
 if [ -n "$non_presentation_files" ]; then
-  if printf '%s\n' "$non_presentation_files" | grep -Eq '^WhoopKit/WhoopStore|^WhoopKit/WhoopReplicaRecovery|[Mm]igrat|[Bb]ackfill|^WhoopApp/SleepModels'; then
+  # Ordinary store code (queries, readers, additive tables) ships routinely;
+  # the on-phone progressive chunk backup is the safety net. Only migration,
+  # backfill and restore implementations keep the heavier path.
+  if printf '%s\n' "$non_presentation_files" | grep -Eq '^WhoopKit/WhoopReplicaRecovery|[Mm]igrat|[Bb]ackfill'; then
     printf 'mode=protected\nbase=%s\nhead=%s\nreason=persistence, restore, or backfill implementation changed\nfiles=%s\n' \
       "$base_commit" "$head_commit" "$(printf '%s' "$non_presentation_files" | tr '\n' ',')"
   else

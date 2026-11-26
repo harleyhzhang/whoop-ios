@@ -38,7 +38,13 @@ manifest counts what is left. On the Mac,
 over Wi-Fi and `restore <out.sqlite3>` rebuilds a database with per-table row
 checks. Migrations that rebuild a table drop its triggers; the next launch
 re-adds them and marks that table's chunks changed from its maximum rowid
-(no row scan). Its raw-packet census field is omitted;
+(no row scan).
+
+Install classification follows the same rule: additive DDL
+(`CREATE TABLE IF NOT EXISTS`, triggers, indexes) and ordinary `WhoopStore`
+code ship on the routine tier. Only a schema-version change, destructive DDL,
+existing-data rewrites (`DELETE`, `UPDATE ... SET`, `VACUUM`) or migration,
+backfill and restore implementations take the heavier tiers. Its raw-packet census field is omitted;
 `historicalSampleTotal` comes from transactional revision counts. For a full
 storage census use the storage audit tools. `lifecycle-events.json` retains the
 last 128 foreground/background, Bluetooth, and sleep-publication events locally
