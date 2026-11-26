@@ -107,7 +107,7 @@ assert_mode migration --base "$risky_dashboard_components_commit" --head "$risky
 printf '// storage change\n' >> WhoopApp/SleepModels.swift
 git commit -qam storage
 storage_commit=$(git rev-parse HEAD)
-assert_mode protected --base "$risky_ui_commit" --head "$storage_commit"
+assert_mode routine --base "$risky_ui_commit" --head "$storage_commit"
 
 printf '// connection presentation\n' >> WhoopApp/DashboardHeader.swift
 printf '// chart geometry\n' >> WhoopApp/DashboardChartGeometry.swift
@@ -126,13 +126,24 @@ printf 'struct HealthReporter { let sql = "PRAGMA user_version" }\n' > WhoopKit/
 git add WhoopKit
 git commit -qm schema_observability
 schema_observability_commit=$(git rev-parse HEAD)
-assert_mode protected --base "$bluetooth_commit" --head "$schema_observability_commit"
+assert_mode routine --base "$bluetooth_commit" --head "$schema_observability_commit"
 
 # The production store exposes its schema constant internally after refactoring.
 sed -i '' 's/private static/static/' WhoopKit/WhoopStore.swift
 git commit -qam schema_visibility
 schema_visibility_commit=$(git rev-parse HEAD)
-assert_mode protected --base "$schema_observability_commit" --head "$schema_visibility_commit"
+assert_mode routine --base "$schema_observability_commit" --head "$schema_visibility_commit"
+
+# Additive DDL (new tracking table, triggers) leaves existing rows alone.
+printf 'let sql = "CREATE TABLE IF NOT EXISTS tracked (id INTEGER)"\nlet trigger = "CREATE TRIGGER IF NOT EXISTS t AFTER INSERT ON tracked BEGIN SELECT 1; END"\n' >> WhoopKit/WhoopCollector.swift
+git commit -qam additive_ddl
+additive_ddl_commit=$(git rev-parse HEAD)
+assert_mode routine --base "$schema_visibility_commit" --head "$additive_ddl_commit"
+printf 'let sql = "CREATE TABLE replaced (id INTEGER)"\n' >> WhoopKit/WhoopCollector.swift
+git commit -qam destructive_ddl
+destructive_ddl_commit=$(git rev-parse HEAD)
+assert_mode migration --base "$additive_ddl_commit" --head "$destructive_ddl_commit"
+schema_visibility_commit=$destructive_ddl_commit
 
 printf '// narrower header spacing\n' >> WhoopApp/DashboardHeader.swift
 git commit -qam internal_schema_presentation
