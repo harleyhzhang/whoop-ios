@@ -68,9 +68,9 @@ final class WhoopCollectionMonitor {
                 self.inFlightAnchor = anchor
                 self.attemptedAnchor = anchor
                 let content = UNMutableNotificationContent()
-                content.title = "WHOOP data has stopped updating"
+                content.title = "Open WHOOP"
                 content.body =
-                    "No fresh sensor samples have been saved for an hour. Open WHOOP and check the band’s battery and Bluetooth connection."
+                    "Keep the WHOOP app running so your data can stay up to date."
                 content.sound = .default
                 content.threadIdentifier = "whoop.local"
                 let delay = max(1, anchor.addingTimeInterval(Self.timeout).timeIntervalSince(self.now()))
